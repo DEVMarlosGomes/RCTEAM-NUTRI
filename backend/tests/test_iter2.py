@@ -6,7 +6,7 @@ import pytest
 import requests
 from weasyprint import HTML
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://base-doc-builder.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://design-completion-2.preview.emergentagent.com').rstrip('/')
 ADMIN_EMAIL = "admin@evonut.com"
 ADMIN_PASSWORD = "evonut123"
 
