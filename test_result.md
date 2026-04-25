@@ -101,3 +101,109 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+## Iter 1 — Rebrand + Backend Reinforcement (Rogério Costa)
+
+### user_problem_statement
+"prossiga com total" — Continuar todo o backlog do PRD; padrão UI/UX deve seguir as fotos enviadas (logo "ROGÉRIO COSTA — TREINADOR E NUTRICIONISTA", paleta azul #0081FD + preto #000, tipografia Pirulen Bold).
+
+### Backend changes (TESTED - ALL WORKING)
+- backend:
+  - task: "Rebrand admin seed: admin@rogeriocosta.com.br / rogerio2025"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py + /app/backend/.env"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Updated ADMIN_EMAIL/ADMIN_PASSWORD/ADMIN_NAME. Seed is idempotent — updates password_hash, slug and name when existing user differs. Added slug field + index. Test: POST /api/auth/login should return 200 with new credentials."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: Login with admin@rogeriocosta.com.br/rogerio2025 returns 200, sets cookie, returns UserOut with name='Rogério Costa'. GET /api/auth/me with cookie also works correctly."
+  - task: "Multi-tenant lead routing via ?nutri=<slug>"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:create_lead"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "POST /api/leads accepts optional ?nutri=<slug> query param. Falls back to first nutritionist by created_at if absent. Test with ?nutri=rogerio."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: POST /api/leads (no slug), POST /api/leads?nutri=rogerio, and POST /api/leads?nutri=nonexistent all return 200 with tokens. Fallback to first nutritionist works correctly."
+  - task: "Login lockout (5 attempts / 15 min)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:login"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "In-memory dict tracks failed attempts. After 5 fails → 429 'Conta temporariamente bloqueada'. Successful login resets. Test: 5 wrong logins should yield 429."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: After 6 failed login attempts with wrong password, returns 429 with 'Conta temporariamente bloqueada' message. Even correct password blocked during lockout period."
+  - task: "Public chat rate limit (8 req / 60s per token)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:post_chat"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Sliding-window rate limit. Test: 9 rapid chat requests should yield 429."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: 9th rapid chat request returns 429 with 'Muitas mensagens' message. Rate limiting working correctly."
+  - task: "Slot generation in America/Sao_Paulo timezone"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:get_slots & schedule"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Slots generated using ZoneInfo('America/Sao_Paulo'). Labels are 'DD/MM · HH:00 (BRT)'. Schedule endpoint parses date+time as SP-local with offset. Test: GET /public/slots returns datetimes ending with -03:00."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: GET /api/public/slots returns slots with datetime ending in -03:00 and labels in format 'DD/MM · HH:00 (BRT)'. POST /api/public/schedule returns consultation with correct -03:00 timezone."
+  - task: "Public lead whitelist (no nutricionista_id leak)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:get_lead"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "GET /api/public/lead/{token} now returns only safe fields (PUBLIC_LEAD_FIELDS set). nutricionista_id and password_hash should NOT appear."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: GET /api/public/lead/{token} returns only safe fields (id, nome, telefone, email, status_funil, lead_token, created_at). No sensitive fields like nutricionista_id or password_hash leaked."
+  - task: "PDF brand update (Rogério Costa, blue/black palette)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:get_meal_plan_pdf"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "PDF rewrite: blue accent #0081FD, no purple/teal gradient, brand title 'ROGÉRIO COSTA / TREINADOR E NUTRICIONISTA'. Filename prefix 'rogerio-costa-plano-'. Test: GET .../meal-plan/{id}/pdf should stream PDF (200, content-type pdf)."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: GET /api/patients/{id}/meal-plans/{plan_id}/pdf returns 200 with content-type application/pdf and content-disposition containing 'rogerio-costa-plano-' filename prefix. PDF generation working correctly."
+
+### Frontend changes (NOT testing yet — wait for user permission)
+- All "EvoNut" strings → "Rogério Costa". Logo + Brand component. Orbitron+Rajdhani fonts. Colors blue+black.
+
+### test_plan
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+### agent_communication
+  - agent: "main"
+    message: "Iter 1 backend changes ready. Credentials in /app/memory/test_credentials.md. Need verification of lockout, multi-tenant, rate-limit, SP timezone, whitelist, PDF stream. Frontend rebrand done but NOT testing yet (waiting for user permission)."
+  - agent: "testing"
+    message: "✅ ALL BACKEND TESTS PASSED (12/12): Comprehensive testing completed for all 7 focus items. Login with new credentials works, multi-tenant lead routing functions correctly, login lockout triggers after failed attempts, chat rate limiting works, SP timezone slots generate properly, public lead whitelist prevents data leaks, and PDF generation works with new branding. All backend functionality is working as expected. Ready for frontend testing when user permits."

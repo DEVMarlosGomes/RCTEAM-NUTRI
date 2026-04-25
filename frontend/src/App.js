@@ -19,8 +19,8 @@ function Protected({ children }) {
   const { user } = useAuth();
   if (user === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-evo-bg">
-        <div className="w-10 h-10 rounded-full border-2 border-evo-purple border-t-transparent animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-rc-ink">
+        <div className="w-10 h-10 rounded-full border-2 border-rc-blue border-t-transparent animate-spin" />
       </div>
     );
   }
@@ -30,12 +30,12 @@ function Protected({ children }) {
 
 function App() {
   return (
-    <div className="App font-sans">
+    <div className="App">
       <Toaster
         position="top-right"
         theme="dark"
         toastOptions={{
-          style: { background: "#161B22", border: "1px solid rgba(255,255,255,0.08)", color: "#fff" },
+          style: { background: "#0F141B", border: "1px solid rgba(0,129,253,0.25)", color: "#fff" },
         }}
       />
       <AuthProvider>

@@ -5,8 +5,9 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Manrope', 'system-ui', 'sans-serif'],
-        display: ['Outfit', 'system-ui', 'sans-serif'],
+        // Pirulen has no free web license — Orbitron is the closest geometric/futuristic free Google Font.
+        sans: ['Rajdhani', 'Inter', 'system-ui', 'sans-serif'],
+        display: ['Orbitron', 'Rajdhani', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'monospace'],
       },
       borderRadius: {
@@ -27,14 +28,26 @@ module.exports = {
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
+        // Rogério Costa brand
+        rc: {
+          blue: '#0081FD',
+          blueDark: '#0066CC',
+          blueLight: '#3DA0FF',
+          black: '#000000',
+          ink: '#0A0E14',
+          surface: '#0F141B',
+          surfaceAlt: '#070B11',
+          line: 'rgba(255,255,255,0.08)',
+        },
+        // Backwards-compat aliases (so existing `evo-*` classes keep working with new palette)
         evo: {
-          bg: '#0D1117',
-          surface: '#161B22',
-          surfaceAlt: '#0A0F14',
-          purple: '#7B61FF',
-          teal: '#1DB97E',
-          amber: '#EF9F27',
-          coral: '#E8593C',
+          bg: '#0A0E14',
+          surface: '#0F141B',
+          surfaceAlt: '#070B11',
+          purple: '#0081FD',     // remapped → blue
+          teal: '#0066CC',       // remapped → dark blue (gradient end)
+          amber: '#FFB347',
+          coral: '#FF5A4D',
         },
       },
       keyframes: {
@@ -42,12 +55,14 @@ module.exports = {
         'accordion-up': { from: { height: 'var(--radix-accordion-content-height)' }, to: { height: '0' } },
         'fade-up': { '0%': { opacity: '0', transform: 'translateY(8px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
         'pulse-soft': { '0%,100%': { opacity: '0.6' }, '50%': { opacity: '1' } },
+        'rc-glow': { '0%,100%': { boxShadow: '0 0 24px rgba(0,129,253,0.35)' }, '50%': { boxShadow: '0 0 40px rgba(0,129,253,0.65)' } },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
         'fade-up': 'fade-up 0.4s ease-out both',
         'pulse-soft': 'pulse-soft 2s ease-in-out infinite',
+        'rc-glow': 'rc-glow 2.4s ease-in-out infinite',
       },
     },
   },

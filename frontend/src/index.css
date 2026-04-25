@@ -4,95 +4,132 @@
 
 body {
   margin: 0;
-  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+  font-family: 'Rajdhani', 'Inter', system-ui, -apple-system, sans-serif;
+  font-weight: 500;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #0D1117;
+  background: #0A0E14;
   color: #FFFFFF;
 }
 
 @layer base {
   :root {
-    --background: 215 25% 7%;
+    --background: 215 30% 6%;
     --foreground: 0 0% 100%;
-    --card: 215 20% 11%;
+    --card: 215 25% 9%;
     --card-foreground: 0 0% 100%;
-    --popover: 215 20% 11%;
+    --popover: 215 25% 9%;
     --popover-foreground: 0 0% 100%;
-    --primary: 251 100% 69%;
+    --primary: 211 100% 50%;        /* #0081FD */
     --primary-foreground: 0 0% 100%;
-    --secondary: 215 20% 14%;
+    --secondary: 215 25% 13%;
     --secondary-foreground: 0 0% 100%;
-    --muted: 215 20% 14%;
+    --muted: 215 25% 13%;
     --muted-foreground: 220 9% 64%;
-    --accent: 215 20% 18%;
+    --accent: 215 25% 17%;
     --accent-foreground: 0 0% 100%;
-    --destructive: 11 80% 57%;
+    --destructive: 4 100% 65%;
     --destructive-foreground: 0 0% 100%;
     --border: 0 0% 100% / 0.08;
-    --input: 215 25% 9%;
-    --ring: 251 100% 69%;
-    --chart-1: 251 100% 69%;
-    --chart-2: 153 73% 42%;
-    --chart-3: 35 87% 54%;
-    --chart-4: 11 80% 57%;
+    --input: 215 30% 8%;
+    --ring: 211 100% 50%;
+    --chart-1: 211 100% 50%;
+    --chart-2: 211 80% 35%;
+    --chart-3: 35 95% 60%;
+    --chart-4: 4 100% 65%;
     --chart-5: 220 9% 64%;
     --radius: 12px;
   }
 }
 
 @layer base {
-  body { @apply bg-evo-bg text-white; }
+  body { @apply bg-rc-ink text-white; }
 
   /* Custom scrollbar */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: #0A0F14; }
+  ::-webkit-scrollbar-track { background: #060A11; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 6px; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(123,97,255,0.4); }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0,129,253,0.5); }
 
-  ::selection { background: #7B61FF; color: white; }
+  ::selection { background: #0081FD; color: white; }
+
+  /* Headings use Orbitron (Pirulen-like geometric display) with tighter tracking */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Orbitron', 'Rajdhani', system-ui, sans-serif;
+    letter-spacing: 0.02em;
+  }
 }
 
 @layer components {
-  .evo-card {
-    @apply bg-evo-surface rounded-[12px] border border-white/[0.08] shadow-lg;
+  /* Brand-prefixed utilities */
+  .rc-card {
+    @apply bg-rc-surface rounded-[12px] border border-white/[0.08] shadow-lg;
   }
-  .evo-card-hover {
-    @apply hover:border-white/[0.15] hover:shadow-xl transition-all duration-300 ease-out;
+  .rc-card-hover {
+    @apply hover:border-rc-blue/40 hover:shadow-[0_8px_32px_-8px_rgba(0,129,253,0.4)] transition-all duration-300 ease-out;
   }
-  .evo-glass {
-    @apply backdrop-blur-xl bg-evo-surface/60 border border-white/[0.08];
+  .rc-glass {
+    @apply backdrop-blur-xl bg-rc-surface/60 border border-white/[0.08];
   }
-  .evo-btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-6 py-2.5 font-semibold text-white
-           bg-gradient-to-br from-[#7B61FF] to-[#1DB97E]
-           shadow-[0_4px_24px_-4px_rgba(123,97,255,0.5)]
-           hover:-translate-y-0.5 hover:shadow-[0_8px_32px_-4px_rgba(29,185,126,0.45)]
+  .rc-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-6 py-2.5 font-bold uppercase tracking-wider text-sm text-black
+           bg-rc-blue
+           shadow-[0_4px_24px_-4px_rgba(0,129,253,0.55)]
+           hover:bg-rc-blueLight hover:-translate-y-0.5 hover:shadow-[0_8px_32px_-4px_rgba(0,129,253,0.7)]
            transition-all duration-300 ease-out
            disabled:opacity-50 disabled:pointer-events-none;
   }
-  .evo-btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 bg-evo-surface border border-white/[0.08]
-           text-white hover:bg-evo-purple/10 hover:border-evo-purple/50
-           rounded-lg px-6 py-2.5 font-semibold transition-all duration-200 ease-out;
+  .rc-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 bg-transparent border border-rc-blue/40
+           text-rc-blue hover:bg-rc-blue/10 hover:border-rc-blue
+           rounded-lg px-6 py-2.5 font-bold uppercase tracking-wider text-sm transition-all duration-200 ease-out;
   }
-  .evo-btn-ghost {
+  .rc-btn-ghost {
     @apply inline-flex items-center gap-2 text-white/70 hover:text-white hover:bg-white/5
-           px-4 py-2 rounded-lg transition-all;
+           px-4 py-2 rounded-lg transition-all uppercase tracking-wider text-xs font-bold;
   }
-  .evo-input {
-    @apply w-full bg-evo-surfaceAlt border border-white/[0.08] rounded-lg px-4 py-3 text-white
-           placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-evo-purple/50
-           focus:border-evo-purple transition-all duration-200 font-sans;
+  .rc-input {
+    @apply w-full bg-rc-surfaceAlt border border-white/[0.08] rounded-lg px-4 py-3 text-white
+           placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-rc-blue/50
+           focus:border-rc-blue transition-all duration-200;
   }
-  .evo-label {
-    @apply block text-sm font-semibold text-gray-300 mb-2 font-sans;
+  .rc-label {
+    @apply block text-xs font-bold uppercase tracking-wider text-gray-400 mb-2;
   }
-  .evo-h1 { @apply font-display text-4xl sm:text-5xl font-semibold tracking-tight text-white; }
-  .evo-h2 { @apply font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white; }
-  .evo-h3 { @apply font-display text-xl font-semibold tracking-tight text-white; }
+  .rc-h1 { @apply font-display text-4xl sm:text-5xl font-black tracking-tight text-white uppercase; }
+  .rc-h2 { @apply font-display text-2xl sm:text-3xl font-bold tracking-tight text-white uppercase; }
+  .rc-h3 { @apply font-display text-xl font-bold tracking-tight text-white uppercase; }
+  .rc-text-blue {
+    @apply text-rc-blue;
+  }
+  .rc-grid-bg {
+    background-image:
+      linear-gradient(rgba(0,129,253,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,129,253,0.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .rc-orb {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(80px);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  /* Backwards-compat: keep `.evo-*` classes mapped to new palette so old pages render correctly */
+  .evo-card { @apply rc-card; }
+  .evo-card-hover { @apply rc-card-hover; }
+  .evo-glass { @apply rc-glass; }
+  .evo-btn-primary { @apply rc-btn-primary; }
+  .evo-btn-secondary { @apply rc-btn-secondary; }
+  .evo-btn-ghost { @apply rc-btn-ghost; }
+  .evo-input { @apply rc-input; }
+  .evo-label { @apply rc-label; }
+  .evo-h1 { @apply rc-h1; }
+  .evo-h2 { @apply rc-h2; }
+  .evo-h3 { @apply rc-h3; }
   .evo-text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#7B61FF] via-[#9F8BFF] to-[#1DB97E];
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#0081FD] via-[#3DA0FF] to-[#0081FD];
   }
   .evo-orb {
     position: absolute;
@@ -102,8 +139,15 @@ body {
     pointer-events: none;
   }
   .evo-grid-bg {
-    background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-image:
+      linear-gradient(rgba(0,129,253,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,129,253,0.05) 1px, transparent 1px);
     background-size: 48px 48px;
   }
+}
+
+/* Print rules used by browser print of meal plan */
+@media print {
+  body { background: white !important; color: black !important; }
+  .no-print { display: none !important; }
 }

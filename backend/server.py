@@ -5,15 +5,19 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import os
+import re
 import logging
 import uuid
 import bcrypt
 import jwt
 import secrets
+import unicodedata
+from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional, Any
+from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -30,8 +34,38 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-app = FastAPI(title="EvoNut API")
+app = FastAPI(title="Rogério Costa — Sistema Nutricional API")
 api = APIRouter(prefix="/api")
+
+# Brazil timezone for slot generation & business logic
+TZ_BR = ZoneInfo("America/Sao_Paulo")
+
+# Login lockout (in-memory; resets on restart — acceptable for MVP)
+LOCKOUT_MAX_ATTEMPTS = 5
+LOCKOUT_WINDOW_MIN = 15
+_login_attempts: dict = {}  # email -> {"count": int, "first": datetime, "locked_until": datetime|None}
+
+# Public chat rate limiter (token -> deque of timestamps)
+CHAT_RATE_MAX = 8       # max requests
+CHAT_RATE_WINDOW = 60   # in seconds
+_chat_rate: dict = defaultdict(deque)
+
+def slugify(text: str) -> str:
+    if not text:
+        return ""
+    s = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
+    return s[:60] or "user"
+
+# Public lead fields whitelist (avoid leaking nutricionista_id, etc.)
+PUBLIC_LEAD_FIELDS = {
+    "id", "nome", "telefone", "email", "status_funil",
+    "peso", "altura", "data_nascimento", "sexo", "objetivo",
+    "lead_token", "created_at",
+}
+
+def public_lead_view(p: dict) -> dict:
+    return {k: v for k, v in p.items() if k in PUBLIC_LEAD_FIELDS}
 
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
@@ -248,9 +282,10 @@ def calc_macros(get_kcal, objetivo, peso, massa_magra=None):
 
 # ---------- AI ----------
 SYSTEM_CLINICAL = (
-    "Você é o EvoNut AI, assistente clínico nutricional sênior. Responda sempre em Português (Brasil), "
-    "tom acolhedor, preciso e sem jargão excessivo. Nunca dê diagnóstico médico — apenas organize informações, "
-    "destaque sinais de atenção, e ofereça sugestões para o nutricionista revisar."
+    "Você é o assistente clínico nutricional sênior do Rogério Costa (Treinador e Nutricionista). "
+    "Responda sempre em Português (Brasil), tom acolhedor, preciso e sem jargão excessivo. "
+    "Nunca dê diagnóstico médico — apenas organize informações, destaque sinais de atenção, "
+    "e ofereça sugestões para o nutricionista revisar."
 )
 
 async def ai_clinical_analysis(anamnesis: dict, evaluation: Optional[dict]) -> str:
@@ -290,7 +325,7 @@ async def ai_adaptive_chat(token: str, message: str, anamnesis: dict, history: l
         api_key=EMERGENT_LLM_KEY,
         session_id=f"chat-{token}",
         system_message=(
-            "Você é o EvoNut, assistente do nutricionista que conversa com o paciente "
+            "Você é o assistente do nutricionista Rogério Costa que conversa com o paciente "
             "para aprofundar a anamnese de forma natural e empática. Faça UMA pergunta por vez, "
             "curta e clara. Foque nos pontos críticos detectados (sono, treino, alimentação, estresse, "
             "medicamentos). Após 6 a 8 perguntas, finalize com a frase exata: 'ANAMNESE_FINALIZADA' "
@@ -300,7 +335,7 @@ async def ai_adaptive_chat(token: str, message: str, anamnesis: dict, history: l
     context = f"Dados iniciais do paciente:\n{anamnesis}\n\nHistórico recente:\n"
     for m in history[-10:]:
         context += f"{m['role']}: {m['content']}\n"
-    context += f"\nMensagem do paciente: {message}\nResponda como EvoNut."
+    context += f"\nMensagem do paciente: {message}\nResponda de forma acolhedora."
     return await chat.send_message(UserMessage(text=context))
 
 async def ai_exam_analysis(raw_text: str) -> dict:
@@ -358,9 +393,32 @@ async def register(payload: RegisterIn, response: Response):
 @api.post("/auth/login", response_model=UserOut)
 async def login(payload: LoginIn, response: Response):
     email = payload.email.lower()
+    now = now_utc()
+
+    # Lockout check
+    state = _login_attempts.get(email)
+    if state and state.get("locked_until") and state["locked_until"] > now:
+        remaining = int((state["locked_until"] - now).total_seconds() / 60) + 1
+        raise HTTPException(
+            429,
+            f"Conta temporariamente bloqueada por excesso de tentativas. Tente novamente em ~{remaining} min."
+        )
+
     user = await db.users.find_one({"email": email})
-    if not user or not verify_password(payload.password, user["password_hash"]):
+    ok = bool(user) and verify_password(payload.password, user["password_hash"])
+    if not ok:
+        # increment counter
+        if not state or (state.get("first") and (now - state["first"]).total_seconds() > LOCKOUT_WINDOW_MIN * 60):
+            state = {"count": 1, "first": now, "locked_until": None}
+        else:
+            state["count"] += 1
+        if state["count"] >= LOCKOUT_MAX_ATTEMPTS:
+            state["locked_until"] = now + timedelta(minutes=LOCKOUT_WINDOW_MIN)
+        _login_attempts[email] = state
         raise HTTPException(401, "Credenciais inválidas")
+
+    # Success — reset counter
+    _login_attempts.pop(email, None)
     set_auth_cookie(response, create_token(user["id"], email))
     return UserOut(id=user["id"], email=email, name=user["name"])
 
@@ -375,15 +433,19 @@ async def me(user=Depends(get_current_user)):
 
 # ---------- Public Lead / Anamnesis flow ----------
 @api.post("/leads", response_model=LeadOut)
-async def create_lead(payload: LeadIn):
-    nutri = await db.users.find_one({"role": "nutritionist"}, sort=[("created_at", 1)])
-    if not nutri:
+async def create_lead(payload: LeadIn, nutri: Optional[str] = Query(None)):
+    nutri_doc = None
+    if nutri:
+        nutri_doc = await db.users.find_one({"slug": nutri.lower(), "role": "nutritionist"})
+    if not nutri_doc:
+        nutri_doc = await db.users.find_one({"role": "nutritionist"}, sort=[("created_at", 1)])
+    if not nutri_doc:
         raise HTTPException(500, "Nenhum nutricionista cadastrado")
     token = secrets.token_urlsafe(16)
     pid = str(uuid.uuid4())
     patient = {
         "id": pid, "nome": payload.name, "telefone": payload.phone, "email": payload.email,
-        "status_funil": "LEAD_INICIADO", "nutricionista_id": nutri["id"],
+        "status_funil": "LEAD_INICIADO", "nutricionista_id": nutri_doc["id"],
         "lead_token": token, "created_at": iso(now_utc()),
     }
     await db.patients.insert_one(patient)
@@ -394,7 +456,7 @@ async def get_lead(token: str):
     p = await db.patients.find_one({"lead_token": token}, {"_id": 0, "password_hash": 0})
     if not p:
         raise HTTPException(404, "Lead não encontrado")
-    return p
+    return public_lead_view(p)
 
 @api.post("/public/anamnesis")
 async def submit_anamnesis(payload: AnamnesisIn):
@@ -429,6 +491,17 @@ async def post_chat(payload: ChatIn):
     p = await db.patients.find_one({"lead_token": payload.token})
     if not p:
         raise HTTPException(404, "Lead não encontrado")
+
+    # Rate limit: max CHAT_RATE_MAX requests / CHAT_RATE_WINDOW seconds per token
+    now = now_utc()
+    bucket = _chat_rate[payload.token]
+    cutoff = now - timedelta(seconds=CHAT_RATE_WINDOW)
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= CHAT_RATE_MAX:
+        raise HTTPException(429, "Muitas mensagens em pouco tempo. Aguarde alguns segundos e tente novamente.")
+    bucket.append(now)
+
     anam = await db.anamneses.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
     history = await db.chat_messages.find({"token": payload.token}, {"_id": 0}).sort("created_at", 1).to_list(50)
     user_msg = {
@@ -454,20 +527,25 @@ async def get_slots(token: str):
     p = await db.patients.find_one({"lead_token": token})
     if not p:
         raise HTTPException(404, "Lead não encontrado")
-    # Generate next 7 days slots 09:00 - 17:00 (skipping booked)
+    # Generate next 7 days slots in America/Sao_Paulo (Mon-Sat 09-17h)
     booked = set()
     cursor = db.consultations.find({"nutricionista_id": p["nutricionista_id"], "status": "AGENDADA"})
     async for c in cursor:
         booked.add(c["data_hora"])
     slots = []
+    today_br = datetime.now(TZ_BR).date()
     for d in range(7):
-        day = datetime.now(timezone.utc).date() + timedelta(days=d+1)
+        day = today_br + timedelta(days=d + 1)
         if day.weekday() == 6:  # skip Sunday
             continue
         for h in [9, 10, 11, 14, 15, 16, 17]:
-            dt = datetime(day.year, day.month, day.day, h, 0, tzinfo=timezone.utc)
-            key = iso(dt)
-            slots.append({"datetime": key, "available": key not in booked, "label": f"{day.strftime('%d/%m')} {h:02d}:00"})
+            dt_local = datetime(day.year, day.month, day.day, h, 0, tzinfo=TZ_BR)
+            key = dt_local.isoformat()
+            slots.append({
+                "datetime": key,
+                "available": key not in booked,
+                "label": f"{day.strftime('%d/%m')} · {h:02d}:00 (BRT)",
+            })
     return slots
 
 @api.post("/public/schedule")
@@ -475,7 +553,14 @@ async def schedule(payload: ScheduleIn):
     p = await db.patients.find_one({"lead_token": payload.token})
     if not p:
         raise HTTPException(404, "Lead não encontrado")
-    dt_str = f"{payload.date}T{payload.time}:00+00:00"
+    # Build SP-local datetime → store ISO with offset
+    try:
+        y, m, dd = [int(x) for x in payload.date.split("-")]
+        hh, mm = [int(x) for x in payload.time.split(":")]
+        dt_local = datetime(y, m, dd, hh, mm, tzinfo=TZ_BR)
+    except Exception:
+        raise HTTPException(400, "Data ou horário inválidos")
+    dt_str = dt_local.isoformat()
     cid = str(uuid.uuid4())
     consult = {
         "id": cid, "paciente_id": p["id"], "nutricionista_id": p["nutricionista_id"],
@@ -737,14 +822,14 @@ async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
     issued = datetime.fromisoformat(plan["created_at"]).strftime("%d/%m/%Y")
 
     html_doc = f"""<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><title>Plano EvoNut</title></head>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Plano Alimentar — Rogério Costa</title></head>
 <body>
   <header class="brand">
     <div class="logo">
-      <span class="logo-mark"></span>
+      <span class="logo-mark">P</span>
       <div>
-        <div class="brand-name">EvoNut</div>
-        <div class="brand-sub">Plano alimentar personalizado</div>
+        <div class="brand-name">ROGÉRIO COSTA</div>
+        <div class="brand-sub">Treinador & Nutricionista · Plano alimentar personalizado</div>
       </div>
     </div>
     <div class="meta">
@@ -760,7 +845,7 @@ async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
   </section>
 
   <section class="kpis">
-    <div class="kpi kpi-purple"><div class="lbl">Calorias / dia</div><div class="val">{plan.get('kcal_total','—')} <span>kcal</span></div></div>
+    <div class="kpi kpi-primary"><div class="lbl">Calorias / dia</div><div class="val">{plan.get('kcal_total','—')} <span>kcal</span></div></div>
     <div class="kpi"><div class="lbl">Proteína</div><div class="val">{plan.get('proteina_g','—')}g <span>· {plan.get('ptn_pct','—')}%</span></div></div>
     <div class="kpi"><div class="lbl">Carboidrato</div><div class="val">{plan.get('carboidrato_g','—')}g <span>· {plan.get('cho_pct','—')}%</span></div></div>
     <div class="kpi"><div class="lbl">Gordura</div><div class="val">{plan.get('gordura_g','—')}g <span>· {plan.get('lip_pct','—')}%</span></div></div>
@@ -771,49 +856,50 @@ async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
   </section>
 
   <footer>
-    <div>EvoNut · Sistema Nutricional Inteligente</div>
-    <div>Documento gerado automaticamente — revise com seu(sua) nutricionista.</div>
+    <div>ROGÉRIO COSTA · Treinador e Nutricionista</div>
+    <div>Documento gerado automaticamente — revise com seu nutricionista.</div>
   </footer>
 </body></html>"""
 
     css = CSS(string="""
       @page { size: A4; margin: 18mm 16mm 22mm 16mm; }
       * { box-sizing: border-box; }
-      body { font-family: 'Helvetica', 'Arial', sans-serif; color: #0D1117; font-size: 11pt; }
-      header.brand { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 2px solid #7B61FF; margin-bottom: 18px; }
+      body { font-family: 'Helvetica', 'Arial', sans-serif; color: #000000; font-size: 11pt; }
+      header.brand { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 3px solid #0081FD; margin-bottom: 18px; }
       .logo { display: flex; align-items: center; gap: 12px; }
-      .logo-mark { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #7B61FF, #1DB97E); }
-      .brand-name { font-size: 18pt; font-weight: 700; color: #161B22; }
-      .brand-sub { font-size: 9pt; color: #6B7280; }
-      header .meta { font-size: 9pt; text-align: right; color: #4B5563; }
+      .logo-mark { width: 42px; height: 42px; border-radius: 50%; background: #0081FD; color: #000; display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 22pt; font-family: 'Arial Black', sans-serif; letter-spacing: -1px; }
+      .brand-name { font-size: 16pt; font-weight: 900; color: #000000; letter-spacing: 1px; }
+      .brand-sub { font-size: 8.5pt; color: #555; letter-spacing: 0.5px; }
+      header .meta { font-size: 9pt; text-align: right; color: #333; }
       header .meta div { margin-bottom: 2px; }
-      header .meta strong { display: block; color: #6B7280; font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; }
-      .patient h1 { font-size: 22pt; margin: 0 0 4px 0; color: #161B22; }
-      .patient .muted { color: #6B7280; margin: 0 0 16px 0; }
+      header .meta strong { display: block; color: #888; font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; }
+      .patient h1 { font-size: 22pt; margin: 0 0 4px 0; color: #000; font-weight: 800; }
+      .patient .muted { color: #666; margin: 0 0 16px 0; }
       .kpis { display: flex; gap: 8px; margin-bottom: 22px; }
-      .kpi { flex: 1; background: #F3F4F6; border-radius: 10px; padding: 12px 14px; }
-      .kpi-purple { background: linear-gradient(135deg, #7B61FF22, #1DB97E22); border: 1px solid #7B61FF55; }
-      .kpi .lbl { font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; color: #6B7280; margin-bottom: 4px; }
-      .kpi .val { font-size: 16pt; font-weight: 700; color: #161B22; }
-      .kpi .val span { font-size: 9pt; color: #6B7280; font-weight: 500; }
-      .content h2 { font-size: 14pt; color: #7B61FF; border-bottom: 1px solid #E5E7EB; padding-bottom: 4px; margin-top: 18px; }
-      .content h3 { font-size: 12pt; color: #161B22; margin-top: 14px; margin-bottom: 4px; }
-      .content h4 { font-size: 11pt; color: #1DB97E; margin-top: 10px; margin-bottom: 2px; }
+      .kpi { flex: 1; background: #F5F8FB; border-radius: 10px; padding: 12px 14px; border: 1px solid #E3E9F0; }
+      .kpi-primary { background: linear-gradient(135deg, #0081FD15, #0081FD08); border: 1px solid #0081FD66; }
+      .kpi .lbl { font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; color: #777; margin-bottom: 4px; }
+      .kpi .val { font-size: 16pt; font-weight: 800; color: #000; }
+      .kpi .val span { font-size: 9pt; color: #777; font-weight: 500; }
+      .content h2 { font-size: 14pt; color: #0081FD; border-bottom: 1px solid #E3E9F0; padding-bottom: 4px; margin-top: 18px; text-transform: uppercase; letter-spacing: 0.5px; }
+      .content h3 { font-size: 12pt; color: #000; margin-top: 14px; margin-bottom: 4px; font-weight: 700; }
+      .content h4 { font-size: 11pt; color: #0081FD; margin-top: 10px; margin-bottom: 2px; font-weight: 700; }
       .content p { margin: 6px 0; line-height: 1.5; }
       .content ul { padding-left: 18px; margin: 6px 0; }
       .content li { margin: 3px 0; line-height: 1.45; }
-      footer { position: fixed; bottom: -12mm; left: 0; right: 0; font-size: 8pt; color: #9CA3AF; display: flex; justify-content: space-between; padding-top: 6px; border-top: 1px solid #E5E7EB; }
+      footer { position: fixed; bottom: -12mm; left: 0; right: 0; font-size: 8pt; color: #888; display: flex; justify-content: space-between; padding-top: 6px; border-top: 1px solid #E3E9F0; }
     """)
 
     pdf_bytes = HTML(string=html_doc).write_pdf(stylesheets=[css])
     safe_name = (p.get("nome") or "paciente").lower().replace(" ", "-")
-    headers = {"Content-Disposition": f'attachment; filename="evonut-plano-{safe_name}-v{plan.get("version", 1)}.pdf"'}
+    headers = {"Content-Disposition": f'attachment; filename="rogerio-costa-plano-{safe_name}-v{plan.get("version", 1)}.pdf"'}
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
 
 # ---------- Bootstrap ----------
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
+    await db.users.create_index("slug")
     await db.patients.create_index("lead_token")
     await db.patients.create_index("nutricionista_id")
     await db.consultations.create_index("nutricionista_id")
@@ -822,15 +908,27 @@ async def startup():
     admin_email = os.environ['ADMIN_EMAIL'].lower()
     admin_pass = os.environ['ADMIN_PASSWORD']
     admin_name = os.environ.get('ADMIN_NAME', 'Admin')
+    admin_slug = slugify(admin_name) or "admin"
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({
             "id": str(uuid.uuid4()), "email": admin_email, "name": admin_name,
             "password_hash": hash_password(admin_pass), "role": "nutritionist",
-            "created_at": iso(now_utc()),
+            "slug": admin_slug, "created_at": iso(now_utc()),
         })
-    elif not verify_password(admin_pass, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_pass)}})
+    else:
+        upd = {}
+        if not verify_password(admin_pass, existing["password_hash"]):
+            upd["password_hash"] = hash_password(admin_pass)
+        if not existing.get("slug"):
+            upd["slug"] = admin_slug
+        if existing.get("name") != admin_name:
+            upd["name"] = admin_name
+        if upd:
+            await db.users.update_one({"email": admin_email}, {"$set": upd})
+    # Backfill slug for any nutritionist missing it
+    async for u in db.users.find({"role": "nutritionist", "slug": {"$exists": False}}):
+        await db.users.update_one({"id": u["id"]}, {"$set": {"slug": slugify(u.get("name", "user"))}})
 
 @app.on_event("shutdown")
 async def shutdown():

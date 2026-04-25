@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api, formatApiError } from "@/lib/evo-api";
 import GlowOrb from "@/components/evonut/GlowOrb";
-import { ArrowLeft, ArrowRight, CheckCircle2, Sparkles } from "lucide-react";
+import Brand from "@/components/evonut/Brand";
+import { ArrowLeft, ArrowRight, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 const SECTIONS = [
@@ -181,33 +182,30 @@ export default function PreConsulta() {
   };
 
   return (
-    <div className="min-h-screen relative bg-evo-bg overflow-hidden">
-      <GlowOrb color="#7B61FF" size={400} top="-10%" left="-5%" opacity={0.25} />
-      <GlowOrb color="#1DB97E" size={350} top="50%" left="80%" opacity={0.2} />
+    <div className="min-h-screen relative bg-rc-ink overflow-hidden">
+      <GlowOrb color="#0081FD" size={400} top="-10%" left="-5%" opacity={0.18} />
+      <GlowOrb color="#0066CC" size={350} top="50%" left="80%" opacity={0.12} />
 
       <header className="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 pt-6 pb-4 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-evo-purple to-evo-teal flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-white" />
-          </div>
-          <span className="font-display font-semibold">EvoNut</span>
+        <Link to="/" aria-label="Voltar para a página inicial">
+          <Brand size="sm" />
         </Link>
-        <div className="text-xs text-gray-400" data-testid="autosave-indicator">Progresso salvo automaticamente</div>
+        <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold" data-testid="autosave-indicator">Progresso salvo</div>
       </header>
 
       <main className="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 pb-20">
         <div className="mb-6">
-          <div className="text-xs uppercase tracking-widest text-evo-purple font-semibold mb-2">
-            Pré-consulta · {lead?.nome ? `Olá, ${lead.nome.split(" ")[0]}` : ""}
+          <div className="text-xs uppercase tracking-[0.2em] text-rc-blue font-bold mb-2">
+            Pré-consulta {lead?.nome ? `· Olá, ${lead.nome.split(" ")[0]}` : ""}
           </div>
-          <h1 className="evo-h2">Vamos te conhecer</h1>
+          <h1 className="rc-h2">Vamos te conhecer</h1>
           <p className="text-sm text-gray-400 mt-1">
             Etapa {step + 1} de {total}: <span className="text-white">{section.title}</span>
           </p>
           <div className="mt-4 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
             <div
               data-testid="progress-bar"
-              className="h-full bg-gradient-to-r from-evo-purple to-evo-teal transition-all duration-500"
+              className="h-full bg-rc-blue transition-all duration-500"
               style={{ width: `${progress}%` }}
             />
           </div>
