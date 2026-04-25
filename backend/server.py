@@ -13,12 +13,17 @@ import secrets
 from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, UploadFile, File
+from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+import json
+import io
+import pdfplumber
+from weasyprint import HTML, CSS
 
 # ---------- App / DB ----------
 mongo_url = os.environ['MONGO_URL']
@@ -297,6 +302,42 @@ async def ai_adaptive_chat(token: str, message: str, anamnesis: dict, history: l
         context += f"{m['role']}: {m['content']}\n"
     context += f"\nMensagem do paciente: {message}\nResponda como EvoNut."
     return await chat.send_message(UserMessage(text=context))
+
+async def ai_exam_analysis(raw_text: str) -> dict:
+    """Extract laboratory markers from exam PDF text and classify them.
+    Returns: {markers: [{nome, valor, unidade, referencia, status}], resumo, conduta_sugerida}
+    """
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"exame-{uuid.uuid4()}",
+        system_message=(
+            "Você é um especialista em interpretação de exames laboratoriais. "
+            "Receberá o texto bruto extraído de um PDF de exame e deve devolver APENAS JSON válido "
+            "(sem markdown, sem comentários) com a seguinte estrutura: "
+            '{"markers":[{"nome":"...","valor":"...","unidade":"...","referencia":"...","status":"normal|atencao|prioridade","observacao":"..."}], '
+            '"resumo":"...","conduta_sugerida":"..."}. '
+            "Identifique marcadores comuns: hemoglobina, glicemia, glicose em jejum, vitamina D (25-OH), ferritina, "
+            "vitamina B12, colesterol total, LDL, HDL, triglicerídeos, TSH, T4 livre, PCR, ferro sérico, "
+            "creatinina, ureia, ácido úrico, ALT, AST, GGT, hemoglobina glicada (HbA1c). "
+            "Status: 'normal' (dentro da referência), 'atencao' (limítrofe ou levemente alterado), "
+            "'prioridade' (alteração relevante que merece atenção). "
+            "Responda em Português (BR). NÃO faça diagnóstico médico, apenas organize."
+        ),
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    prompt = f"Texto extraído do exame:\n\n{raw_text[:8000]}"
+    raw = await chat.send_message(UserMessage(text=prompt))
+    # Try to parse JSON; fallback on first valid {...} block
+    try:
+        return json.loads(raw)
+    except Exception:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(raw[start:end+1])
+            except Exception:
+                pass
+        return {"markers": [], "resumo": raw[:600], "conduta_sugerida": ""}
 
 # ---------- Auth Endpoints ----------
 @api.post("/auth/register", response_model=UserOut)
@@ -582,6 +623,193 @@ async def agenda(user=Depends(get_current_user)):
         r["paciente_nome"] = name_by.get(r["paciente_id"], "—")
     return rows
 
+# ---------- Lab Exams ----------
+@api.post("/patients/{pid}/exams")
+async def upload_exam(pid: str, file: UploadFile = File(...), user=Depends(get_current_user)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(400, "Envie um arquivo PDF")
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo maior que 10MB")
+    # extract text
+    try:
+        with pdfplumber.open(io.BytesIO(contents)) as pdf:
+            raw = "\n".join((page.extract_text() or "") for page in pdf.pages)
+    except Exception as e:
+        raise HTTPException(400, f"Não foi possível ler o PDF: {str(e)[:120]}")
+    if not raw.strip():
+        raise HTTPException(400, "O PDF parece estar vazio ou ilegível (possivelmente uma imagem digitalizada).")
+
+    try:
+        analysis = await ai_exam_analysis(raw)
+    except Exception as e:
+        logging.exception("AI exam analysis failed")
+        raise HTTPException(503, f"Falha ao analisar exame (IA indisponível): {str(e)[:120]}")
+
+    eid = str(uuid.uuid4())
+    doc = {
+        "id": eid, "paciente_id": pid, "file_name": file.filename,
+        "raw_text": raw[:6000], "markers": analysis.get("markers", []),
+        "resumo": analysis.get("resumo", ""), "conduta_sugerida": analysis.get("conduta_sugerida", ""),
+        "observacoes": "", "created_at": iso(now_utc()),
+    }
+    await db.exams.insert_one(doc)
+    out = {k: v for k, v in doc.items() if k not in ("raw_text", "_id")}
+    return out
+
+@api.get("/patients/{pid}/exams")
+async def list_exams(pid: str, user=Depends(get_current_user)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    rows = await db.exams.find({"paciente_id": pid}, {"_id": 0, "raw_text": 0}).sort("created_at", -1).to_list(50)
+    return rows
+
+@api.delete("/patients/{pid}/exams/{eid}")
+async def delete_exam(pid: str, eid: str, user=Depends(get_current_user)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    await db.exams.delete_one({"id": eid, "paciente_id": pid})
+    return {"ok": True}
+
+@api.patch("/patients/{pid}/exams/{eid}")
+async def update_exam_notes(pid: str, eid: str, payload: dict, user=Depends(get_current_user)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    obs = (payload or {}).get("observacoes", "")
+    await db.exams.update_one({"id": eid, "paciente_id": pid}, {"$set": {"observacoes": obs}})
+    return {"ok": True}
+
+# ---------- PDF generation (meal plan) ----------
+def _md_to_html(md: str) -> str:
+    """Tiny markdown→html for meal plan content (headings, bold, bullets, line breaks)."""
+    import re
+    if not md:
+        return ""
+    lines = md.split("\n")
+    out = []
+    in_ul = False
+    for ln in lines:
+        s = ln.rstrip()
+        if not s.strip():
+            if in_ul:
+                out.append("</ul>"); in_ul = False
+            out.append("")
+            continue
+        if s.startswith("### "):
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h4>{s[4:]}</h4>")
+        elif s.startswith("## "):
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h3>{s[3:]}</h3>")
+        elif s.startswith("# "):
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h2>{s[2:]}</h2>")
+        elif s.lstrip().startswith(("- ", "• ", "* ")):
+            if not in_ul: out.append("<ul>"); in_ul = True
+            content = s.lstrip()[2:]
+            out.append(f"<li>{content}</li>")
+        else:
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<p>{s}</p>")
+    if in_ul: out.append("</ul>")
+    html = "\n".join(out)
+    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+    html = re.sub(r"\*(.+?)\*", r"<em>\1</em>", html)
+    return html
+
+@api.get("/patients/{pid}/meal-plan/{plan_id}/pdf")
+async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    plan = await db.meal_plans.find_one({"id": plan_id, "paciente_id": pid}, {"_id": 0})
+    if not plan:
+        raise HTTPException(404, "Plano não encontrado")
+
+    nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
+    body_html = _md_to_html(plan.get("content", ""))
+    issued = datetime.fromisoformat(plan["created_at"]).strftime("%d/%m/%Y")
+
+    html_doc = f"""<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Plano EvoNut</title></head>
+<body>
+  <header class="brand">
+    <div class="logo">
+      <span class="logo-mark"></span>
+      <div>
+        <div class="brand-name">EvoNut</div>
+        <div class="brand-sub">Plano alimentar personalizado</div>
+      </div>
+    </div>
+    <div class="meta">
+      <div><strong>Profissional</strong>{nutri.get('name','—')}</div>
+      <div><strong>Data</strong>{issued}</div>
+      <div><strong>Versão</strong>v{plan.get('version', 1)}</div>
+    </div>
+  </header>
+
+  <section class="patient">
+    <h1>{p.get('nome','Paciente')}</h1>
+    <p class="muted">{p.get('telefone','')}{(' · ' + p.get('email','')) if p.get('email') else ''}</p>
+  </section>
+
+  <section class="kpis">
+    <div class="kpi kpi-purple"><div class="lbl">Calorias / dia</div><div class="val">{plan.get('kcal_total','—')} <span>kcal</span></div></div>
+    <div class="kpi"><div class="lbl">Proteína</div><div class="val">{plan.get('proteina_g','—')}g <span>· {plan.get('ptn_pct','—')}%</span></div></div>
+    <div class="kpi"><div class="lbl">Carboidrato</div><div class="val">{plan.get('carboidrato_g','—')}g <span>· {plan.get('cho_pct','—')}%</span></div></div>
+    <div class="kpi"><div class="lbl">Gordura</div><div class="val">{plan.get('gordura_g','—')}g <span>· {plan.get('lip_pct','—')}%</span></div></div>
+  </section>
+
+  <section class="content">
+    {body_html}
+  </section>
+
+  <footer>
+    <div>EvoNut · Sistema Nutricional Inteligente</div>
+    <div>Documento gerado automaticamente — revise com seu(sua) nutricionista.</div>
+  </footer>
+</body></html>"""
+
+    css = CSS(string="""
+      @page { size: A4; margin: 18mm 16mm 22mm 16mm; }
+      * { box-sizing: border-box; }
+      body { font-family: 'Helvetica', 'Arial', sans-serif; color: #0D1117; font-size: 11pt; }
+      header.brand { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 2px solid #7B61FF; margin-bottom: 18px; }
+      .logo { display: flex; align-items: center; gap: 12px; }
+      .logo-mark { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #7B61FF, #1DB97E); }
+      .brand-name { font-size: 18pt; font-weight: 700; color: #161B22; }
+      .brand-sub { font-size: 9pt; color: #6B7280; }
+      header .meta { font-size: 9pt; text-align: right; color: #4B5563; }
+      header .meta div { margin-bottom: 2px; }
+      header .meta strong { display: block; color: #6B7280; font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; }
+      .patient h1 { font-size: 22pt; margin: 0 0 4px 0; color: #161B22; }
+      .patient .muted { color: #6B7280; margin: 0 0 16px 0; }
+      .kpis { display: flex; gap: 8px; margin-bottom: 22px; }
+      .kpi { flex: 1; background: #F3F4F6; border-radius: 10px; padding: 12px 14px; }
+      .kpi-purple { background: linear-gradient(135deg, #7B61FF22, #1DB97E22); border: 1px solid #7B61FF55; }
+      .kpi .lbl { font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; color: #6B7280; margin-bottom: 4px; }
+      .kpi .val { font-size: 16pt; font-weight: 700; color: #161B22; }
+      .kpi .val span { font-size: 9pt; color: #6B7280; font-weight: 500; }
+      .content h2 { font-size: 14pt; color: #7B61FF; border-bottom: 1px solid #E5E7EB; padding-bottom: 4px; margin-top: 18px; }
+      .content h3 { font-size: 12pt; color: #161B22; margin-top: 14px; margin-bottom: 4px; }
+      .content h4 { font-size: 11pt; color: #1DB97E; margin-top: 10px; margin-bottom: 2px; }
+      .content p { margin: 6px 0; line-height: 1.5; }
+      .content ul { padding-left: 18px; margin: 6px 0; }
+      .content li { margin: 3px 0; line-height: 1.45; }
+      footer { position: fixed; bottom: -12mm; left: 0; right: 0; font-size: 8pt; color: #9CA3AF; display: flex; justify-content: space-between; padding-top: 6px; border-top: 1px solid #E5E7EB; }
+    """)
+
+    pdf_bytes = HTML(string=html_doc).write_pdf(stylesheets=[css])
+    safe_name = (p.get("nome") or "paciente").lower().replace(" ", "-")
+    headers = {"Content-Disposition": f'attachment; filename="evonut-plano-{safe_name}-v{plan.get("version", 1)}.pdf"'}
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
+
 # ---------- Bootstrap ----------
 @app.on_event("startup")
 async def startup():
@@ -589,6 +817,7 @@ async def startup():
     await db.patients.create_index("lead_token")
     await db.patients.create_index("nutricionista_id")
     await db.consultations.create_index("nutricionista_id")
+    await db.exams.create_index("paciente_id")
     # seed admin
     admin_email = os.environ['ADMIN_EMAIL'].lower()
     admin_pass = os.environ['ADMIN_PASSWORD']

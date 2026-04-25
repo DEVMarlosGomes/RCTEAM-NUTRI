@@ -6,13 +6,14 @@ import StatusBadge from "@/components/evonut/StatusBadge";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer } from "lucide-react";
+import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 
 const TABS = [
   { k: "anamnese", l: "Anamnese", icon: FileText },
   { k: "ia", l: "Análise IA", icon: Brain },
   { k: "antropometria", l: "Antropometria", icon: Activity },
+  { k: "exames", l: "Exames", icon: FlaskConical },
   { k: "plano", l: "Plano Alimentar", icon: Utensils },
   { k: "comparativo", l: "Comparativo", icon: Sparkles },
 ];
@@ -72,6 +73,7 @@ export default function PacienteDetalhe() {
       {tab === "anamnese" && <Anamnese d={d} />}
       {tab === "ia" && <IATab d={d} reload={reload} />}
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
+      {tab === "exames" && <Exames d={d} reload={reload} />}
       {tab === "plano" && <PlanoAlimentar d={d} reload={reload} />}
       {tab === "comparativo" && <Comparativo id={d.patient.id} />}
     </NutriLayout>
@@ -314,6 +316,7 @@ function PlanoAlimentar({ d, reload }) {
   const [obj, setObj] = useState(d.patient.objetivo || "manutencao");
   const [restr, setRestr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const last = d.meal_plans?.[0];
 
   const gen = async () => {
@@ -325,6 +328,23 @@ function PlanoAlimentar({ d, reload }) {
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
     } finally { setLoading(false); }
+  };
+
+  const downloadPdf = async () => {
+    if (!last) return;
+    setDownloading(true);
+    try {
+      const r = await api.get(`/patients/${d.patient.id}/meal-plan/${last.id}/pdf`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `evonut-plano-${(d.patient.nome || "paciente").toLowerCase().replace(/\s+/g, "-")}-v${last.version}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("PDF baixado");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Falha ao gerar PDF");
+    } finally { setDownloading(false); }
   };
 
   return (
@@ -358,9 +378,14 @@ function PlanoAlimentar({ d, reload }) {
               <div className="text-xs text-gray-500">Versão {last.version} · {new Date(last.created_at).toLocaleString("pt-BR")}</div>
               <h3 className="evo-h3 mt-1">Plano alimentar — {last.kcal_total} kcal/dia</h3>
             </div>
-            <button data-testid="print-plan" onClick={() => window.print()} className="evo-btn-secondary text-sm">
-              <Printer className="w-4 h-4" /> Imprimir / PDF
-            </button>
+            <div className="flex gap-2">
+              <button data-testid="download-plan-pdf" onClick={downloadPdf} disabled={downloading} className="evo-btn-primary text-sm">
+                <Download className="w-4 h-4" /> {downloading ? "Gerando..." : "Baixar PDF"}
+              </button>
+              <button data-testid="print-plan" onClick={() => window.print()} className="evo-btn-secondary text-sm">
+                <Printer className="w-4 h-4" /> Imprimir
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-3 mb-5">
             <Macro l="Proteína" v={`${last.proteina_g} g`} pct={last.ptn_pct} color="purple" />
@@ -428,6 +453,181 @@ function Comparativo({ id }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+
+function Exames({ d, reload }) {
+  const [exams, setExams] = useState(d.exams || []);
+  const [uploading, setUploading] = useState(false);
+  const [open, setOpen] = useState(null); // exam being viewed in detail
+  const fileRef = React.useRef(null);
+
+  React.useEffect(() => { setExams(d.exams || []); }, [d.exams]);
+
+  const upload = async (file) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      toast.error("Envie um arquivo PDF");
+      return;
+    }
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const { data } = await api.post(`/patients/${d.patient.id}/exams`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      toast.success("Exame analisado pela IA!");
+      setExams((e) => [data, ...e]);
+      reload();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Falha ao processar PDF");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const remove = async (eid) => {
+    if (!window.confirm("Remover este exame?")) return;
+    try {
+      await api.delete(`/patients/${d.patient.id}/exams/${eid}`);
+      setExams((e) => e.filter((x) => x.id !== eid));
+      if (open?.id === eid) setOpen(null);
+      toast.success("Exame removido");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    }
+  };
+
+  const statusStyles = {
+    normal: "bg-evo-teal/15 text-evo-teal border-evo-teal/30",
+    atencao: "bg-evo-amber/15 text-evo-amber border-evo-amber/30",
+    prioridade: "bg-evo-coral/15 text-evo-coral border-evo-coral/30",
+  };
+  const statusLabel = { normal: "Normal", atencao: "Atenção", prioridade: "Prioridade" };
+
+  return (
+    <div className="grid lg:grid-cols-5 gap-5">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="evo-card p-5">
+          <h3 className="evo-h3">Enviar exame</h3>
+          <p className="text-xs text-gray-400 mt-1">PDF de até 10 MB. A IA identifica marcadores e classifica em Normal/Atenção/Prioridade.</p>
+          <input
+            ref={fileRef}
+            data-testid="exam-file-input"
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={(e) => upload(e.target.files?.[0])}
+          />
+          <button
+            data-testid="upload-exam"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="evo-btn-primary w-full mt-4"
+          >
+            <Upload className="w-4 h-4" /> {uploading ? "Analisando exame..." : "Selecionar PDF"}
+          </button>
+        </div>
+
+        <div className="evo-card p-5">
+          <h3 className="evo-h3 mb-4">Histórico</h3>
+          {exams.length === 0 ? (
+            <div className="text-sm text-gray-500">Nenhum exame enviado ainda.</div>
+          ) : (
+            <div className="space-y-2">
+              {exams.map((ex) => (
+                <button
+                  key={ex.id}
+                  data-testid={`exam-item-${ex.id}`}
+                  onClick={() => setOpen(ex)}
+                  className={`w-full text-left p-3 rounded-lg border transition-all ${
+                    open?.id === ex.id ? "border-evo-purple/50 bg-evo-purple/10" : "border-white/[0.06] hover:border-white/[0.15] bg-evo-bg"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-sm truncate">{ex.file_name}</div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">{new Date(ex.created_at).toLocaleString("pt-BR")}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {(ex.markers || []).slice(0, 3).map((m, i) => (
+                        <span key={i} className={`text-[9px] px-1.5 py-0.5 rounded-full border ${statusStyles[m.status] || "bg-white/5 text-gray-300 border-white/10"}`}>
+                          {(m.nome || "").slice(0, 8)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="lg:col-span-3">
+        {!open ? (
+          <div className="evo-card p-12 text-center text-gray-500">
+            <FlaskConical className="w-7 h-7 mx-auto text-gray-600 mb-3" />
+            <div className="text-sm">Selecione um exame para visualizar a análise.</div>
+          </div>
+        ) : (
+          <div className="evo-card p-6">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <div className="min-w-0">
+                <div className="text-xs text-gray-500">{new Date(open.created_at).toLocaleString("pt-BR")}</div>
+                <h3 className="evo-h3 mt-1 truncate">{open.file_name}</h3>
+              </div>
+              <button data-testid={`delete-exam-${open.id}`} onClick={() => remove(open.id)} className="evo-btn-ghost text-evo-coral">
+                <Trash2 className="w-4 h-4" /> Remover
+              </button>
+            </div>
+
+            {open.resumo && (
+              <div className="evo-glass rounded-lg p-4 mb-4">
+                <div className="text-[10px] uppercase tracking-widest text-evo-purple font-semibold mb-1">Resumo IA</div>
+                <div className="text-sm text-gray-200">{open.resumo}</div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <div className="text-[11px] uppercase tracking-widest text-gray-500 font-semibold">Marcadores</div>
+              {(open.markers || []).length === 0 ? (
+                <div className="text-sm text-gray-500">Nenhum marcador identificado neste PDF.</div>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {open.markers.map((m, i) => (
+                    <div key={i} className="p-3 rounded-lg bg-evo-bg border border-white/[0.04]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-semibold text-sm capitalize">{m.nome}</div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${statusStyles[m.status] || "bg-white/5 text-gray-300 border-white/10"}`}>
+                          {statusLabel[m.status] || m.status}
+                        </span>
+                      </div>
+                      <div className="text-sm mt-1">
+                        <span className="font-semibold text-white">{m.valor}</span>
+                        {m.unidade && <span className="text-gray-400"> {m.unidade}</span>}
+                      </div>
+                      {m.referencia && <div className="text-[11px] text-gray-500 mt-1">Ref.: {m.referencia}</div>}
+                      {m.observacao && <div className="text-[11px] text-gray-400 mt-1 italic">{m.observacao}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {open.conduta_sugerida && (
+              <div className="mt-4 p-4 rounded-lg bg-gradient-to-br from-evo-purple/10 to-evo-teal/10 border border-evo-purple/20">
+                <div className="text-[10px] uppercase tracking-widest text-evo-teal font-semibold mb-1">Conduta sugerida</div>
+                <div className="text-sm text-gray-200 whitespace-pre-wrap">{open.conduta_sugerida}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

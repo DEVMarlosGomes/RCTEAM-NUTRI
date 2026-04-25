@@ -1,0 +1,70 @@
+{
+  "summary": "Iteration 2 full-stack test of EvoNut MVP (Lab Exam upload + Branded PDF generation). Backend: 34/35 pytest tests pass (15 new iter2 + 20 iter1 regression all pass except 1). Frontend: Patient detail now correctly shows 6 tabs (Anamnese, Análise IA, Antropometria, Exames, Plano Alimentar, Comparativo). Exames tab renders the upload card, history list, and right-side preview panel. Plano tab has both 'Baixar PDF' (data-testid=download-plan-pdf) and 'Imprimir' (data-testid=print-plan) buttons; PDF endpoint returns 200 with Content-Type application/pdf. Lab exam AI extraction (Claude Sonnet 4.5) successfully parsed a synthetic 12-marker PDF and flagged abnormal values (Vit D 22 / Glicemia 102 / Colesterol 215) with status atencao/prioridade. Auth-guard works on all new endpoints (401 unauth, 404 cross-tenant). PDF endpoint correctly returns 404 for invalid plan_id or patient_id. Non-PDF and empty/scanned PDF correctly rejected with 400. AI budget appears OK in this iteration (iter1's only failure no longer reproduces).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/patients/{id}",
+        "issue": "Review request states 'GET /api/patients/{id} now also returns exams[] in the response payload', but the implementation in server.py:get_patient does NOT fetch or include exams. Response keys are only [patient, anamneses, consultations, evaluations, meal_plans, ai_analyses]. Frontend PacienteDetalhe likely fetches exams separately via GET /exams (which works), so UI is OK, but contract is incomplete vs spec.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/patients/{pid}/exams",
+        "issue": "ai_exam_analysis fallback (when JSON parse fails) returns markers=[] silently — front-end will just show 'no markers detected' without indicating the LLM returned malformed output. Consider logging a warning and surfacing a friendlier resumo."
+      },
+      {
+        "endpoint": "PATCH /api/patients/{pid}/exams/{eid}",
+        "issue": "Accepts an untyped dict body (no Pydantic model). Should use a typed model like ExamNotesIn(observacoes: str) for input validation."
+      },
+      {
+        "endpoint": "GET /api/patients/{pid}/meal-plan/{plan_id}/pdf",
+        "issue": "WeasyPrint is invoked synchronously in the request handler — for large plans this can block the event loop. Consider running HTML(...).write_pdf in a thread executor (asyncio.to_thread)."
+      },
+      {
+        "endpoint": "DELETE /api/patients/{pid}/exams/{eid}",
+        "issue": "Returns {ok:true} even when the exam id does not exist (delete_one matched 0 docs). Should return 404 if not found for proper REST semantics."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter2.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter2_results.xml",
+    "/app/test_reports/pytest/iter1_regression.xml"
+  ],
+  "action_items": [
+    "Update GET /api/patients/{pid} in server.py to also fetch exams (db.exams.find({paciente_id:pid},{_id:0, raw_text:0})) and return them under an 'exams' key — required by the iter2 spec.",
+    "Type the PATCH /exams/{eid} body with a Pydantic model (ExamNotesIn).",
+    "Wrap PDF generation in asyncio.to_thread to avoid blocking the event loop on large plans.",
+    "Return 404 from DELETE /exams/{eid} when no document was matched (use deleted_count).",
+    "Optional: when ai_exam_analysis can't parse JSON, log it and return a clearer fallback message in 'resumo' so the user knows the AI output was malformed."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 850 lines — past the 700-line threshold. Strongly recommend splitting into routers/ (auth, public, patients, exams, pdf), services/ai.py, services/calc.py, helpers/pdf.py before iter 3 to keep maintainability.",
+    "_md_to_html is a hand-rolled mini-parser that doesn't escape HTML in user content (e.g. '<script>' inside plan.content would be rendered literally inside the PDF). For PDF this is low-risk, but escape via html.escape() before applying markdown transforms.",
+    "ai_exam_analysis truncates raw text to 8000 chars silently — labs with 4-5 page hemograms could lose data. Consider chunking or warning the user.",
+    "Exam upload reads the entire file into memory (await file.read()) before checking size — a malicious user could send a 1GB PDF and exhaust memory before the 10MB check fires. Use file.spool_max_size or stream-check.",
+    "No mime-type validation on UploadFile — relies only on filename extension. A user could rename a .exe → .pdf and pdfplumber would just throw the generic 400 'Não foi possível ler o PDF' message.",
+    "PDF endpoint embeds nutri.name into HTML without escaping — if a nutritionist registers with name='Dra <b>X</b>' it would render as bold in the PDF. Same minor XSS-like issue for patient name and phone.",
+    "Re-iterating from iter1: localhost CORS fallback, /api/leads single-nutritionist routing, slot timezone bug (UTC vs America/Sao_Paulo) still unaddressed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter2.py (created — 15 tests covering exam CRUD, AI markers, PDF generation, auth-guard)"
+  ],
+  "success_rate": {
+    "backend": "97% (34/35 — single failure is the missing exams[] in GET /patients/{id})",
+    "frontend": "100% (6 tabs render, exam upload UI present, PDF download triggers 200 application/pdf)"
+  },
+  "test_credentials": "admin@evonut.com / evonut123 — verified working.",
+  "seed_data_creation": "Test fixtures created TEST_Iter2 lead with anamnesis + 1 evaluation + 1 meal plan + 1 uploaded-then-deleted exam. All persisted via the public/CRM flow into MongoDB. Iter1 fixtures (TEST_Paciente Joana, TEST_E2E Maria, TEST_PreCheck) still present.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run regression with: `pytest backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml` (combines iter1 + iter2 = 35 tests). The single critical failure (test_patient_detail_includes_exams) will only pass once main agent updates GET /api/patients/{pid} in server.py to include `exams` (db.exams.find with raw_text excluded). PDF, AI markers and AI chat all work — LLM budget is fine. Frontend testids confirmed: tab-anamnese, tab-ia, tab-antropometria, tab-exames, tab-plano, tab-comparativo, exam-file-input, upload-exam, exam-item-{id}, delete-exam-{id}, download-plan-pdf, print-plan.",
+  "rca of the issue": "test_patient_detail_includes_exams — RCA: The review_request explicitly states 'GET /api/patients/{id} now also returns exams[] in the response payload' but server.py:get_patient (line 526-537) only queries anamneses/consultations/evaluations/meal_plans/ai_analyses — not exams. Reproduction: GET /api/patients/{pid} after uploading an exam → response keys do not contain 'exams'. Mitigation: add `exams = await db.exams.find({'paciente_id': pid}, {'_id': 0, 'raw_text': 0}).sort('created_at', -1).to_list(50)` and include `'exams': exams` in the return dict. Frontend already fetches exams separately so UI is unaffected, but the API contract is incomplete."
+}
