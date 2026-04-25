@@ -522,7 +522,11 @@ async def run_analysis(pid: str, user=Depends(get_current_user)):
     avals = await db.evaluations.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
     if not anam:
         raise HTTPException(400, "Paciente sem anamnese")
-    text = await ai_clinical_analysis(anam.get("respostas", {}), avals.get("composicao") if avals else None)
+    try:
+        text = await ai_clinical_analysis(anam.get("respostas", {}), avals.get("composicao") if avals else None)
+    except Exception as e:
+        logging.exception("AI analysis failed")
+        raise HTTPException(503, f"Falha ao gerar análise (IA indisponível): {str(e)[:120]}")
     aid = str(uuid.uuid4())
     doc = {"id": aid, "paciente_id": pid, "content": text, "created_at": iso(now_utc())}
     await db.ai_analyses.insert_one(doc)
@@ -539,7 +543,11 @@ async def gen_meal_plan(pid: str, payload: MealPlanRequest, user=Depends(get_cur
     comp = avals["composicao"]
     macros = calc_macros(comp["get_kcal"], payload.objetivo, avals["peso"], comp.get("massa_magra"))
     anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
-    text = await ai_meal_plan(p, anam.get("respostas") if anam else {}, macros, payload.restricoes)
+    try:
+        text = await ai_meal_plan(p, anam.get("respostas") if anam else {}, macros, payload.restricoes)
+    except Exception as e:
+        logging.exception("AI meal plan failed")
+        raise HTTPException(503, f"Falha ao gerar plano (IA indisponível): {str(e)[:120]}")
     last = await db.meal_plans.find_one({"paciente_id": pid}, sort=[("version", -1)])
     version = (last["version"] + 1) if last else 1
     mid = str(uuid.uuid4())

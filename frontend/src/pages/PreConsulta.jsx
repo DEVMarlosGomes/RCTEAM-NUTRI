@@ -271,6 +271,22 @@ function Field({ f, value, onChange }) {
       </div>
     );
   }
+  if (f.type === "date") {
+    return (
+      <div>
+        <label className="evo-label">{f.l}{f.req && <span className="text-evo-coral">*</span>}</label>
+        <input
+          data-testid={tid}
+          type="date"
+          lang="pt-BR"
+          className="evo-input [color-scheme:dark]"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <p className="text-[11px] text-gray-500 mt-1">Formato: dia/mês/ano</p>
+      </div>
+    );
+  }
   return (
     <div>
       <label className="evo-label">{f.l}{f.req && <span className="text-evo-coral">*</span>}</label>
