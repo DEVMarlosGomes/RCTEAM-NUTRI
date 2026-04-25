@@ -1,59 +1,77 @@
-# EvoNut — PRD
+# Rogério Costa — PRD (formerly EvoNut)
 
-## Original Problem Statement
-"com base nesse documento gere um sistema" — User uploaded `EvoNut_Prompt_Senior.docx` defining a senior-level engineering brief for **EvoNut Sistema Nutricional Inteligente**, a premium clinical SaaS for nutritionists in pt-BR.
+> **Rebrand (Iter 1):** EvoNut → **Rogério Costa · Treinador e Nutricionista**
+> Paleta: `#0081FD` (azul) + `#000000` (preto). Tipografia: Orbitron (display, substituto web do Pirulen) + Rajdhani (texto). Logo: bracketed "P" mark, variantes blue/dark.
 
-## User Choices (collected via ask_human)
-1. Scope: **1a** — Painel completo do nutricionista + formulário público com IA
-2. Auth: **2a** — JWT custom (email/senha)
-3. AI: **3a** — Claude Sonnet 4.5 via Emergent LLM Key
-4. Integrations: **4a** — Mock WhatsApp/Calendar (agenda interna)
-5. PDF: **5a** — Sim (browser print)
+## Visão
+Sistema clínico premium ponta-a-ponta para o treinador e nutricionista: do lead ao plano alimentar, com IA embarcada e UX dark com identidade Rogério Costa.
 
-## Personas
-- **Paciente**: Pré-consulta self-service via link público (sem login).
-- **Nutricionista**: Painel CRM clínico com login (JWT cookie httpOnly).
+## Stack
+- Backend: FastAPI + Mongo + JWT cookie auth + Claude Sonnet 4.5 via emergentintegrations + WeasyPrint (PDF) + pdfplumber (OCR exames).
+- Frontend: React 19 + Tailwind v3 + shadcn/ui + lucide-react + sonner + Orbitron/Rajdhani Google Fonts.
+- Hosting: Kubernetes + supervisor.
 
-## Architecture
-- **Backend**: FastAPI + Motor (Mongo) + emergentintegrations (Claude Sonnet 4.5) + bcrypt/PyJWT auth
-- **Frontend**: React 19 + Tailwind + shadcn/ui + Recharts + sonner + react-router-dom v7
-- **DB**: MongoDB collections — users, patients, anamneses, consultations, evaluations, meal_plans, ai_analyses, chat_messages
-- **Design system**: Outfit + Manrope, dark premium (#0D1117 / #161B22), gradient roxo→teal (#7B61FF→#1DB97E), glassmorphism
+## Pipeline (6 etapas)
+Lead → Pré-consulta (15 seções) → Chat IA → Agendamento → Análise IA + Plano → Acompanhamento
 
-## Implemented (Iter 1 — 2026-02-XX)
-- Public landing with lead-capture form, hero, features, CTA
-- Auth: register / login / me / logout (JWT cookie, samesite=none, secure)
-- Admin seed (admin@evonut.com / evonut123)
-- Public flow: lead → 15-section anamnesis form (autosave) → adaptive AI chat (Claude Sonnet 4.5) → scheduling (internal slots Mon–Sat 9h–17h, BR) → success page
-- Nutritionist CRM: dashboard (KPIs + funil), lista de pacientes, agenda
-- Patient detail with 5 tabs:
-  - Anamnese (read-only display)
-  - Análise IA (Claude clinical report on demand)
-  - Antropometria (Pollock 7/3, Faulkner; perimetria; bioimpedância manual; IMC, TMB Mifflin/Harris, GET; %gordura/MM/MG; evolution chart)
-  - Plano Alimentar (auto macros + Claude meal plan + print/PDF)
-  - Comparativo evolutivo (last vs previous, arrows)
-- Status funnel CRM badges (LEAD_INICIADO → EM_ACOMPANHAMENTO)
-- Error handling on AI calls (503 friendly message)
+## Stories Concluídas (até Iter 1)
 
-## Test Coverage
-- Backend pytest 19/20 (single failure = LLM budget cap, not a code bug)
-- Frontend e2e (testing_agent_v3): 100% on key flows
+### Já entregues no projeto antes da rebranding
+- Auth (login + register + me + logout) com cookie httpOnly
+- Multi-tenant via slug + fallback (Iter 1 reforço)
+- Lead público + token + flow anamnese
+- Anamnese 15 seções (autosave localStorage)
+- Chat IA adaptativo com Claude Sonnet 4.5
+- Agendamento (slots por nutricionista) — agora em **America/Sao_Paulo** (Iter 1)
+- Dashboard, Pacientes, Detalhe (antropometria, comparativo, plano, exames)
+- Geração de plano alimentar IA (server-side)
+- Upload de exame laboratorial (PDF) + extração de marcadores via IA
+- Geração de PDF do plano (WeasyPrint, server-side) — agora com **brand Rogério Costa** (Iter 1)
 
-## Backlog (P0/P1/P2)
-- **P0**: Multi-tenant routing for /api/leads (currently picks first nutritionist)
-- **P1**: Slot generation in America/Sao_Paulo timezone (currently UTC labels)
-- **P1**: Lab exam upload (PDF) + AI marker extraction
-- **P1**: WhatsApp Business API real integration (Z-API/Twilio)
-- **P1**: Google Calendar real integration
-- **P2**: Server-side PDF generation (WeasyPrint/Puppeteer) for branded plan exports
-- **P2**: Login brute-force lockout (5 fails / 15 min)
-- **P2**: Refactor server.py into routers/services
-- **P2**: Whitelist public lead fields (currently leaks nutricionista_id)
-- **P2**: Rate limit /api/public/chat
-- **P2**: Replace HTML5 date with shadcn DatePicker (pt-BR dd/mm/yyyy)
-- **P2**: Versioned plan history UI (currently only latest displayed)
-- **P3**: Rich charts on Comparativo with Recharts side-by-side
-- **P3**: Bioimpedância PDF/CSV import
+### Iter 1 — Rebrand + Backend reinforcement
+- **Rebrand visual completo:**
+  - `evo-*` → `rc-*` Tailwind tokens (com aliases de retrocompatibilidade)
+  - Cores: `#0081FD` (azul) + `#000000` (preto), substituindo purple/teal
+  - Tipografia: Orbitron (display) + Rajdhani (texto)
+  - Brand component (logo + wordmark) reutilizável
+  - RCLogo component (SVG, 4 variantes: blue, dark, ghost, mono)
+  - Strings: "EvoNut" → "Rogério Costa" em todas as páginas e PDFs
+  - Email seed: `admin@rogeriocosta.com.br` / `rogerio2025`
+  - Logo PNGs em `/public/brand/`
+- **Backend P0/P1/P2:**
+  - Multi-tenant lead routing via `?nutri=<slug>` query param
+  - Slot generation em `America/Sao_Paulo` (`-03:00`)
+  - Login lockout (5 tentativas / 15 min)
+  - Public chat rate limit (8 req / 60s por token)
+  - Whitelist de campos públicos do lead (sem `nutricionista_id`)
+  - Schedule: parsing correto de date/time como SP-local
+- **Frontend:**
+  - Agendar.jsx: parsing local de ISO sem TZ shift, labels BRT
+  - Brand component + RCLogo aplicados em todas as páginas públicas
+
+## Backlog Pendente (Iter 2 / 3)
+
+### Iter 2 (próximo)
+- [ ] **Versioned plan history UI** — listar versões anteriores do plano alimentar e permitir comparar lado a lado.
+- [ ] **DatePicker pt-BR (dd/mm/yyyy)** — substituir input HTML5 nativo (PreConsulta + Antropometria) por shadcn DatePicker com `date-fns/locale/pt-BR`.
+- [ ] **Refactor server.py** — quebrar em módulos `routes/`, `models/`, `services/`, `ai/`.
+
+### Iter 3
+- [ ] **Gráficos ricos no Comparativo** — Recharts lado-a-lado por avaliação, séries de peso/dobras/IMC.
+- [ ] **Importação de Bioimpedância (PDF/CSV)** — parser específico (InBody, Tanita) + extração de água corporal, massa magra, gordura visceral.
+
+### Backlog longo prazo
+- [ ] Google Calendar real (OAuth + free/busy + push events)
+- [ ] WhatsApp Business API real (templates + webhooks)
+- [ ] Notificações push (web push + service worker)
+- [ ] Versioning end-to-end de planos (com diff visual)
 
 ## Test Credentials
-See `/app/memory/test_credentials.md`
+See `/app/memory/test_credentials.md`.
+
+## Brand Assets
+- Logo full: `/public/brand/logo-full.png`
+- Logo blue (icon): `/public/brand/logo-blue.png`
+- Logo dark (icon): `/public/brand/logo-dark.png`
+- Cores: `#0081FD` / `#000000`
+- Fontes web: Orbitron (display 500-900) + Rajdhani (texto 400-700)
