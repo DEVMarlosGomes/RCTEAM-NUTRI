@@ -1,0 +1,200 @@
+{
+  "theme_and_archetype": {
+    "theme": "dark",
+    "archetype": "Premium Clinical Dark (Archetype 4 & 5 Hybrid)",
+    "description": "A high-end, premium clinical SaaS platform. Combines the moody, jewel-like aesthetic of luxury platforms with the high-contrast data clarity needed for medical/nutrition analysis. Avoids the 'fintech-bro' look by maintaining clinical precision and using soft, elegant typography."
+  },
+  "typography": {
+    "rules": {
+      "headings": {
+        "family": "Outfit",
+        "weights": [400, 600],
+        "usage": "Used for all page titles, hero text, and major section headers to provide a sleek, tech-forward premium feel.",
+        "letter_spacing": "tracking-tight"
+      },
+      "body": {
+        "family": "Manrope",
+        "weights": [400, 600],
+        "usage": "Used for all body copy, data tables, labels, and forms. Provides excellent legibility for dense clinical data.",
+        "letter_spacing": "tracking-normal"
+      }
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl font-semibold tracking-tight",
+      "h2": "text-2xl sm:text-3xl font-semibold tracking-tight",
+      "h3": "text-xl sm:text-2xl font-semibold tracking-tight",
+      "h4": "text-lg font-semibold",
+      "body": "text-base",
+      "small": "text-sm",
+      "caption": "text-xs uppercase tracking-wider"
+    },
+    "forbidden": ["Inter", "Roboto", "Open Sans"]
+  },
+  "colors": {
+    "backgrounds": {
+      "main": "#0D1117",
+      "surface": "#161B22",
+      "surface_alt": "#0A0F14",
+      "glass": "rgba(22, 27, 34, 0.6)"
+    },
+    "borders": {
+      "default": "rgba(255, 255, 255, 0.08)",
+      "focus": "#7B61FF"
+    },
+    "brand": {
+      "primary": "#7B61FF",
+      "secondary": "#1DB97E",
+      "accent": "#EF9F27",
+      "danger": "#E8593C"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#9CA3AF",
+      "muted": "#6B7280",
+      "inverse": "#0D1117"
+    },
+    "gradients": {
+      "primary": "bg-gradient-to-br from-[#7B61FF] to-[#1DB97E]",
+      "text_highlight": "bg-clip-text text-transparent bg-gradient-to-r from-[#7B61FF] to-[#1DB97E]"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous spacing. Allow data to breathe. Dense layouts are only for the control-room dashboard views.",
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "grids": {
+      "marketing": "grid-cols-1 md:grid-cols-12 gap-8",
+      "dashboard": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6"
+    },
+    "breakpoints": {
+      "mobile": "375px",
+      "tablet": "768px",
+      "desktop": "1280px"
+    }
+  },
+  "surfaces_and_effects": {
+    "cards": {
+      "base": "bg-[#161B22] rounded-[12px] border border-white/[0.08] shadow-lg",
+      "hover": "hover:border-white/[0.15] hover:shadow-xl transition-all duration-300 ease-out"
+    },
+    "glassmorphism": {
+      "base": "backdrop-blur-xl bg-[#161B22]/60 border border-white/[0.08]",
+      "usage": "Overlapping elements, sticky headers, modals, floating action bars."
+    },
+    "motion": {
+      "base": "transition-all duration-300 ease-out",
+      "fast": "transition-all duration-200 ease-out",
+      "no_flash": "opacity changes should use ease-in-out to prevent flashing"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-gradient-to-br from-[#7B61FF] to-[#1DB97E] text-white rounded-lg px-6 py-2.5 font-semibold hover:-translate-y-0.5 shadow-[0_4px_14px_0_rgba(123,97,255,0.3)] transition-all duration-300 ease-out",
+      "secondary": "bg-[#161B22] border border-white/[0.08] text-white hover:bg-[#1DB97E]/10 hover:border-[#1DB97E]/50 rounded-lg px-6 py-2.5 font-semibold transition-all duration-200 ease-out",
+      "ghost": "text-white/70 hover:text-white hover:bg-white/5 px-4 py-2 rounded-lg transition-all"
+    },
+    "status_badges": {
+      "base": "px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide inline-flex items-center gap-1.5",
+      "variants": {
+        "LEAD_INICIADO": "bg-white/10 text-white",
+        "ANAMNESE_COMPLETA": "bg-[#7B61FF]/15 text-[#7B61FF]",
+        "CONSULTA_AGENDADA": "bg-[#EF9F27]/15 text-[#EF9F27]",
+        "CONSULTA_REALIZADA": "bg-[#1DB97E]/15 text-[#1DB97E]",
+        "PLANO_ENTREGUE": "bg-[#1DB97E]/15 text-[#1DB97E]",
+        "EM_ACOMPANHAMENTO": "bg-[#7B61FF]/15 text-[#7B61FF]"
+      }
+    },
+    "tables": {
+      "container": "w-full text-left border-collapse",
+      "header": "bg-[#161B22] text-xs uppercase tracking-wider text-gray-400 font-semibold border-b border-white/[0.08] p-4",
+      "row": "even:bg-[#0A0F14] odd:bg-[#0D1117] hover:bg-white/[0.02] transition-colors border-b border-white/[0.04]",
+      "cell": "p-4 text-sm text-gray-200 whitespace-nowrap"
+    },
+    "form_inputs": {
+      "base": "w-full bg-[#0A0F14] border border-white/[0.08] rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#7B61FF]/50 focus:border-[#7B61FF] transition-all duration-200",
+      "label": "block text-sm font-semibold text-gray-300 mb-2"
+    },
+    "charts": {
+      "library": "recharts",
+      "colors": ["#7B61FF", "#1DB97E", "#EF9F27", "#E8593C"],
+      "grid": "stroke-white/5 stroke-dasharray-3-3",
+      "tooltip": "bg-[#161B22]/90 backdrop-blur-md border border-white/10 text-white rounded-lg p-3 shadow-xl"
+    }
+  },
+  "pages": {
+    "landing_page": {
+      "layout": "Marketing grid. Asymmetric layout.",
+      "hero": "Dark premium aesthetic. Headline uses Outfit. Background has subtle glowing orbs of #7B61FF and #1DB97E (achieved via CSS radial-gradients with blur). Floating glassmorphic cards showing 'AI Analysis' and 'Patient Progress'.",
+      "navigation": "Sticky glassmorphism header with 'Login' and 'Agendar Consulta' CTAs."
+    },
+    "patient_form": {
+      "layout": "Centered form container with step indicators.",
+      "features": "Progress bar (gradient fill). Auto-save indicator (subtle text top right). 15 steps paginated to avoid overwhelming the user. Inputs are large and tactile."
+    },
+    "patient_chat_ai": {
+      "layout": "Responsive chat interface, max-w-3xl.",
+      "bubbles": {
+        "ai": "bg-[#161B22] border border-[#7B61FF]/20 rounded-2xl rounded-tl-sm p-4 text-gray-200 shadow-sm",
+        "user": "bg-[#7B61FF] text-white rounded-2xl rounded-tr-sm p-4 shadow-md"
+      }
+    },
+    "scheduling": {
+      "layout": "Calendar grid overlaying standard dashboard or modal.",
+      "components": "Date picker using dark-themed grid. Time slots as pill buttons. Unavailable slots disabled with opacity-30."
+    },
+    "login": {
+      "layout": "Split screen or centered glass card over abstract gradient background.",
+      "styling": "Inputs use focus rings. Primary gradient button for Login."
+    },
+    "nutritionist_dashboard": {
+      "layout": "Dense Control-Room grid (Archetype 4 style applied to dark theme).",
+      "kpi_cards": "4 columns. Displaying 'Novos Pacientes', 'Consultas Hoje', 'Faturamento'. Uses subtle icons.",
+      "recent_patients": "Data table with alternating rows (#0D1117 / #0A0F14) and status badges."
+    },
+    "patient_detail": {
+      "layout": "Sidebar for navigation (Anamnesis, AI, Anthropometry, Meal Plan) + Main content area.",
+      "ai_analysis": "Glassmorphism card with warning coral/amber highlights for risk flags. Uses textual summary + bullet points."
+    },
+    "anthropometry": {
+      "layout": "Complex data entry grid + Chart visualization.",
+      "protocols": "Tabs for Pollock 7, Faulkner, etc. Input fields grouped cleanly. Recharts line graph showing evolution over time."
+    },
+    "comparative_evaluations": {
+      "layout": "Side-by-side split view.",
+      "design": "Visual arrows (Teal for improvement, Coral for regression) between metrics. AI narrative in a highlighted glass card below the metrics."
+    },
+    "meal_plan": {
+      "layout": "Timeline or card-based list by hour.",
+      "cards": "Each meal is a #161B22 card with macros broken down into pill badges (PTN, CHO, LIP). Summary header with total Kcal."
+    }
+  },
+  "media": {
+    "philosophy": "Images should feel dark, moody, premium, and healthy. Avoid bright white clinical stock photos. Embrace deep shadows and rich food colors.",
+    "images": [
+      {
+        "category": "hero_background",
+        "url": "https://images.unsplash.com/photo-1736773879027-8db3a20621fd?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "description": "Abstract dark background with subtle shapes."
+      },
+      {
+        "category": "hero_background_alternate",
+        "url": "https://images.pexels.com/photos/23823961/pexels-photo-23823961.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Abstract artwork featuring dynamic teal light streaks, modern atmosphere."
+      },
+      {
+        "category": "health_food_visual",
+        "url": "https://images.pexels.com/photos/29465326/pexels-photo-29465326.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Moody food photo featuring blackberries, blueberries on dark slate."
+      },
+      {
+        "category": "clinic_interior",
+        "url": "https://images.unsplash.com/photo-1762625570087-6d98fca29531?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "description": "Modern dark waiting room."
+      }
+    ]
+  },
+  "accessibility_and_testing": {
+    "language": "pt-BR",
+    "contrast": "Ensure text against #0D1117 and #161B22 meets APCA/WCAG standards. Use white or bright gray for primary text.",
+    "data_testid_rules": "All interactive elements (buttons, inputs, tabs, table rows, badges) MUST include data-testid attribute formatted as kebab-case based on role. e.g., data-testid='submit-anamnesis-button', data-testid='patient-row-status-badge'."
+  }
+}
