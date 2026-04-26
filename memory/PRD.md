@@ -49,14 +49,26 @@ Lead → Pré-consulta (15 seções) → Chat IA → Agendamento → Análise IA
   - Agendar.jsx: parsing local de ISO sem TZ shift, labels BRT
   - Brand component + RCLogo aplicados em todas as páginas públicas
 
-## Backlog Pendente (Iter 2 / 3)
+## Iter 2 — Formulário Pré-consulta (alinhado ao doc)
+- **Frontend `PreConsulta.jsx` reescrito**: 15 seções 100% alinhadas ao `FORMULÁRIO PRÉ CONSULTA.docx`
+- Novos tipos de campo: `radio-card` (com descrição), `multi-check`, `slider 0-10`, `yes-no`, `photos`
+- Auto-cálculo de idade a partir de `data_nascimento`
+- Step pills navegáveis (ícones)
+- Upload de fotos client-side com resize (1280px / 78% JPEG) → max 4
+- Chat inicial atualizado com texto exato do doc ("Perfeito, suas informações foram recebidas...")
+- **Backend**:
+  - Endpoint `POST /api/public/lead/{token}/photos` (validação data: image/, cap 4, max 4.5MB cada)
+  - `submit_anamnesis` aceita `peso_atual`/`estatura` (novo) e `peso`/`altura` (back-compat)
+- **Backend testado** ✅ (anamnesis remap + photo upload).
 
-### Iter 2 (próximo)
+## Backlog Pendente (Iter 3+)
 - [ ] **Versioned plan history UI** — listar versões anteriores do plano alimentar e permitir comparar lado a lado.
-- [ ] **DatePicker pt-BR (dd/mm/yyyy)** — substituir input HTML5 nativo (PreConsulta + Antropometria) por shadcn DatePicker com `date-fns/locale/pt-BR`.
+- [ ] **DatePicker pt-BR (dd/mm/yyyy)** — substituir input HTML5 nativo por shadcn DatePicker com `date-fns/locale/pt-BR`.
 - [ ] **Refactor server.py** — quebrar em módulos `routes/`, `models/`, `services/`, `ai/`.
+- [ ] **Gráficos ricos no Comparativo** — Recharts lado-a-lado por avaliação.
+- [ ] **Importação de Bioimpedância (PDF/CSV)** — InBody, Tanita.
 
-### Iter 3
+## Backlog Pendente (Iter 3+)
 - [ ] **Gráficos ricos no Comparativo** — Recharts lado-a-lado por avaliação, séries de peso/dobras/IMC.
 - [ ] **Importação de Bioimpedância (PDF/CSV)** — parser específico (InBody, Tanita) + extração de água corporal, massa magra, gordura visceral.
 
