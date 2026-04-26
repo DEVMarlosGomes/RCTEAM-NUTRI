@@ -157,6 +157,9 @@ class ChatIn(BaseModel):
     token: str
     message: str
 
+class PhotosIn(BaseModel):
+    fotos: List[dict]  # [{name, data_url, size}]
+
 class ScheduleIn(BaseModel):
     token: str
     date: str   # ISO date
@@ -469,17 +472,57 @@ async def submit_anamnesis(payload: AnamnesisIn):
         "created_at": iso(now_utc()),
     }
     await db.anamneses.insert_one(doc)
-    # update patient with relevant fields
+    # update patient with relevant fields (support old & new field names)
     upd = {"status_funil": "ANAMNESE_COMPLETA"}
     r = payload.respostas
-    if r.get("peso"): upd["peso"] = float(r["peso"])
-    if r.get("altura"): upd["altura"] = int(r["altura"])
+
+    def first(*keys):
+        for k in keys:
+            v = r.get(k)
+            if v not in (None, "", [], {}):
+                return v
+        return None
+
+    peso = first("peso_atual", "peso")
+    altura = first("estatura", "altura")
+    if peso is not None:
+        try: upd["peso"] = float(peso)
+        except (TypeError, ValueError): pass
+    if altura is not None:
+        try: upd["altura"] = int(float(altura))
+        except (TypeError, ValueError): pass
     if r.get("data_nascimento"): upd["data_nascimento"] = r["data_nascimento"]
     if r.get("sexo"): upd["sexo"] = r["sexo"]
     if r.get("email"): upd["email"] = r["email"]
-    if r.get("objetivo"): upd["objetivo"] = r["objetivo"]
+    obj = first("objetivo")
+    if obj: upd["objetivo"] = obj if isinstance(obj, str) else str(obj)
     await db.patients.update_one({"id": p["id"]}, {"$set": upd})
     return {"ok": True, "anamnesis_id": aid}
+
+@api.post("/public/lead/{token}/photos")
+async def upload_lead_photos(token: str, payload: PhotosIn):
+    p = await db.patients.find_one({"lead_token": token})
+    if not p:
+        raise HTTPException(404, "Lead não encontrado")
+    if not isinstance(payload.fotos, list):
+        raise HTTPException(400, "Formato inválido")
+    # Cap at 4 photos and ~3MB each (data URL ≈ 4MB raw)
+    cleaned = []
+    for f in payload.fotos[:4]:
+        data_url = (f.get("data_url") or "")
+        if not data_url.startswith("data:image/"):
+            continue
+        if len(data_url) > 4_500_000:
+            continue
+        cleaned.append({
+            "id": str(uuid.uuid4()),
+            "name": (f.get("name") or "foto")[:120],
+            "data_url": data_url,
+            "size": int(f.get("size") or len(data_url)),
+            "uploaded_at": iso(now_utc()),
+        })
+    await db.patients.update_one({"id": p["id"]}, {"$set": {"fotos": cleaned}})
+    return {"ok": True, "count": len(cleaned)}
 
 @api.get("/public/chat/{token}")
 async def get_chat(token: str):

@@ -19,11 +19,18 @@ export default function Chat() {
     api.get(`/public/chat/${token}`).then((r) => {
       const msgs = r.data || [];
       if (msgs.length === 0) {
-        setMessages([{
-          role: "assistant",
-          content:
-            "Olá! Sou o assistente do nutricionista Rogério Costa. Já recebi seu formulário e gostaria de aprofundar alguns pontos importantes para montar o melhor plano possível para você. Vamos lá?",
-        }]);
+        setMessages([
+          {
+            role: "assistant",
+            content:
+              "Perfeito, suas informações foram recebidas com sucesso. Seu plano estratégico personalizado já está em desenvolvimento. Na avaliação, vamos refinar seu planejamento para máxima eficiência. Seu processo começa agora.",
+          },
+          {
+            role: "assistant",
+            content:
+              "Antes de finalizarmos, gostaria de aprofundar alguns pontos importantes para garantir o melhor plano possível. Pode ser?",
+          },
+        ]);
       } else {
         setMessages(msgs);
       }

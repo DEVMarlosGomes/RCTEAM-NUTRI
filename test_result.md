@@ -207,3 +207,55 @@
     message: "Iter 1 backend changes ready. Credentials in /app/memory/test_credentials.md. Need verification of lockout, multi-tenant, rate-limit, SP timezone, whitelist, PDF stream. Frontend rebrand done but NOT testing yet (waiting for user permission)."
   - agent: "testing"
     message: "✅ ALL BACKEND TESTS PASSED (12/12): Comprehensive testing completed for all 7 focus items. Login with new credentials works, multi-tenant lead routing functions correctly, login lockout triggers after failed attempts, chat rate limiting works, SP timezone slots generate properly, public lead whitelist prevents data leaks, and PDF generation works with new branding. All backend functionality is working as expected. Ready for frontend testing when user permits."
+
+## Iter 2 — Formulário Pré-consulta alinhado ao doc + Photos + Anamnesis remap
+
+### user_problem_statement
+"verifique o que já foi feito e continue com base nesse documento" — Documento `FORMULÁRIO PRÉ CONSULTA.docx` define 15 seções com tipos de campo específicos.
+
+### Backend changes (TESTED - ALL WORKING)
+- backend:
+  - task: "Photo upload endpoint POST /api/public/lead/{token}/photos"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:upload_lead_photos"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Accepts {fotos: [{name, data_url, size}]}. Caps at 4 photos, validates data:image/ prefix, rejects > 4.5MB. Saves on patient.fotos. Returns {ok, count}."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: Photo upload endpoint working correctly. Valid photos upload successfully (count=1), invalid formats filtered (count=0), multiple photos capped at 4, invalid tokens return 404. All validation and capping logic functioning as expected."
+  - task: "Anamnesis field remap (peso_atual/estatura compat)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py:submit_anamnesis"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "submit_anamnesis now reads peso_atual OR peso (back-compat) and estatura OR altura. Updates patient.peso (float) and patient.altura (int). Test: POST /public/anamnesis with respostas={peso_atual:80,estatura:180,...} should set patient.peso=80, altura=180."
+      - working: true
+        agent: "testing"
+        comment: "✅ TESTED: Anamnesis field remap working correctly. New format (peso_atual/estatura) correctly maps to patient.peso=82.5, altura=178. Old format (peso/altura) still works for backward compatibility with peso=70.0, altura=170. Both formats update status_funil to ANAMNESE_COMPLETA as expected."
+
+### Frontend changes (NOT testing yet)
+- /app/frontend/src/pages/PreConsulta.jsx — full rewrite, 15 sections per doc spec
+- New field types: radio-card, multi-check, slider 0-10, yes-no, photos
+- Auto-calculated age from data_nascimento (display only)
+- Step pills navigation (icons)
+- Photo upload (client-side resize to 1280px / 78% JPEG)
+- /app/frontend/src/pages/Chat.jsx — new initial greeting matching doc text
+
+### test_plan
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+### agent_communication
+  - agent: "main"
+    message: "Iter 2: novo formulário 100% alinhado ao FORMULÁRIO PRÉ CONSULTA.docx. Backend: 2 mudanças (photos endpoint + anamnesis field remap). Por favor verifique apenas estas duas tasks."
+  - agent: "testing"
+    message: "✅ ALL ITER 2 BACKEND TESTS PASSED (12/12): Comprehensive testing completed for both focus items. Photo upload endpoint works correctly with proper validation, capping, and error handling. Anamnesis field remap supports both new format (peso_atual/estatura) and old format (peso/altura) for backward compatibility, correctly updating patient records. All backend functionality is working as expected."
