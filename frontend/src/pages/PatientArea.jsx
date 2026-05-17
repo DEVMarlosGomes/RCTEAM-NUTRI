@@ -88,8 +88,8 @@ export default function PatientArea() {
   };
 
   const doLogout = async () => {
+    navigate("/", { replace: true });
     await logout();
-    navigate("/");
   };
 
   return (

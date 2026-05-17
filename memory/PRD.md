@@ -61,6 +61,41 @@ Lead → Pré-consulta (15 seções) → Chat IA → Agendamento → Análise IA
   - `submit_anamnesis` aceita `peso_atual`/`estatura` (novo) e `peso`/`altura` (back-compat)
 - **Backend testado** ✅ (anamnesis remap + photo upload).
 
+## Iter 3 — 3 Áreas + 3 Agentes IA Treináveis (Feb/2026)
+
+**Arquitetura nova**: Landing pública · Área do Nutricionista · Área do Paciente
+
+### Backend (server.py)
+- **Roles**: `users.role` agora pode ser `"nutritionist"` ou `"patient"`. `get_current_user` + `require_nutritionist` + `require_patient` helpers.
+- **3 agentes treináveis** (coleção `agents`, seeded no startup):
+  - **Agent 1 (SAC/Triagem)** — substitui o assistente da pré-consulta (`/api/public/chat` agora usa `build_agent_system_prompt("agent1")` dinamicamente)
+  - **Agent 2 (Consultório)** — interno, apoia o nutricionista
+  - **Agent 3 (Suporte Paciente)** — atende dúvidas pós-consulta
+- **Documentos de treinamento** (coleção `agent_documents`): upload de PDF/JSON/TXT/MD; texto extraído (pdfplumber para PDF) e concatenado ao system_prompt. Cap = 50.000 chars.
+- **Endpoints novos**:
+  - `GET/PATCH /api/agents`, `GET/PATCH /api/agents/{code}`
+  - `POST /api/agents/{code}/documents` (multipart) + `/documents/text` (JSON) + `DELETE /documents/{id}`
+  - `POST /api/patient/signup` (cria role=patient a partir do token de lead)
+  - `GET /api/patient/me`, `GET /api/patient/diet`, `GET/POST /api/patient/chat` (Agente 3)
+  - `GET /api/consultorio/patients`, `POST /api/consultorio/chat`, `GET /api/consultorio/chat/{patient_id}` (Agente 2)
+- **Backend testado** ✅ — 23/23 testes (`test_iter3_agents.py`), 100% pass com Claude real.
+
+### Frontend
+- `AuthContext`: `patientSignup()` novo, `login/register` retornam user (com role) para roteamento.
+- `App.js`: `<Protected role="...">` redireciona usuário fora do role para sua home (nutri→/dashboard, paciente→/paciente).
+- **Página `/agentes`** (`Agentes.jsx`): sidebar com os 3 agentes, edição do `base_prompt`, upload de docs, colar texto livre, lista de docs com remover, contador de chars com barra de progresso.
+- **Página `/consultorio`** (`Consultorio.jsx`): seletor de pacientes do nutricionista + chat com Agente 2 (contexto completo do paciente injetado).
+- **Página `/paciente`** (`PatientArea.jsx`): 2 tabs — "Minha dieta" (KPIs + markdown do plano ativo) e "Assistente IA" (chat com Agente 3).
+- **Sucesso.jsx** reescrito: formulário de criação de conta do paciente (email readonly do lead + senha 2x) → redirect `/paciente`.
+- **NutriLayout**: links `/consultorio` e `/agentes` adicionados ao sidebar.
+- **Frontend testado** ✅ — 15/16 fluxos PASS via Playwright (iter4).
+
+### Decisões de produto (acordadas com user)
+- Treinamento dos agentes via **append no system prompt** (não RAG) — limite 50k chars.
+- Paciente cria login/senha **somente** ao final da pré-consulta (não pode criar do nada).
+- Agent 1 = mesmo da pré-consulta atual, agora editável pelo nutricionista.
+- Pacientes só veem dieta + chat (sem agenda/exames/avaliações).
+
 ## Backlog Pendente (Iter 3+)
 - [ ] **Versioned plan history UI** — listar versões anteriores do plano alimentar e permitir comparar lado a lado.
 - [ ] **DatePicker pt-BR (dd/mm/yyyy)** — substituir input HTML5 nativo por shadcn DatePicker com `date-fns/locale/pt-BR`.
