@@ -6,8 +6,9 @@ import StatusBadge from "@/components/evonut/StatusBadge";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download } from "lucide-react";
+import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing } from "lucide-react";
 import { toast } from "sonner";
+import NudgeManager from "@/components/evonut/NudgeManager";
 
 const TABS = [
   { k: "anamnese", l: "Anamnese", icon: FileText },
@@ -15,6 +16,7 @@ const TABS = [
   { k: "antropometria", l: "Antropometria", icon: Activity },
   { k: "exames", l: "Exames", icon: FlaskConical },
   { k: "plano", l: "Plano Alimentar", icon: Utensils },
+  { k: "lembretes", l: "Lembretes", icon: BellRing },
   { k: "comparativo", l: "Comparativo", icon: Sparkles },
 ];
 
@@ -75,6 +77,7 @@ export default function PacienteDetalhe() {
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
       {tab === "plano" && <PlanoAlimentar d={d} reload={reload} />}
+      {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
       {tab === "comparativo" && <Comparativo id={d.patient.id} />}
     </NutriLayout>
   );

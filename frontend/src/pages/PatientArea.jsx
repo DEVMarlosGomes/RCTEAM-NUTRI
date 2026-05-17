@@ -201,9 +201,17 @@ export default function PatientArea() {
                       className={
                         m.role === "user"
                           ? "max-w-[80%] bg-rc-blue text-black rounded-2xl rounded-tr-sm p-3.5 shadow-md text-sm font-semibold whitespace-pre-wrap"
+                          : m.kind === "proactive"
+                          ? "max-w-[85%] bg-emerald-400/[0.08] border border-emerald-300/40 rounded-2xl rounded-tl-sm p-3.5 text-gray-100 shadow-sm text-sm whitespace-pre-wrap leading-relaxed relative"
                           : "max-w-[85%] bg-rc-surfaceAlt border border-emerald-300/20 rounded-2xl rounded-tl-sm p-3.5 text-gray-200 shadow-sm text-sm whitespace-pre-wrap leading-relaxed"
                       }
                     >
+                      {m.kind === "proactive" && !m.typing && (
+                        <div className="text-[9px] uppercase tracking-widest text-emerald-300 font-black mb-1.5 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse-soft inline-block" />
+                          Lembrete do Rogério
+                        </div>
+                      )}
                       {m.typing ? (
                         <span className="inline-flex gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse-soft" />

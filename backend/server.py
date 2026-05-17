@@ -6,6 +6,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import re
+import asyncio
 import logging
 import uuid
 import bcrypt
@@ -218,6 +219,22 @@ class ConsultorioChatIn(BaseModel):
     patient_id: str
     message: str
     session_id: Optional[str] = None
+
+class NudgeIn(BaseModel):
+    label: str
+    trigger_text: str  # instruction to Agent 3 about what to say
+    hour: int = Field(ge=0, le=23)
+    minute: int = Field(ge=0, le=59)
+    weekdays: Optional[List[int]] = None  # 0=Mon..6=Sun; None = every day
+    active: bool = True
+
+class NudgeUpdate(BaseModel):
+    label: Optional[str] = None
+    trigger_text: Optional[str] = None
+    hour: Optional[int] = Field(default=None, ge=0, le=23)
+    minute: Optional[int] = Field(default=None, ge=0, le=59)
+    weekdays: Optional[List[int]] = None
+    active: Optional[bool] = None
 
 # ---------- Calculations ----------
 def calc_imc(peso, altura_cm):
@@ -526,6 +543,29 @@ async def ai_patient_chat(session_id: str, message: str, patient_context: dict, 
         convo += f"{m['role']}: {m['content']}\n"
     convo += f"user: {message}"
     return await chat.send_message(UserMessage(text=convo))
+
+async def ai_patient_proactive(session_id: str, instruction: str, patient_context: dict) -> str:
+    """Agente 3 — mensagem pró-ativa (nudge). instruction é a diretriz interna do nutricionista,
+    nunca exposta ao paciente. O agente compõe a mensagem como se ele mesmo iniciasse."""
+    extra = (
+        "CONTEXTO DO PACIENTE (plano alimentar ativo e dados-chave):\n"
+        f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:14000]}"
+    )
+    sys_prompt = await build_agent_system_prompt("agent3", extra_context=extra)
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"patient-proactive-{session_id}-{uuid.uuid4().hex[:6]}",
+        system_message=sys_prompt,
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    prompt = (
+        "[INSTRUÇÃO INTERNA — NÃO REVELAR AO PACIENTE]\n"
+        f"Diretriz do nutricionista: {instruction}\n\n"
+        "Componha UMA mensagem proativa e curta (até 350 caracteres), em primeira pessoa, "
+        "iniciando você o contato (sem responder a uma pergunta). Tom acolhedor, claro. "
+        "Use o nome do paciente se disponível no contexto. "
+        "Não cite que isto é um lembrete automático. NÃO use emoji."
+    )
+    return await chat.send_message(UserMessage(text=prompt))
 
 async def ai_exam_analysis(raw_text: str) -> dict:
     """Extract laboratory markers from exam PDF text and classify them.
@@ -1354,9 +1394,16 @@ async def patient_diet(user=Depends(require_patient)):
 @api.get("/patient/chat")
 async def patient_chat_history(user=Depends(require_patient)):
     session_id = f"patient-{user['id']}"
+    pid = user.get("patient_id")
+    # Include both: current user's session AND any "pending" proactive nudges fired
+    # before the patient had an account (session_id=patient-pending-{patient_id})
     msgs = await db.patient_messages.find(
-        {"session_id": session_id}, {"_id": 0}
-    ).sort("created_at", 1).to_list(200)
+        {"$or": [
+            {"session_id": session_id},
+            {"session_id": f"patient-pending-{pid}"},
+        ]},
+        {"_id": 0},
+    ).sort("created_at", 1).to_list(500)
     return msgs
 
 @api.post("/patient/chat")
@@ -1399,6 +1446,185 @@ async def patient_chat(payload: PatientChatIn, user=Depends(require_patient)):
     await db.patient_messages.insert_one(ai_msg)
     return {"reply": ai_text, "session_id": session_id}
 
+# ---------- Nudges (Agente 3 pró-ativo) ----------
+def _nudge_view(n: dict) -> dict:
+    return {
+        "id": n.get("id"),
+        "patient_id": n.get("patient_id"),
+        "label": n.get("label"),
+        "trigger_text": n.get("trigger_text"),
+        "hour": n.get("hour"),
+        "minute": n.get("minute"),
+        "weekdays": n.get("weekdays"),
+        "active": n.get("active", True),
+        "last_fired_at": n.get("last_fired_at"),
+        "next_run_at": n.get("next_run_at"),
+        "created_at": n.get("created_at"),
+    }
+
+def _compute_next_run(hour: int, minute: int, weekdays: Optional[List[int]], from_dt: Optional[datetime] = None) -> datetime:
+    """Compute next firing in America/Sao_Paulo timezone. Returns aware UTC datetime."""
+    base = (from_dt or now_utc()).astimezone(TZ_BR)
+    candidate = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= base:
+        candidate = candidate + timedelta(days=1)
+    # Bump until weekday matches (max 7 iterations)
+    if weekdays:
+        wd_set = set(weekdays)
+        for _ in range(8):
+            if candidate.weekday() in wd_set:
+                break
+            candidate = candidate + timedelta(days=1)
+    return candidate.astimezone(timezone.utc)
+
+async def _patient_context_for_nudge(patient_id: str) -> dict:
+    p = await db.patients.find_one({"id": patient_id}, {"_id": 0}) or {}
+    plan = await db.meal_plans.find_one({"paciente_id": patient_id}, {"_id": 0}, sort=[("version", -1)])
+    return {
+        "nome": p.get("nome"), "objetivo": p.get("objetivo"),
+        "peso": p.get("peso"), "altura": p.get("altura"),
+        "plano_alimentar": (plan or {}).get("content"),
+        "kcal": (plan or {}).get("kcal_total"),
+    }
+
+async def _fire_nudge(nudge: dict) -> Optional[str]:
+    """Generate proactive message via Agent 3 and persist to patient_messages.
+    Returns the message content (or None if failed)."""
+    pid = nudge["patient_id"]
+    # Locate the patient's user account (role=patient) to write into THEIR session_id
+    pu = await db.users.find_one({"role": "patient", "patient_id": pid}, {"_id": 0})
+    if not pu:
+        # Patient hasn't signed up yet — store message anyway tied to patient_id
+        session_id = f"patient-pending-{pid}"
+    else:
+        session_id = f"patient-{pu['id']}"
+    ctx = await _patient_context_for_nudge(pid)
+    try:
+        text = await ai_patient_proactive(session_id, nudge["trigger_text"], ctx)
+    except Exception as e:
+        logging.exception(f"Nudge fire failed for {nudge.get('id')}: {e}")
+        return None
+    msg = {
+        "id": str(uuid.uuid4()), "session_id": session_id,
+        "user_id": (pu or {}).get("id"), "patient_id": pid,
+        "role": "assistant", "content": text,
+        "kind": "proactive", "nudge_id": nudge.get("id"),
+        "created_at": iso(now_utc()),
+    }
+    await db.patient_messages.insert_one(msg)
+    return text
+
+@api.get("/patients/{pid}/nudges")
+async def list_nudges(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    rows = await db.patient_nudges.find(
+        {"patient_id": pid}, {"_id": 0}
+    ).sort("created_at", 1).to_list(50)
+    return [_nudge_view(n) for n in rows]
+
+@api.post("/patients/{pid}/nudges")
+async def create_nudge(pid: str, payload: NudgeIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    nid = str(uuid.uuid4())
+    next_run = _compute_next_run(payload.hour, payload.minute, payload.weekdays)
+    doc = {
+        "id": nid, "patient_id": pid, "nutricionista_id": user["id"],
+        "label": payload.label[:120], "trigger_text": payload.trigger_text[:1000],
+        "hour": payload.hour, "minute": payload.minute, "weekdays": payload.weekdays,
+        "active": payload.active, "last_fired_at": None,
+        "next_run_at": iso(next_run), "created_at": iso(now_utc()),
+    }
+    await db.patient_nudges.insert_one(doc)
+    return _nudge_view(doc)
+
+@api.patch("/patients/{pid}/nudges/{nid}")
+async def update_nudge(pid: str, nid: str, payload: NudgeUpdate, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    existing = await db.patient_nudges.find_one({"id": nid, "patient_id": pid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Lembrete não encontrado")
+    upd = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    if any(k in upd for k in ("hour", "minute", "weekdays")) or upd.get("active") is True:
+        hour = upd.get("hour", existing["hour"])
+        minute = upd.get("minute", existing["minute"])
+        weekdays = upd.get("weekdays", existing.get("weekdays"))
+        upd["next_run_at"] = iso(_compute_next_run(hour, minute, weekdays))
+    await db.patient_nudges.update_one({"id": nid}, {"$set": upd})
+    updated = await db.patient_nudges.find_one({"id": nid}, {"_id": 0})
+    return _nudge_view(updated)
+
+@api.delete("/patients/{pid}/nudges/{nid}")
+async def delete_nudge(pid: str, nid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    res = await db.patient_nudges.delete_one({"id": nid, "patient_id": pid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Lembrete não encontrado")
+    return {"ok": True}
+
+@api.post("/patients/{pid}/nudges/{nid}/run-now")
+async def run_nudge_now(pid: str, nid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    nudge = await db.patient_nudges.find_one({"id": nid, "patient_id": pid}, {"_id": 0})
+    if not nudge:
+        raise HTTPException(404, "Lembrete não encontrado")
+    text = await _fire_nudge(nudge)
+    if text is None:
+        raise HTTPException(503, "Falha ao gerar mensagem (IA indisponível)")
+    now = now_utc()
+    await db.patient_nudges.update_one(
+        {"id": nid},
+        {"$set": {
+            "last_fired_at": iso(now),
+            "next_run_at": iso(_compute_next_run(nudge["hour"], nudge["minute"], nudge.get("weekdays"), from_dt=now)),
+        }},
+    )
+    return {"ok": True, "message": text}
+
+# Background scheduler — checks every 60s for due nudges
+_scheduler_task = None
+
+async def nudge_scheduler_loop():
+    logging.info("Nudge scheduler started")
+    while True:
+        try:
+            now = now_utc()
+            cursor = db.patient_nudges.find({
+                "active": True,
+                "next_run_at": {"$lte": iso(now)},
+            }, {"_id": 0}).limit(20)
+            due = await cursor.to_list(20)
+            for nudge in due:
+                # Re-check weekday in BRT (next_run_at already accounts for it but be safe)
+                local_now = now.astimezone(TZ_BR)
+                if nudge.get("weekdays") and local_now.weekday() not in set(nudge["weekdays"]):
+                    # reschedule without firing
+                    nxt = _compute_next_run(nudge["hour"], nudge["minute"], nudge.get("weekdays"), from_dt=now)
+                    await db.patient_nudges.update_one({"id": nudge["id"]}, {"$set": {"next_run_at": iso(nxt)}})
+                    continue
+                logging.info(f"Firing nudge {nudge['id']} for patient {nudge['patient_id']}")
+                text = await _fire_nudge(nudge)
+                next_run = _compute_next_run(nudge["hour"], nudge["minute"], nudge.get("weekdays"), from_dt=now)
+                await db.patient_nudges.update_one(
+                    {"id": nudge["id"]},
+                    {"$set": {
+                        "last_fired_at": iso(now) if text else nudge.get("last_fired_at"),
+                        "next_run_at": iso(next_run),
+                    }},
+                )
+        except Exception:
+            logging.exception("nudge_scheduler_loop error")
+        await asyncio.sleep(60)
+
 # ---------- Bootstrap ----------
 @app.on_event("startup")
 async def startup():
@@ -1414,8 +1640,13 @@ async def startup():
     await db.agent_documents.create_index("agent_code")
     await db.consultorio_messages.create_index([("session_id", 1), ("created_at", 1)])
     await db.patient_messages.create_index([("session_id", 1), ("created_at", 1)])
+    await db.patient_nudges.create_index([("active", 1), ("next_run_at", 1)])
+    await db.patient_nudges.create_index("patient_id")
     # seed agents
     await ensure_agents_seeded()
+    # start proactive nudge scheduler
+    global _scheduler_task
+    _scheduler_task = asyncio.create_task(nudge_scheduler_loop())
     # seed admin
     admin_email = os.environ['ADMIN_EMAIL'].lower()
     admin_pass = os.environ['ADMIN_PASSWORD']
@@ -1444,6 +1675,13 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    global _scheduler_task
+    if _scheduler_task:
+        _scheduler_task.cancel()
+        try:
+            await _scheduler_task
+        except (asyncio.CancelledError, Exception):
+            pass
     client.close()
 
 # ---------- CORS ----------
