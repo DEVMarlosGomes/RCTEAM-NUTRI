@@ -14,17 +14,27 @@ import Dashboard from "@/pages/Dashboard";
 import Pacientes from "@/pages/Pacientes";
 import PacienteDetalhe from "@/pages/PacienteDetalhe";
 import Agenda from "@/pages/Agenda";
+import Agentes from "@/pages/Agentes";
+import Consultorio from "@/pages/Consultorio";
+import PatientArea from "@/pages/PatientArea";
 
-function Protected({ children }) {
+function Loader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-rc-ink">
+      <div className="w-10 h-10 rounded-full border-2 border-rc-blue border-t-transparent animate-spin" />
+    </div>
+  );
+}
+
+function Protected({ children, role }) {
   const { user } = useAuth();
-  if (user === null) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-rc-ink">
-        <div className="w-10 h-10 rounded-full border-2 border-rc-blue border-t-transparent animate-spin" />
-      </div>
-    );
-  }
+  if (user === null) return <Loader />;
   if (!user) return <Navigate to="/login" replace />;
+  if (role && user.role !== role) {
+    // Send each user back to the right home
+    const target = user.role === "patient" ? "/paciente" : "/dashboard";
+    return <Navigate to={target} replace />;
+  }
   return children;
 }
 
@@ -49,10 +59,16 @@ function App() {
             <Route path="/agendar/:token" element={<Agendar />} />
             <Route path="/sucesso/:token" element={<Sucesso />} />
 
-            <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
-            <Route path="/pacientes" element={<Protected><Pacientes /></Protected>} />
-            <Route path="/pacientes/:id" element={<Protected><PacienteDetalhe /></Protected>} />
-            <Route path="/agenda" element={<Protected><Agenda /></Protected>} />
+            {/* Nutritionist area */}
+            <Route path="/dashboard" element={<Protected role="nutritionist"><Dashboard /></Protected>} />
+            <Route path="/pacientes" element={<Protected role="nutritionist"><Pacientes /></Protected>} />
+            <Route path="/pacientes/:id" element={<Protected role="nutritionist"><PacienteDetalhe /></Protected>} />
+            <Route path="/agenda" element={<Protected role="nutritionist"><Agenda /></Protected>} />
+            <Route path="/agentes" element={<Protected role="nutritionist"><Agentes /></Protected>} />
+            <Route path="/consultorio" element={<Protected role="nutritionist"><Consultorio /></Protected>} />
+
+            {/* Patient area */}
+            <Route path="/paciente" element={<Protected role="patient"><PatientArea /></Protected>} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

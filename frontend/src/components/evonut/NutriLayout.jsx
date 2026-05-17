@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
-import { LayoutDashboard, Users, CalendarDays, LogOut } from "lucide-react";
+import { LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope } from "lucide-react";
 import Brand from "./Brand";
 import RCLogo from "./RCLogo";
 
@@ -9,6 +9,8 @@ const links = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/pacientes", label: "Pacientes", icon: Users, testid: "nav-pacientes" },
   { to: "/agenda", label: "Agenda", icon: CalendarDays, testid: "nav-agenda" },
+  { to: "/consultorio", label: "Consultório", icon: Stethoscope, testid: "nav-consultorio" },
+  { to: "/agentes", label: "Agentes", icon: Bot, testid: "nav-agentes" },
 ];
 
 export default function NutriLayout({ children }) {

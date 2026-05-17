@@ -116,6 +116,16 @@ async def get_current_user(request: Request) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(401, "Token inválido")
 
+async def require_nutritionist(user=Depends(get_current_user)) -> dict:
+    if user.get("role") != "nutritionist":
+        raise HTTPException(403, "Acesso restrito ao nutricionista")
+    return user
+
+async def require_patient(user=Depends(get_current_user)) -> dict:
+    if user.get("role") != "patient":
+        raise HTTPException(403, "Acesso restrito ao paciente")
+    return user
+
 def set_auth_cookie(response: Response, token: str):
     response.set_cookie(
         key="access_token", value=token,
@@ -180,6 +190,34 @@ class EvaluationIn(BaseModel):
 class MealPlanRequest(BaseModel):
     objetivo: str = "manutencao"
     restricoes: Optional[str] = None
+
+# ---------- Agents / Patient ----------
+AGENT_CODES = ("agent1", "agent2", "agent3")
+AGENT_PROMPT_MAX_CHARS = 50_000  # cap full system prompt length
+
+class AgentPromptUpdate(BaseModel):
+    base_prompt: str
+
+class AgentDocCreate(BaseModel):
+    title: str
+    content: str  # plain text (already extracted)
+
+class PatientSignupIn(BaseModel):
+    token: str
+    password: str = Field(min_length=6)
+
+class PatientLoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class PatientChatIn(BaseModel):
+    message: str
+    session_id: Optional[str] = None  # client-provided, persists per browser/device
+
+class ConsultorioChatIn(BaseModel):
+    patient_id: str
+    message: str
+    session_id: Optional[str] = None
 
 # ---------- Calculations ----------
 def calc_imc(peso, altura_cm):
@@ -283,6 +321,123 @@ def calc_macros(get_kcal, objetivo, peso, massa_magra=None):
         "lip_pct": round((lip_g*9)/kcal*100, 1),
     }
 
+# ---------- Agents (training) ----------
+AGENT_DEFAULTS = {
+    "agent1": {
+        "name": "Agente 1 — SAC / Pré-consulta",
+        "description": (
+            "Atende o lead na pré-consulta, conduz a triagem e direciona para o agendamento. "
+            "Substitui o assistente público da pré-consulta."
+        ),
+        "base_prompt": (
+            "Você é o assistente do nutricionista Rogério Costa que conversa com o paciente "
+            "para aprofundar a anamnese de forma natural e empática. Faça UMA pergunta por vez, "
+            "curta e clara. Foque nos pontos críticos detectados (sono, treino, alimentação, estresse, "
+            "medicamentos). Após 6 a 8 perguntas, finalize com a frase exata: 'ANAMNESE_FINALIZADA' "
+            "e um resumo gentil ao paciente."
+        ),
+    },
+    "agent2": {
+        "name": "Agente 2 — Consultório (apoio ao nutricionista)",
+        "description": (
+            "Ferramenta interna do nutricionista durante a consulta. Analisa exames e dados do paciente "
+            "com base nos materiais científicos enviados."
+        ),
+        "base_prompt": (
+            "Você é o assistente clínico interno do nutricionista Rogério Costa. "
+            "Responda em Português (BR), tom técnico, objetivo e direto. "
+            "Analise os exames laboratoriais, anamnese e avaliação física do paciente do contexto. "
+            "Use o conteúdo científico fornecido nos documentos de treinamento como referência. "
+            "Sempre cite o raciocínio clínico e nunca invente referências. "
+            "Quando faltar dado, peça ao nutricionista explicitamente."
+        ),
+    },
+    "agent3": {
+        "name": "Agente 3 — Suporte ao Paciente",
+        "description": (
+            "Atende o paciente após a consulta. Responde dúvidas sobre dieta, treino e rotina, "
+            "treinado com os materiais que o nutricionista enviar."
+        ),
+        "base_prompt": (
+            "Você é o assistente pessoal do paciente, treinado pelo nutricionista Rogério Costa. "
+            "Responda em Português (BR), tom acolhedor e claro. "
+            "Use SOMENTE as informações do plano alimentar do paciente (anexado no contexto) e dos "
+            "materiais de treinamento fornecidos. Nunca contrarie a prescrição do nutricionista. "
+            "Se a pergunta sair do escopo nutrição/treino/rotina, oriente o paciente a falar com o nutricionista."
+        ),
+    },
+}
+
+async def ensure_agents_seeded():
+    for code, cfg in AGENT_DEFAULTS.items():
+        existing = await db.agents.find_one({"code": code})
+        if not existing:
+            await db.agents.insert_one({
+                "id": str(uuid.uuid4()),
+                "code": code,
+                "name": cfg["name"],
+                "description": cfg["description"],
+                "base_prompt": cfg["base_prompt"],
+                "created_at": iso(now_utc()),
+                "updated_at": iso(now_utc()),
+            })
+
+def extract_text_from_upload(filename: str, content_type: str, raw: bytes) -> str:
+    """Best-effort text extraction from PDF / JSON / TXT/MD uploads."""
+    name = (filename or "").lower()
+    if name.endswith(".pdf") or (content_type or "").lower() == "application/pdf":
+        try:
+            with pdfplumber.open(io.BytesIO(raw)) as pdf:
+                text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+            return text.strip()
+        except Exception as e:
+            raise HTTPException(400, f"Não foi possível ler o PDF: {str(e)[:140]}")
+    if name.endswith(".json") or (content_type or "").lower() == "application/json":
+        try:
+            data = json.loads(raw.decode("utf-8", errors="ignore"))
+            return json.dumps(data, ensure_ascii=False, indent=2)
+        except Exception:
+            return raw.decode("utf-8", errors="ignore")
+    # treat everything else as plain text
+    try:
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+async def build_agent_system_prompt(agent_code: str, extra_context: str = "") -> str:
+    """Concatenate the agent's base_prompt + uploaded training docs + extra_context.
+    Caps at AGENT_PROMPT_MAX_CHARS to stay within model context.
+    """
+    agent = await db.agents.find_one({"code": agent_code}, {"_id": 0})
+    if not agent:
+        # Fallback to defaults if not seeded yet
+        agent = {"base_prompt": AGENT_DEFAULTS[agent_code]["base_prompt"]}
+    base = agent.get("base_prompt", "") or ""
+    docs = await db.agent_documents.find(
+        {"agent_code": agent_code}, {"_id": 0}
+    ).sort("created_at", 1).to_list(50)
+
+    parts = [base.strip()]
+    if docs:
+        parts.append(
+            "\n\n--- MATERIAL DE TREINAMENTO ENVIADO PELO NUTRICIONISTA ---\n"
+            "Use estes documentos como referência ao responder. Não invente conteúdo fora deles."
+        )
+        for d in docs:
+            title = d.get("title", "documento")
+            body = (d.get("content") or "").strip()
+            if not body:
+                continue
+            parts.append(f"\n### DOC: {title}\n{body}")
+
+    if extra_context:
+        parts.append(f"\n\n--- CONTEXTO DESTA INTERAÇÃO ---\n{extra_context.strip()}")
+
+    full = "\n".join(parts).strip()
+    if len(full) > AGENT_PROMPT_MAX_CHARS:
+        full = full[:AGENT_PROMPT_MAX_CHARS] + "\n\n[...material truncado por limite de contexto...]"
+    return full
+
 # ---------- AI ----------
 SYSTEM_CLINICAL = (
     "Você é o assistente clínico nutricional sênior do Rogério Costa (Treinador e Nutricionista). "
@@ -324,22 +479,53 @@ async def ai_meal_plan(patient: dict, anamnesis: dict, macros: dict, restricoes:
     return await chat.send_message(UserMessage(text=prompt))
 
 async def ai_adaptive_chat(token: str, message: str, anamnesis: dict, history: list) -> str:
+    sys_prompt = await build_agent_system_prompt("agent1")
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=f"chat-{token}",
-        system_message=(
-            "Você é o assistente do nutricionista Rogério Costa que conversa com o paciente "
-            "para aprofundar a anamnese de forma natural e empática. Faça UMA pergunta por vez, "
-            "curta e clara. Foque nos pontos críticos detectados (sono, treino, alimentação, estresse, "
-            "medicamentos). Após 6 a 8 perguntas, finalize com a frase exata: 'ANAMNESE_FINALIZADA' "
-            "e um resumo gentil ao paciente."
-        ),
+        system_message=sys_prompt,
     ).with_model("anthropic", "claude-sonnet-4-5-20250929")
     context = f"Dados iniciais do paciente:\n{anamnesis}\n\nHistórico recente:\n"
     for m in history[-10:]:
         context += f"{m['role']}: {m['content']}\n"
     context += f"\nMensagem do paciente: {message}\nResponda de forma acolhedora."
     return await chat.send_message(UserMessage(text=context))
+
+async def ai_consultorio_chat(session_id: str, message: str, patient_context: dict, history: list) -> str:
+    """Agente 2 — interno do nutricionista. patient_context = anamnese + exames + avaliações."""
+    extra = (
+        "DADOS DO PACIENTE EM CONSULTA (use para fundamentar a resposta):\n"
+        f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:18000]}"
+    )
+    sys_prompt = await build_agent_system_prompt("agent2", extra_context=extra)
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"consult-{session_id}",
+        system_message=sys_prompt,
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    convo = ""
+    for m in history[-10:]:
+        convo += f"{m['role']}: {m['content']}\n"
+    convo += f"user: {message}"
+    return await chat.send_message(UserMessage(text=convo))
+
+async def ai_patient_chat(session_id: str, message: str, patient_context: dict, history: list) -> str:
+    """Agente 3 — paciente. patient_context = plano alimentar ativo, objetivo, restrições."""
+    extra = (
+        "CONTEXTO DO PACIENTE (plano alimentar ativo e dados-chave):\n"
+        f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:14000]}"
+    )
+    sys_prompt = await build_agent_system_prompt("agent3", extra_context=extra)
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"patient-{session_id}",
+        system_message=sys_prompt,
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    convo = ""
+    for m in history[-10:]:
+        convo += f"{m['role']}: {m['content']}\n"
+    convo += f"user: {message}"
+    return await chat.send_message(UserMessage(text=convo))
 
 async def ai_exam_analysis(raw_text: str) -> dict:
     """Extract laboratory markers from exam PDF text and classify them.
@@ -391,7 +577,7 @@ async def register(payload: RegisterIn, response: Response):
     }
     await db.users.insert_one(doc)
     set_auth_cookie(response, create_token(uid, email))
-    return UserOut(id=uid, email=email, name=payload.name)
+    return UserOut(id=uid, email=email, name=payload.name, role="nutritionist")
 
 @api.post("/auth/login", response_model=UserOut)
 async def login(payload: LoginIn, response: Response):
@@ -423,7 +609,7 @@ async def login(payload: LoginIn, response: Response):
     # Success — reset counter
     _login_attempts.pop(email, None)
     set_auth_cookie(response, create_token(user["id"], email))
-    return UserOut(id=user["id"], email=email, name=user["name"])
+    return UserOut(id=user["id"], email=email, name=user["name"], role=user.get("role", "nutritionist"))
 
 @api.post("/auth/logout")
 async def logout(response: Response):
@@ -432,7 +618,7 @@ async def logout(response: Response):
 
 @api.get("/auth/me", response_model=UserOut)
 async def me(user=Depends(get_current_user)):
-    return UserOut(**user)
+    return UserOut(id=user["id"], email=user["email"], name=user["name"], role=user.get("role", "nutritionist"))
 
 # ---------- Public Lead / Anamnesis flow ----------
 @api.post("/leads", response_model=LeadOut)
@@ -938,15 +1124,298 @@ async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
     headers = {"Content-Disposition": f'attachment; filename="rogerio-costa-plano-{safe_name}-v{plan.get("version", 1)}.pdf"'}
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
 
+# ---------- Agentes (treináveis pelo nutricionista) ----------
+def _agent_view(a: dict) -> dict:
+    return {
+        "id": a.get("id"),
+        "code": a.get("code"),
+        "name": a.get("name"),
+        "description": a.get("description"),
+        "base_prompt": a.get("base_prompt", ""),
+        "created_at": a.get("created_at"),
+        "updated_at": a.get("updated_at"),
+    }
+
+@api.get("/agents")
+async def list_agents(user=Depends(require_nutritionist)):
+    await ensure_agents_seeded()
+    rows = await db.agents.find({}, {"_id": 0}).sort("code", 1).to_list(10)
+    out = []
+    for a in rows:
+        cnt = await db.agent_documents.count_documents({"agent_code": a["code"]})
+        view = _agent_view(a)
+        view["documents_count"] = cnt
+        out.append(view)
+    return out
+
+@api.get("/agents/{code}")
+async def get_agent(code: str, user=Depends(require_nutritionist)):
+    if code not in AGENT_CODES:
+        raise HTTPException(404, "Agente desconhecido")
+    await ensure_agents_seeded()
+    a = await db.agents.find_one({"code": code}, {"_id": 0})
+    if not a:
+        raise HTTPException(404, "Agente não encontrado")
+    docs = await db.agent_documents.find(
+        {"agent_code": code}, {"_id": 0, "content": 0}
+    ).sort("created_at", -1).to_list(100)
+    full_prompt = await build_agent_system_prompt(code)
+    view = _agent_view(a)
+    view["documents"] = docs
+    view["prompt_chars"] = len(full_prompt)
+    view["prompt_max_chars"] = AGENT_PROMPT_MAX_CHARS
+    return view
+
+@api.patch("/agents/{code}")
+async def update_agent_prompt(code: str, payload: AgentPromptUpdate, user=Depends(require_nutritionist)):
+    if code not in AGENT_CODES:
+        raise HTTPException(404, "Agente desconhecido")
+    await ensure_agents_seeded()
+    await db.agents.update_one(
+        {"code": code},
+        {"$set": {"base_prompt": payload.base_prompt, "updated_at": iso(now_utc())}},
+    )
+    a = await db.agents.find_one({"code": code}, {"_id": 0})
+    return _agent_view(a)
+
+@api.post("/agents/{code}/documents")
+async def upload_agent_document(
+    code: str,
+    file: Optional[UploadFile] = File(None),
+    title: Optional[str] = Query(None),
+    user=Depends(require_nutritionist),
+):
+    if code not in AGENT_CODES:
+        raise HTTPException(404, "Agente desconhecido")
+    if not file:
+        raise HTTPException(400, "Arquivo é obrigatório")
+    raw = await file.read()
+    if len(raw) > 15 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo maior que 15MB")
+    text = extract_text_from_upload(file.filename or "doc", file.content_type or "", raw)
+    if not text.strip():
+        raise HTTPException(400, "Não foi possível extrair texto do arquivo enviado")
+    # cap each doc at 200k chars to keep mongo doc small; truncated content still useful
+    text = text[:200_000]
+    did = str(uuid.uuid4())
+    doc = {
+        "id": did, "agent_code": code,
+        "title": title or file.filename or "documento",
+        "filename": file.filename, "content_type": file.content_type,
+        "size": len(raw), "chars": len(text), "content": text,
+        "created_at": iso(now_utc()),
+    }
+    await db.agent_documents.insert_one(doc)
+    return {k: v for k, v in doc.items() if k not in ("content", "_id")}
+
+@api.post("/agents/{code}/documents/text")
+async def add_agent_text_document(code: str, payload: AgentDocCreate, user=Depends(require_nutritionist)):
+    if code not in AGENT_CODES:
+        raise HTTPException(404, "Agente desconhecido")
+    text = (payload.content or "").strip()
+    if not text:
+        raise HTTPException(400, "Conteúdo vazio")
+    text = text[:200_000]
+    did = str(uuid.uuid4())
+    doc = {
+        "id": did, "agent_code": code, "title": (payload.title or "Texto manual")[:200],
+        "filename": None, "content_type": "text/plain",
+        "size": len(text.encode("utf-8")), "chars": len(text), "content": text,
+        "created_at": iso(now_utc()),
+    }
+    await db.agent_documents.insert_one(doc)
+    return {k: v for k, v in doc.items() if k not in ("content", "_id")}
+
+@api.delete("/agents/{code}/documents/{doc_id}")
+async def delete_agent_document(code: str, doc_id: str, user=Depends(require_nutritionist)):
+    if code not in AGENT_CODES:
+        raise HTTPException(404, "Agente desconhecido")
+    res = await db.agent_documents.delete_one({"id": doc_id, "agent_code": code})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Documento não encontrado")
+    return {"ok": True}
+
+# ---------- Consultório (Agente 2, uso interno do nutricionista) ----------
+@api.get("/consultorio/patients")
+async def consultorio_list_patients(user=Depends(require_nutritionist)):
+    """Lightweight list for the patient selector on the consultório page."""
+    rows = await db.patients.find(
+        {"nutricionista_id": user["id"]},
+        {"_id": 0, "id": 1, "nome": 1, "email": 1, "status_funil": 1},
+    ).sort("nome", 1).to_list(500)
+    return rows
+
+@api.post("/consultorio/chat")
+async def consultorio_chat(payload: ConsultorioChatIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": payload.patient_id, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    session_id = payload.session_id or f"{user['id']}-{payload.patient_id}"
+    # Build patient context (anamnese mais recente, última avaliação, exames recentes)
+    anam = await db.anamneses.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    aval = await db.evaluations.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    exams = await db.exams.find(
+        {"paciente_id": p["id"]}, {"_id": 0, "raw_text": 0, "content": 0}
+    ).sort("created_at", -1).to_list(5)
+    plan = await db.meal_plans.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("version", -1)])
+    patient_ctx = {
+        "nome": p.get("nome"), "sexo": p.get("sexo"),
+        "peso": p.get("peso"), "altura": p.get("altura"),
+        "data_nascimento": p.get("data_nascimento"),
+        "objetivo": p.get("objetivo"),
+        "anamnese": (anam or {}).get("respostas"),
+        "avaliacao": (aval or {}).get("composicao"),
+        "exames_recentes": exams,
+        "plano_alimentar_ativo": (plan or {}).get("content"),
+    }
+    # Persist & load chat history
+    history = await db.consultorio_messages.find(
+        {"session_id": session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(50)
+    user_msg = {
+        "id": str(uuid.uuid4()), "session_id": session_id, "nutricionista_id": user["id"],
+        "patient_id": p["id"], "role": "user", "content": payload.message,
+        "created_at": iso(now_utc()),
+    }
+    await db.consultorio_messages.insert_one(user_msg)
+    try:
+        ai_text = await ai_consultorio_chat(session_id, payload.message, patient_ctx, history)
+    except Exception as e:
+        logging.exception("Consultorio chat failed")
+        raise HTTPException(503, f"Falha no chat (IA indisponível): {str(e)[:140]}")
+    ai_msg = {
+        "id": str(uuid.uuid4()), "session_id": session_id, "nutricionista_id": user["id"],
+        "patient_id": p["id"], "role": "assistant", "content": ai_text,
+        "created_at": iso(now_utc()),
+    }
+    await db.consultorio_messages.insert_one(ai_msg)
+    return {"reply": ai_text, "session_id": session_id}
+
+@api.get("/consultorio/chat/{patient_id}")
+async def consultorio_chat_history(patient_id: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": patient_id, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    session_id = f"{user['id']}-{patient_id}"
+    msgs = await db.consultorio_messages.find(
+        {"session_id": session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(200)
+    return msgs
+
+# ---------- Patient signup (final da pré-consulta) ----------
+@api.post("/patient/signup", response_model=UserOut)
+async def patient_signup(payload: PatientSignupIn, response: Response):
+    p = await db.patients.find_one({"lead_token": payload.token})
+    if not p:
+        raise HTTPException(404, "Lead não encontrado")
+    email = (p.get("email") or "").lower().strip()
+    if not email:
+        raise HTTPException(400, "E-mail do paciente não cadastrado na pré-consulta")
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        # If patient account already exists, just log them in by checking password? No — for security
+        # require the user to log in via /auth/login. Block re-signup.
+        raise HTTPException(400, "Já existe uma conta com este e-mail. Faça login.")
+    uid = str(uuid.uuid4())
+    doc = {
+        "id": uid, "email": email, "name": p.get("nome") or email,
+        "password_hash": hash_password(payload.password),
+        "role": "patient", "patient_id": p["id"],
+        "nutricionista_id": p.get("nutricionista_id"),
+        "created_at": iso(now_utc()),
+    }
+    await db.users.insert_one(doc)
+    # Link the user_id back to patient (so nutritionist sees account linked)
+    await db.patients.update_one({"id": p["id"]}, {"$set": {"user_id": uid, "has_account": True}})
+    set_auth_cookie(response, create_token(uid, email))
+    return UserOut(id=uid, email=email, name=doc["name"], role="patient")
+
+# ---------- Área do paciente (Agente 3) ----------
+def _patient_summary(p: dict) -> dict:
+    keys = ["id", "nome", "email", "telefone", "peso", "altura", "objetivo", "sexo", "data_nascimento"]
+    return {k: p.get(k) for k in keys}
+
+@api.get("/patient/me")
+async def patient_me(user=Depends(require_patient)):
+    p = await db.patients.find_one({"id": user.get("patient_id")}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    return {"user": {"id": user["id"], "email": user["email"], "name": user["name"], "role": "patient"},
+            "patient": _patient_summary(p)}
+
+@api.get("/patient/diet")
+async def patient_diet(user=Depends(require_patient)):
+    pid = user.get("patient_id")
+    plan = await db.meal_plans.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("version", -1)])
+    if not plan:
+        return {"plan": None}
+    return {"plan": plan}
+
+@api.get("/patient/chat")
+async def patient_chat_history(user=Depends(require_patient)):
+    session_id = f"patient-{user['id']}"
+    msgs = await db.patient_messages.find(
+        {"session_id": session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(200)
+    return msgs
+
+@api.post("/patient/chat")
+async def patient_chat(payload: PatientChatIn, user=Depends(require_patient)):
+    pid = user.get("patient_id")
+    session_id = payload.session_id or f"patient-{user['id']}"
+    # Context: plano ativo + dados-chave
+    plan = await db.meal_plans.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("version", -1)])
+    p = await db.patients.find_one({"id": pid}, {"_id": 0}) or {}
+    patient_ctx = {
+        "nome": p.get("nome"), "objetivo": p.get("objetivo"),
+        "peso": p.get("peso"), "altura": p.get("altura"),
+        "plano_alimentar": (plan or {}).get("content"),
+        "kcal": (plan or {}).get("kcal_total"),
+        "macros": {
+            "proteina_g": (plan or {}).get("proteina_g"),
+            "carboidrato_g": (plan or {}).get("carboidrato_g"),
+            "gordura_g": (plan or {}).get("gordura_g"),
+        } if plan else None,
+    }
+    history = await db.patient_messages.find(
+        {"session_id": session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(50)
+    user_msg = {
+        "id": str(uuid.uuid4()), "session_id": session_id, "user_id": user["id"],
+        "patient_id": pid, "role": "user", "content": payload.message,
+        "created_at": iso(now_utc()),
+    }
+    await db.patient_messages.insert_one(user_msg)
+    try:
+        ai_text = await ai_patient_chat(session_id, payload.message, patient_ctx, history)
+    except Exception as e:
+        logging.exception("Patient chat failed")
+        raise HTTPException(503, f"Falha no chat (IA indisponível): {str(e)[:140]}")
+    ai_msg = {
+        "id": str(uuid.uuid4()), "session_id": session_id, "user_id": user["id"],
+        "patient_id": pid, "role": "assistant", "content": ai_text,
+        "created_at": iso(now_utc()),
+    }
+    await db.patient_messages.insert_one(ai_msg)
+    return {"reply": ai_text, "session_id": session_id}
+
 # ---------- Bootstrap ----------
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.users.create_index("slug")
+    await db.users.create_index("role")
     await db.patients.create_index("lead_token")
     await db.patients.create_index("nutricionista_id")
+    await db.patients.create_index("user_id")
     await db.consultations.create_index("nutricionista_id")
     await db.exams.create_index("paciente_id")
+    await db.agents.create_index("code", unique=True)
+    await db.agent_documents.create_index("agent_code")
+    await db.consultorio_messages.create_index([("session_id", 1), ("created_at", 1)])
+    await db.patient_messages.create_index([("session_id", 1), ("created_at", 1)])
+    # seed agents
+    await ensure_agents_seeded()
     # seed admin
     admin_email = os.environ['ADMIN_EMAIL'].lower()
     admin_pass = os.environ['ADMIN_PASSWORD']

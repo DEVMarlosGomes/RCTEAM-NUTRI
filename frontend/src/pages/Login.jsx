@@ -18,13 +18,13 @@ export default function Login() {
   const submit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const ok = mode === "login"
+    const result = mode === "login"
       ? await login(email, password)
       : await register(name, email, password);
     setLoading(false);
-    if (ok) {
+    if (result) {
       toast.success(mode === "login" ? "Bem-vindo de volta!" : "Conta criada!");
-      navigate("/dashboard");
+      navigate(result.role === "patient" ? "/paciente" : "/dashboard");
     }
   };
 

@@ -19,10 +19,10 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await api.post("/auth/login", { email, password });
       setUser(data);
-      return true;
+      return data;
     } catch (e) {
       setError(formatApiError(e.response?.data?.detail) || e.message);
-      return false;
+      return null;
     }
   };
 
@@ -31,10 +31,22 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await api.post("/auth/register", { name, email, password });
       setUser(data);
-      return true;
+      return data;
     } catch (e) {
       setError(formatApiError(e.response?.data?.detail) || e.message);
-      return false;
+      return null;
+    }
+  };
+
+  const patientSignup = async (token, password) => {
+    setError("");
+    try {
+      const { data } = await api.post("/patient/signup", { token, password });
+      setUser(data);
+      return data;
+    } catch (e) {
+      setError(formatApiError(e.response?.data?.detail) || e.message);
+      return null;
     }
   };
 
@@ -44,7 +56,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, error }}>
+    <AuthContext.Provider value={{ user, login, register, patientSignup, logout, error }}>
       {children}
     </AuthContext.Provider>
   );

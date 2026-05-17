@@ -1,0 +1,64 @@
+{
+  "summary": "Iteration 3 backend test — Agentes (Nutricionista) + Consultório (Agente 2) + Área do Paciente (Agente 3) + patient signup + permissions. 23/23 new tests pass (1 PDF upload test skipped — reportlab not installed; .txt upload test covered the same extraction path). All endpoints listed in the review_request work as specified: agents are seeded, prompt_chars/prompt_max_chars=50000 returned correctly, role-based 401/403 enforced, patient signup creates role='patient' and httpOnly cookie, /auth/me now returns role correctly, consultorio + patient real AI chat (Claude Sonnet 4.5) returns reply<60s and persists history. Email is lower-cased on signup (intentional). The previous iter1/iter2 backend test files use the OLD admin credentials (admin@evonut.com/evonut123) which were replaced by admin@rogeriocosta.com.br/rogerio2025 in this iteration — those 21 setup errors are CREDENTIAL DRIFT, not real regressions, but main agent should update those test files.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/patient/signup",
+        "issue": "Returns 400 'Já existe uma conta com este e-mail. Faça login.' when a duplicate signup is attempted with the SAME lead token — correct, but the error message recommends 'login', whereas the user is signing up again with a fresh lead/token. Consider 'E-mail já cadastrado em outra pré-consulta'."
+      },
+      {
+        "endpoint": "POST /api/agents/{code}/documents",
+        "issue": "title is passed as a Query string parameter (?title=…) while the body is multipart/form-data. Mixing query-string title with multipart upload is unusual; either accept title as a multipart Form field or document the query param in the OpenAPI schema."
+      },
+      {
+        "endpoint": "GET /api/agents/{code}",
+        "issue": "documents are returned newest-first (created_at -1) but build_agent_system_prompt concatenates them oldest-first (created_at 1). Two opposing sort orders — minor UX inconsistency; pick one."
+      },
+      {
+        "endpoint": "POST /api/agents/{code}/documents",
+        "issue": "Entire file is read into memory (await file.read()) before the 15MB size check — a malicious upload of a 1GB file would exhaust RAM before the check fires. Use a streaming/spooled approach."
+      },
+      {
+        "endpoint": "POST /api/consultorio/chat",
+        "issue": "Patient context is built with up to 5 exams + meal plan content + anamnese + evaluation, then truncated to 18000 chars in ai_consultorio_chat. Truncation happens silently mid-JSON which may produce malformed context. Consider summarising/pruning instead of hard slice."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter3_agents.py",
+    "/app/test_reports/pytest/iter3_results.xml"
+  ],
+  "action_items": [
+    "Update /app/backend/tests/backend_test.py and /app/backend/tests/test_iter2.py to use admin@rogeriocosta.com.br/rogerio2025 (currently still use admin@evonut.com) — 21 tests blocked at login fixture.",
+    "Optional: improve duplicate-signup error message in POST /api/patient/signup.",
+    "Optional: enforce stream-based size check on /api/agents/{code}/documents to prevent OOM on large uploads.",
+    "Optional: align sort order between get_agent.documents (currently DESC) and build_agent_system_prompt (currently ASC).",
+    "Optional: title for /agents/{code}/documents should move from query-string to multipart Form field."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1459 lines — has grown ~70% since iter2 (was 850). Splitting into routers/agents.py, routers/consultorio.py, routers/patient.py, services/agent_prompt.py is now urgent.",
+    "build_agent_system_prompt loads ALL agent documents from Mongo on every chat message. For a busy /patient/chat or /consultorio/chat this is wasteful — cache in memory with TTL or invalidate on PATCH/POST/DELETE document.",
+    "extract_text_from_upload checks extension/content-type only — same MIME-spoof risk as iter2 noted; consider python-magic for true sniffing.",
+    "AGENT_PROMPT_MAX_CHARS = 50000 char cap is character-based; Claude is token-based. 50k chars ≈ 12-15k tokens which is fine for Claude 4.5, but a single very-large doc could push past tokens limit if it contains many short lines (each line costs ~3 tokens). Worth migrating to tiktoken/anthropic token count.",
+    "consultorio_messages session_id = `${nutri_id}-${patient_id}` is deterministic per patient — fine, but history is loaded fully (50 msgs) every turn; consider sliding window in DB query.",
+    "patient_signup returns 400 for 'duplicate email' BEFORE checking that the lead has email — actually it checks email presence first (line 1311-1313). Good. But if a patient has signed up once and the lead is re-used, the second signup attempt with a different password is silently blocked — no way for a patient who forgot password to recover (no /password-reset endpoint).",
+    "set_auth_cookie uses SameSite=none + Secure — correct for cross-origin preview, but no CSRF token. /api/patient/chat and /api/agents/* are state-changing endpoints reachable from any origin with the cookie. Add CSRF or change to Authorization header for state-changing endpoints.",
+    "Lead creation /api/leads is still UNAUTHENTICATED and routes to the FIRST nutritionist (sort created_at:1) when no ?nutri= slug is provided — a public spam flood would fill mongodb. Add rate-limit or captcha.",
+    "Duplicate-signup test passed because the second signup tried a DIFFERENT lead token with the same email; the first signup test used the same email but in patient_signup_data fixture. Currently the duplicate path is the 'existing user with this email' branch (line 1314-1318). Good — confirmed working."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3_agents.py (created — 24 tests, 23 pass + 1 skipped due to missing reportlab)"
+  ],
+  "success_rate": {
+    "backend": "100% on iter3 (23/23 executed + 1 skipped)",
+    "frontend": "not tested (backend-only round per request)"
+  },
+  "test_credentials": "Nutricionista: admin@rogeriocosta.com.br / rogerio2025 (verified working — returns role='nutritionist'). Patient: created on-demand by test fixture via /api/leads + /api/patient/signup with password='patient123'.",
+  "seed_data_creation": "Each test run creates 2 fresh TEST_pac_<uuid>@example.com leads + 1 patient signup (session-scoped) + 1 'TEST_pub' lead for public/chat regression. Agents seeding is automatic on backend startup. Temporary documents uploaded to agent1/agent2/agent3 are deleted within the test. No persistent dirty state beyond test patients (still owned by the nutri admin).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest backend/tests/test_iter3_agents.py -v --junitxml=/app/test_reports/pytest/iter3_results.xml` (~13s, includes 2 real Claude chat calls). The iter1/iter2 test files (backend_test.py, test_iter2.py) still hardcode the OLD admin credentials (admin@evonut.com/evonut123) — they need to be updated to admin@rogeriocosta.com.br/rogerio2025 before they pass again. AI key budget OK — chat calls succeeded in <15s. Agent docs cleanup happens inline; no test residue. Patient signup is one-shot per email (cannot re-signup with same email — would require an unsubscribe/reset endpoint).",
+  "rca of the issue": "N/A — all iter3 endpoints behaved as specified. Iter1/iter2 test setup failures are not a backend bug; they stem from a credentials change (admin@evonut.com → admin@rogeriocosta.com.br). RCA: hard-coded credentials in old test files. Mitigation: replace ADMIN_EMAIL/ADMIN_PASSWORD constants in backend_test.py and test_iter2.py with the new values."
+}
