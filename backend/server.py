@@ -1158,7 +1158,7 @@ async def get_agent(code: str, user=Depends(require_nutritionist)):
         raise HTTPException(404, "Agente não encontrado")
     docs = await db.agent_documents.find(
         {"agent_code": code}, {"_id": 0, "content": 0}
-    ).sort("created_at", -1).to_list(100)
+    ).sort("created_at", 1).to_list(100)
     full_prompt = await build_agent_system_prompt(code)
     view = _agent_view(a)
     view["documents"] = docs
