@@ -17,6 +17,7 @@ import Agenda from "@/pages/Agenda";
 import Agentes from "@/pages/Agentes";
 import Consultorio from "@/pages/Consultorio";
 import PatientArea from "@/pages/PatientArea";
+import Configuracoes from "@/pages/Configuracoes";
 
 function Loader() {
   return (
@@ -66,6 +67,7 @@ function App() {
             <Route path="/agenda" element={<Protected role="nutritionist"><Agenda /></Protected>} />
             <Route path="/agentes" element={<Protected role="nutritionist"><Agentes /></Protected>} />
             <Route path="/consultorio" element={<Protected role="nutritionist"><Consultorio /></Protected>} />
+            <Route path="/configuracoes" element={<Protected role="nutritionist"><Configuracoes /></Protected>} />
 
             {/* Patient area */}
             <Route path="/paciente" element={<Protected role="patient"><PatientArea /></Protected>} />

@@ -28,7 +28,13 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 import json
 import io
 import pdfplumber
-from weasyprint import HTML, CSS
+try:
+    from weasyprint import HTML, CSS
+    _WEASYPRINT_AVAILABLE = True
+except Exception:
+    _WEASYPRINT_AVAILABLE = False
+    HTML = None
+    CSS = None
 
 # ---------- App / DB ----------
 mongo_url = os.environ['MONGO_URL']
@@ -887,8 +893,12 @@ async def get_patient(pid: str, user=Depends(get_current_user)):
     avals = await db.evaluations.find({"paciente_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(50)
     plans = await db.meal_plans.find({"paciente_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(20)
     analyses = await db.ai_analyses.find({"paciente_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(10)
-    return {"patient": p, "anamneses": anam, "consultations": consultas,
-            "evaluations": avals, "meal_plans": plans, "ai_analyses": analyses}
+    exams = await db.exams.find({"paciente_id": pid}, {"_id": 0, "raw_text": 0}).sort("created_at", -1).to_list(50)
+    recs = await db.recordatorios.find({"paciente_id": pid}, {"_id": 0}).sort("data", -1).to_list(50)
+    anam_v2 = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
+    return {"patient": p, "anamneses": anam, "anamnese_v2": anam_v2 or {},
+            "consultations": consultas, "evaluations": avals, "meal_plans": plans,
+            "ai_analyses": analyses, "exams": exams, "recordatorios": recs}
 
 @api.post("/patients/{pid}/evaluations")
 async def add_evaluation(pid: str, payload: EvaluationIn, user=Depends(get_current_user)):
@@ -1625,6 +1635,1262 @@ async def nudge_scheduler_loop():
             logging.exception("nudge_scheduler_loop error")
         await asyncio.sleep(60)
 
+# ================================================================
+# MOTOR CLÍNICO COMPLETO — RCTEAM-NUTRI SPEC v2.0
+# ================================================================
+import math as _math
+
+# ── TMB protocols ────────────────────────────────────────────────
+
+def _tmb_by_table(rows, idade, peso):
+    for (mn, mx), fn in rows:
+        if mn <= idade < mx:
+            return round(fn(peso), 2)
+    return round(rows[-1][1](peso), 2)
+
+_FAO1985 = {
+    1: [((0,3),lambda p:60.9*p-54),((3,10),lambda p:22.7*p+495),((10,18),lambda p:17.5*p+651),
+        ((18,30),lambda p:15.3*p+679),((30,60),lambda p:11.6*p+879),((60,999),lambda p:13.5*p+487)],
+    2: [((0,3),lambda p:61.0*p-51),((3,10),lambda p:22.5*p+499),((10,18),lambda p:12.2*p+746),
+        ((18,30),lambda p:14.7*p+496),((30,60),lambda p:8.7*p+829),((60,999),lambda p:10.5*p+596)],
+}
+_FAO2004 = {
+    1: [((0,3),lambda p:59.512*p-30.4),((3,10),lambda p:22.706*p+504.3),((10,18),lambda p:17.686*p+658.2),
+        ((18,30),lambda p:15.057*p+692.2),((30,60),lambda p:11.472*p+873.1),((60,999),lambda p:11.711*p+587.7)],
+    2: [((0,3),lambda p:58.317*p-31.1),((3,10),lambda p:20.315*p+485.9),((10,18),lambda p:13.384*p+692.6),
+        ((18,30),lambda p:14.818*p+486.6),((30,60),lambda p:8.126*p+845.6),((60,999),lambda p:9.082*p+658.5)],
+}
+
+def _tmb_all(protocolo: str, peso: float, altura_cm: float, idade: int, sexo_num: int, mlg_kg: float = None) -> float:
+    s = sexo_num
+    if protocolo == "harris_benedict_1984":
+        if s == 1: return round(88.362 + 13.397*peso + 4.799*altura_cm - 5.677*idade, 2)
+        return round(447.593 + 9.247*peso + 3.098*altura_cm - 4.330*idade, 2)
+    if protocolo == "harris_benedict_1919":
+        if s == 1: return round(66.473 + 13.752*peso + 5.003*altura_cm - 6.755*idade, 2)
+        return round(655.096 + 9.563*peso + 1.850*altura_cm - 4.676*idade, 2)
+    if protocolo == "mifflin_st_jeor":
+        base = 10*peso + 6.25*altura_cm - 5*idade
+        return round(base + 5 if s == 1 else base - 161, 2)
+    if protocolo == "fao_who_1985":
+        return _tmb_by_table(_FAO1985.get(s, _FAO1985[1]), idade, peso)
+    if protocolo == "fao_who_2004":
+        return _tmb_by_table(_FAO2004.get(s, _FAO2004[1]), idade, peso)
+    if protocolo == "cunningham":
+        if mlg_kg is None: raise ValueError("Cunningham requer MLG (massa livre de gordura)")
+        return round(500 + 22*mlg_kg, 2)
+    if protocolo == "tinsley_peso":
+        return round(24.8*peso + 10, 2)
+    if protocolo == "tinsley_mlg":
+        if mlg_kg is None: raise ValueError("Tinsley MLG requer MLG")
+        return round(25.9*mlg_kg + 284, 2)
+    raise ValueError(f"Protocolo desconhecido: {protocolo}")
+
+PROTOCOLOS_TMB_DESCRICAO = {
+    "harris_benedict_1984": "Harris-Benedict (1984)",
+    "harris_benedict_1919": "Harris-Benedict (1919)",
+    "mifflin_st_jeor": "Mifflin St Jeor",
+    "fao_who_1985": "FAO/WHO (1985)",
+    "fao_who_2004": "FAO/WHO (2004)",
+    "cunningham": "Cunningham",
+    "tinsley_peso": "Tinsley (por Peso)",
+    "tinsley_mlg": "Tinsley (por MLG)",
+}
+
+# ── NAF tables ───────────────────────────────────────────────────
+
+_NAF_PADRAO = {
+    1: {1: 1.20, 2: 1.56, 3: 1.78, 4: 2.10},
+    2: {1: 1.20, 2: 1.56, 3: 1.64, 4: 1.82},
+}
+_NAF_FAO2004 = {
+    1: {1: 1.00, 2: 1.11, 3: 1.25, 4: 1.48},
+    2: {1: 1.00, 2: 1.12, 3: 1.27, 4: 1.45},
+}
+_NAF_EER = {
+    1: {1: 1.00, 2: 1.13, 3: 1.26, 4: 1.42},
+    2: {1: 1.00, 2: 1.16, 3: 1.31, 4: 1.56},
+}
+_NAF_DESCRICAO = {
+    1: "Sedentário",
+    2: "Pouco ativo / Atividade leve",
+    3: "Ativo / Atividade moderada",
+    4: "Muito ativo / Atividade intensa",
+}
+_NAF_BY_PROTOCOLO = {
+    "harris_benedict_1984": _NAF_PADRAO, "harris_benedict_1919": _NAF_PADRAO,
+    "mifflin_st_jeor": _NAF_PADRAO, "fao_who_1985": _NAF_PADRAO,
+    "fao_who_2004": _NAF_FAO2004, "schofield": _NAF_PADRAO,
+    "henry_rees": _NAF_PADRAO, "cunningham": _NAF_PADRAO,
+    "tinsley_peso": _NAF_PADRAO, "tinsley_mlg": _NAF_PADRAO,
+    "eer_iom_2005": _NAF_EER,
+}
+
+# ── Fatores de Injúria ───────────────────────────────────────────
+
+FATORES_INJURIA_TABLE = {
+    1:  {"descricao": "Paciente não complicado", "fator": 1.00, "min": 1.00, "max": 1.00},
+    2:  {"descricao": "Câncer", "fator": 1.275, "min": 1.10, "max": 1.45},
+    3:  {"descricao": "Cirurgia eletiva", "fator": 1.05, "min": 1.00, "max": 1.10},
+    4:  {"descricao": "Desnutrição grave", "fator": 1.50, "min": 1.50, "max": 1.50},
+    5:  {"descricao": "Doença cardiopulmonar", "fator": 0.90, "min": 0.80, "max": 1.00},
+    6:  {"descricao": "Doença cardiopulmonar c/ cirurgia", "fator": 1.425, "min": 1.30, "max": 1.55},
+    7:  {"descricao": "Fratura", "fator": 1.20, "min": 1.20, "max": 1.20},
+    8:  {"descricao": "Fraturas múltiplas", "fator": 1.275, "min": 1.20, "max": 1.35},
+    9:  {"descricao": "Infecção grave", "fator": 1.325, "min": 1.30, "max": 1.35},
+    10: {"descricao": "Insuficiência cardíaca", "fator": 1.40, "min": 1.30, "max": 1.50},
+    11: {"descricao": "Insuficiência hepática", "fator": 1.425, "min": 1.30, "max": 1.55},
+    12: {"descricao": "Insuficiência renal aguda", "fator": 1.30, "min": 1.30, "max": 1.30},
+    13: {"descricao": "Jejum / inanição", "fator": 0.925, "min": 0.85, "max": 1.00},
+    14: {"descricao": "Multitrauma (reabilitação)", "fator": 1.50, "min": 1.50, "max": 1.50},
+    15: {"descricao": "Multitrauma + sepse", "fator": 1.60, "min": 1.60, "max": 1.60},
+    16: {"descricao": "Pequena cirurgia", "fator": 1.20, "min": 1.20, "max": 1.20},
+    17: {"descricao": "Pequeno trauma de tecido", "fator": 1.255, "min": 1.14, "max": 1.37},
+    18: {"descricao": "Peritonite", "fator": 1.35, "min": 1.20, "max": 1.50},
+    19: {"descricao": "PO cirurgia cardíaca", "fator": 1.35, "min": 1.20, "max": 1.50},
+    20: {"descricao": "PO cirurgia geral", "fator": 1.25, "min": 1.00, "max": 1.50},
+    21: {"descricao": "Pós-operatório", "fator": 1.10, "min": 1.10, "max": 1.10},
+    22: {"descricao": "Queimadura 30-50%", "fator": 1.70, "min": 1.70, "max": 1.70},
+    23: {"descricao": "Queimadura 50-70%", "fator": 1.80, "min": 1.80, "max": 1.80},
+    24: {"descricao": "Queimadura 70-90%", "fator": 2.00, "min": 2.00, "max": 2.00},
+    25: {"descricao": "Queimadura até 20%", "fator": 1.25, "min": 1.00, "max": 1.50},
+    26: {"descricao": "Sepse", "fator": 1.45, "min": 1.10, "max": 1.80},
+    27: {"descricao": "Transplante de fígado", "fator": 1.35, "min": 1.20, "max": 1.50},
+}
+
+# ── IMC classification by age group ─────────────────────────────
+
+def _classif_imc_adulto(imc: float) -> str:
+    if imc < 16.0: return "Magreza Grau III"
+    if imc < 17.0: return "Magreza Grau II"
+    if imc < 18.5: return "Magreza Grau I"
+    if imc < 25.0: return "Eutrofia"
+    if imc < 30.0: return "Sobrepeso"
+    if imc < 35.0: return "Obesidade Grau I"
+    if imc < 40.0: return "Obesidade Grau II"
+    return "Obesidade Grau III"
+
+def _classif_imc_idoso(imc: float, ref: str = "lipschitz_1994") -> str:
+    tabelas = {
+        "lipschitz_1994": [(22.0,"Magreza"),(27.0,"Eutrofia"),(999,"Sobrepeso")],
+        "perisinoto_2002": [(20.0,"Magreza"),(30.0,"Eutrofia"),(999,"Sobrepeso")],
+        "sabe_opas_oms":   [(23.0,"Magreza"),(28.0,"Eutrofia"),(30.0,"Sobrepeso"),(999,"Obesidade")],
+    }
+    rows = tabelas.get(ref, tabelas["lipschitz_1994"])
+    for lim, label in rows:
+        if imc < lim: return label
+    return rows[-1][1]
+
+_ATALAH = [
+    (6,19.99,24.99,30.09),(8,20.19,25.09,30.19),(10,20.29,25.29,30.29),(11,20.39,25.39,30.39),
+    (12,20.49,25.49,30.39),(13,20.69,25.69,30.49),(14,20.79,25.79,30.59),(15,20.89,25.89,30.69),
+    (16,21.09,25.99,30.79),(17,21.19,26.09,30.89),(18,21.29,26.19,30.99),(19,21.49,26.29,30.99),
+    (20,21.59,26.39,31.09),(21,21.79,26.49,31.19),(22,21.89,26.69,31.29),(23,22.09,26.89,31.39),
+    (24,22.29,26.99,31.59),(25,22.49,27.09,31.69),(26,22.69,27.29,31.79),(27,22.79,27.39,31.89),
+    (28,22.99,27.59,31.99),(29,23.19,27.69,32.09),(30,23.39,27.89,32.19),(31,23.49,27.99,32.29),
+    (32,23.69,28.09,32.39),(33,23.89,28.19,32.49),(34,23.90,28.39,32.59),(35,24.19,28.49,32.69),
+    (36,24.29,28.59,32.79),(37,24.49,28.79,32.89),(38,24.59,28.89,32.99),(39,24.79,28.99,33.09),
+    (40,24.99,29.19,33.19),(41,25.09,29.29,33.29),(42,25.09,29.29,33.29),
+]
+
+def _classif_imc_gestacional(imc: float, semana: int) -> str:
+    for w, bp_max, ad_max, sb_max in _ATALAH:
+        if w == semana:
+            if imc <= bp_max: return "Baixo Peso"
+            if imc <= ad_max: return "Adequado"
+            if imc <= sb_max: return "Sobrepeso"
+            return "Obesidade"
+    return "Semana fora do intervalo"
+
+def _classif_imc(imc: float, idade: int, gestante: bool = False, ig_semanas: int = None, ref_idoso: str = "lipschitz_1994") -> tuple:
+    if gestante and ig_semanas:
+        return _classif_imc_gestacional(imc, ig_semanas), "Atalah (1997)"
+    if idade >= 60:
+        return _classif_imc_idoso(imc, ref_idoso), f"Lipschitz 1994 (SISVAN)" if ref_idoso == "lipschitz_1994" else ref_idoso
+    return _classif_imc_adulto(imc), "OMS 1995/1997"
+
+# ── %MG classification by sex ────────────────────────────────────
+
+_CLASSIF_MG = {
+    1: [(8.0,"Muito baixo"),(22.0,"Bom"),(27.0,"Adequado"),(999,"Elevado")],
+    2: [(21.0,"Muito baixo"),(33.0,"Bom"),(39.0,"Adequado"),(999,"Elevado")],
+}
+
+def _classif_pct_mg(pct_mg: float, sexo_num: int) -> str:
+    for lim, label in _CLASSIF_MG.get(sexo_num, _CLASSIF_MG[1]):
+        if pct_mg < lim: return label
+    return "Elevado"
+
+# ── Anthropometric indices ────────────────────────────────────────
+
+def _peso_ideal(altura_cm: float) -> tuple:
+    h = altura_cm / 100
+    return round(18.5 * h**2, 2), round(24.99 * h**2, 2)
+
+def _calc_ic(cintura_cm: float, peso_kg: float, altura_cm: float) -> float:
+    return round(cintura_cm/100 / (0.109 * _math.sqrt(peso_kg / (altura_cm/100))), 4)
+
+def _classif_ic(ic: float, sexo_num: int) -> str:
+    return "Normal" if ic < (1.25 if sexo_num == 1 else 1.18) else "Elevado"
+
+def _calc_rcq(cintura_cm: float, quadril_cm: float) -> float:
+    return round(cintura_cm / quadril_cm, 2)
+
+def _risco_rcq(rcq: float, sexo_num: int) -> bool:
+    return rcq > (1.0 if sexo_num == 1 else 0.85)
+
+def _calc_amb_agb(circ_braco_cm: float, dobra_tricipital_mm: float) -> tuple:
+    at = (circ_braco_cm**2) / (4 * _math.pi)
+    dt_cm = dobra_tricipital_mm / 10
+    amb = ((circ_braco_cm - _math.pi * dt_cm)**2) / (4 * _math.pi)
+    agb = at - amb
+    return round(amb, 2), round(agb, 2)
+
+# ── Venta (goal weight planning) ─────────────────────────────────
+
+def _calcular_venta(peso_atual: float, peso_desejado: float, prazo_dias: int) -> dict:
+    diferenca_kg = round(peso_atual - peso_desejado, 2)
+    total_kcal = round(diferenca_kg * 7716.18, 2)
+    saldo_diario = round(total_kcal / prazo_dias, 2)
+    return {
+        "diferenca_kg": diferenca_kg, "total_kcal": total_kcal,
+        "saldo_diario_kcal": saldo_diario,
+        "objetivo": "perder" if diferenca_kg > 0 else "ganhar",
+    }
+
+# ── GET with FI and METs ─────────────────────────────────────────
+
+def _calc_get(tmb: float, naf: float, fi: float = 1.0) -> float:
+    return round(tmb * naf * fi, 2)
+
+def _calc_kcal_met(met: float, peso_kg: float, duracao_min: int) -> float:
+    return round(met * peso_kg * (duracao_min / 60), 2)
+
+def _calc_get_mets(tmb: float, atividades: list, peso_kg: float) -> float:
+    total = sum(_calc_kcal_met(a["met"], peso_kg, a["duracao_min"]) for a in atividades)
+    return round(tmb + total, 2)
+
+# ── Enhanced body composition (complete) ─────────────────────────
+
+def _sexo_str_to_num(sexo_str: str) -> int:
+    return 1 if str(sexo_str).upper().startswith("M") else 2
+
+def calc_bodycomp_v2(data: dict) -> dict:
+    """Complete body composition calculation per spec v2.0."""
+    peso = float(data["peso"])
+    altura_cm = float(data["altura"])
+    idade = int(data.get("idade", 30))
+    sexo_raw = data.get("sexo", "F")
+    sexo_num = sexo_raw if isinstance(sexo_raw, int) else _sexo_str_to_num(sexo_raw)
+    gestante = bool(data.get("gestante", False))
+    ig_semanas = data.get("ig_semanas")
+    protocolo_dobras = data.get("protocolo_dobras")
+    protocolo_mg = data.get("protocolo_mg", "siri")
+    dobras = data.get("dobras") or {}
+    perimetria = data.get("perimetria") or {}
+
+    # IMC
+    h = altura_cm / 100
+    imc = round(peso / (h**2), 2)
+    imc_class, imc_ref = _classif_imc(imc, idade, gestante, ig_semanas)
+
+    # Peso ideal
+    pi_min, pi_max = _peso_ideal(altura_cm)
+
+    # %MG via dobras
+    pct_mg = pct_mg_class = dc = None
+    if protocolo_dobras and dobras:
+        if protocolo_dobras == "pollock7":
+            pct_mg = pct_gordura_pollock7(dobras, "M" if sexo_num == 1 else "F", idade)
+        elif protocolo_dobras == "pollock3":
+            pct_mg = pct_gordura_pollock3(dobras, "M" if sexo_num == 1 else "F", idade)
+        elif protocolo_dobras == "faulkner":
+            pct_mg = pct_gordura_faulkner(dobras)
+        if pct_mg is not None:
+            pct_mg_class = _classif_pct_mg(pct_mg, sexo_num)
+
+    massa_gorda = round(peso * pct_mg / 100, 2) if pct_mg is not None else None
+    pct_magra = round(100 - pct_mg, 2) if pct_mg is not None else None
+    massa_magra = round(peso - massa_gorda, 2) if massa_gorda is not None else None
+    fator_res = 0.241 if sexo_num == 1 else 0.209
+    peso_residual = round(peso * fator_res, 2)
+
+    # TMB (Mifflin as default, keep old calc too)
+    protocolo_tmb = data.get("protocolo_tmb", "mifflin_st_jeor")
+    try:
+        tmb = _tmb_all(protocolo_tmb, peso, altura_cm, idade, sexo_num, massa_magra)
+    except Exception:
+        tmb = calc_tmb_mifflin(peso, altura_cm, idade, "M" if sexo_num == 1 else "F")
+    tmb_mifflin = calc_tmb_mifflin(peso, altura_cm, idade, "M" if sexo_num == 1 else "F")
+
+    # NAF / GET
+    naf_codigo = int(data.get("naf_codigo", 2))
+    naf_manual = data.get("naf_manual")
+    fi_codigo = data.get("fi_codigo")
+    fi_manual = data.get("fi_manual")
+    naf_table = _NAF_BY_PROTOCOLO.get(protocolo_tmb, _NAF_PADRAO)
+    naf = naf_manual if naf_manual else naf_table.get(sexo_num, naf_table[1]).get(naf_codigo, 1.56)
+    fi = fi_manual if fi_manual else (FATORES_INJURIA_TABLE.get(fi_codigo, {}).get("fator", 1.0) if fi_codigo else 1.0)
+    get_kcal = _calc_get(tmb, naf, fi)
+
+    # Legacy compat
+    fat_act = data.get("nivel_atividade")
+    if fat_act and not naf_manual:
+        get_kcal = round(tmb_mifflin * float(fat_act), 1)
+        naf = float(fat_act)
+
+    # Anthropometric indices from perimetria
+    cintura = perimetria.get("cintura") or data.get("cintura")
+    quadril = perimetria.get("quadril") or data.get("quadril")
+    braco_r = perimetria.get("braco_relaxado_d") or perimetria.get("braco")
+    tricipital_mm = dobras.get("tricipital") or dobras.get("triceps")
+
+    ic = ic_class = None
+    if cintura and peso and altura_cm:
+        try:
+            ic = _calc_ic(float(cintura), peso, altura_cm)
+            ic_class = _classif_ic(ic, sexo_num)
+        except Exception:
+            pass
+
+    rcq = rcq_risco = None
+    if cintura and quadril:
+        try:
+            rcq = _calc_rcq(float(cintura), float(quadril))
+            rcq_risco = _risco_rcq(rcq, sexo_num)
+        except Exception:
+            pass
+
+    amb = agb = None
+    if braco_r and tricipital_mm:
+        try:
+            amb, agb = _calc_amb_agb(float(braco_r), float(tricipital_mm))
+        except Exception:
+            pass
+
+    result = {
+        "imc": imc, "imc_classificacao": imc_class, "imc_referencia": imc_ref,
+        "peso_ideal_min": pi_min, "peso_ideal_max": pi_max,
+        "pct_gordura": pct_mg, "pct_gordura_classificacao": pct_mg_class,
+        "massa_gorda": massa_gorda, "pct_massa_magra": pct_magra,
+        "massa_magra": massa_magra, "peso_residual": peso_residual,
+        "protocolo_dobras": protocolo_dobras,
+        "tmb_mifflin": tmb_mifflin, "tmb": tmb, "tmb_protocolo": protocolo_tmb,
+        "naf": naf, "fi": fi, "get_kcal": get_kcal,
+        "ic": ic, "ic_classificacao": ic_class,
+        "rcq": rcq, "rcq_risco": rcq_risco,
+        "amb": amb, "agb": agb,
+        # gestacional
+        "ig_semanas": ig_semanas,
+        "imc_gestacional_classificacao": _classif_imc_gestacional(imc, ig_semanas) if (gestante and ig_semanas) else None,
+    }
+    return result
+
+# ── New Pydantic models ──────────────────────────────────────────
+
+class TmbPreviewIn(BaseModel):
+    protocolo: str = "mifflin_st_jeor"
+    peso: float
+    altura_cm: float
+    idade: int
+    sexo_num: int = 1
+    mlg_kg: Optional[float] = None
+
+class AtividadeMetIn(BaseModel):
+    nome: str
+    met: float
+    duracao_min: int
+
+class GetPreviewIn(BaseModel):
+    tmb: float
+    naf_codigo: Optional[int] = None
+    naf_manual: Optional[float] = None
+    fi_codigo: Optional[int] = None
+    fi_manual: Optional[float] = None
+    protocolo_tmb: str = "mifflin_st_jeor"
+    sexo_num: int = 1
+    peso_kg: Optional[float] = None
+    usar_mets: bool = False
+    atividades_mets: List[AtividadeMetIn] = []
+
+class VentaIn(BaseModel):
+    peso_atual: float
+    peso_desejado: float
+    prazo_dias: int = 30
+
+class AnamnseSecaoIn(BaseModel):
+    dados: dict
+
+class ObsAddIn(BaseModel):
+    texto: str
+
+class RecordatorioAlimentoIn(BaseModel):
+    nome: str
+    quantidade: str
+    horario: Optional[str] = None
+
+class RecordatorioRefeicaoIn(BaseModel):
+    nome: str
+    horario: Optional[str] = None
+    alimentos: List[RecordatorioAlimentoIn] = []
+    observacao: Optional[str] = None
+
+class RecordatorioIn(BaseModel):
+    data: str
+    refeicoes: List[RecordatorioRefeicaoIn] = []
+    observacoes: Optional[str] = None
+
+class ConfigNutricionistaIn(BaseModel):
+    nome: Optional[str] = None
+    crn: Optional[str] = None
+    especialidade: Optional[str] = None
+    telefone: Optional[str] = None
+    cor_relatorio: Optional[str] = None
+    clinica_nome: Optional[str] = None
+    clinica_endereco: Optional[str] = None
+    telefone_clinica: Optional[str] = None
+    site: Optional[str] = None
+
+class EvaluationV2In(BaseModel):
+    peso: float
+    altura: float
+    idade: int
+    sexo: str = "F"
+    sexo_num: Optional[int] = None
+    gestante: bool = False
+    ig_semanas: Optional[int] = None
+    protocolo_dobras: Optional[str] = None
+    protocolo_mg: str = "siri"
+    protocolo_tmb: str = "mifflin_st_jeor"
+    dobras: Optional[dict] = None
+    perimetria: Optional[dict] = None
+    bioimpedancia: Optional[dict] = None
+    nivel_atividade: Optional[float] = None
+    naf_codigo: Optional[int] = 2
+    naf_manual: Optional[float] = None
+    fi_codigo: Optional[int] = None
+    fi_manual: Optional[float] = None
+    objetivo: str = "manutencao"
+    mlg_kg: Optional[float] = None
+
+# ── Clinical calculation endpoints ──────────────────────────────
+
+@api.post("/calculos/tmb")
+async def preview_tmb(payload: TmbPreviewIn, user=Depends(get_current_user)):
+    try:
+        val = _tmb_all(payload.protocolo, payload.peso, payload.altura_cm, payload.idade, payload.sexo_num, payload.mlg_kg)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"tmb": val, "protocolo": payload.protocolo, "descricao": PROTOCOLOS_TMB_DESCRICAO.get(payload.protocolo, payload.protocolo)}
+
+@api.post("/calculos/get")
+async def preview_get(payload: GetPreviewIn, user=Depends(get_current_user)):
+    naf_table = _NAF_BY_PROTOCOLO.get(payload.protocolo_tmb, _NAF_PADRAO)
+    if payload.naf_manual is not None:
+        naf = payload.naf_manual
+    elif payload.naf_codigo:
+        naf = naf_table.get(payload.sexo_num, naf_table[1]).get(payload.naf_codigo, 1.56)
+    else:
+        naf = 1.56
+    fi = 1.0
+    if payload.fi_manual is not None:
+        fi = payload.fi_manual
+    elif payload.fi_codigo:
+        fi = FATORES_INJURIA_TABLE.get(payload.fi_codigo, {}).get("fator", 1.0)
+    if payload.usar_mets and payload.atividades_mets and payload.peso_kg:
+        get_v = _calc_get_mets(payload.tmb, [a.model_dump() for a in payload.atividades_mets], payload.peso_kg)
+    else:
+        get_v = _calc_get(payload.tmb, naf, fi)
+    return {"get": get_v, "naf": naf, "fi": fi, "tmb": payload.tmb}
+
+@api.post("/calculos/venta")
+async def preview_venta(payload: VentaIn, user=Depends(get_current_user)):
+    if payload.prazo_dias <= 0:
+        raise HTTPException(400, "Prazo deve ser maior que zero")
+    return _calcular_venta(payload.peso_atual, payload.peso_desejado, payload.prazo_dias)
+
+@api.get("/referencias/naf")
+async def get_naf_ref(protocolo: str = "mifflin_st_jeor", sexo: int = 1, user=Depends(get_current_user)):
+    table = _NAF_BY_PROTOCOLO.get(protocolo, _NAF_PADRAO)
+    vals = table.get(sexo, table[1])
+    return [{"codigo": k, "naf": v, "descricao": _NAF_DESCRICAO.get(k, "")} for k, v in vals.items()]
+
+@api.get("/referencias/fatores-injuria")
+async def get_fi_ref(user=Depends(get_current_user)):
+    return [{"codigo": k, **v} for k, v in FATORES_INJURIA_TABLE.items()]
+
+@api.get("/referencias/protocolos-tmb")
+async def get_tmb_ref(user=Depends(get_current_user)):
+    return [{"codigo": k, "descricao": v} for k, v in PROTOCOLOS_TMB_DESCRICAO.items()]
+
+# ── Enhanced anamnese endpoints ──────────────────────────────────
+
+SECOES_ANAMNESE = {
+    "dados_sociais": ["estado_civil","ocupacao","escolaridade","naturalidade","email","redes_sociais","telefone","celular","endereco","bairro","cidade_uf","cep","motivo","motivo_outro"],
+    "habitos_vida": ["restricao_alimentar","alcool","tabagismo","refeicoes_fora","pessoas_casa","compras_casa","sal_oleo_mes","habitos_sono"],
+    "patologias": ["sintomas_gerais","outros_sintomas","lesoes","cirurgias","patologias","medicamentos","historico_familiar"],
+    "avaliacao_clinica": ["apetite","mastigacao","habito_intestinal","cor_fezes","formato_fezes","habito_urinario","ingestao_hidrica","hidratacao_urinaria"],
+    "alimentacao": ["intolerancia_alimentar","preferencia_alimentar","aversao_alimentar","alergia_alimentar","alteracoes_apetite","inicio_obesidade","dieta_especial","num_refeicoes_dia","suplementos"],
+    "atividade_fisica": ["atividades_praticadas","intensidade_atividades","horario_atividades","duracao_atividades","frequencia_semana","sintomas_durante","sintomas_apos","hidratacao_atividade","alimentacao_pre","alimentacao_durante","alimentacao_pos"],
+    "mulheres": ["ultima_menstruacao","tpm","ciclo_menstrual","contraceptivo","colicas","lactante","menopausa"],
+}
+
+@api.get("/patients/{pid}/anamnese-v2")
+async def get_anamnese_v2(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
+    return anam or {}
+
+@api.patch("/patients/{pid}/anamnese/{secao}")
+async def patch_anamnese_secao(pid: str, secao: str, payload: AnamnseSecaoIn, user=Depends(require_nutritionist)):
+    if secao not in SECOES_ANAMNESE:
+        raise HTTPException(400, f"Seção inválida. Válidas: {list(SECOES_ANAMNESE)}")
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    campos = SECOES_ANAMNESE[secao]
+    dados = {k: v for k, v in payload.dados.items() if k in campos}
+    now_str = iso(now_utc())
+    existing = await db.anamneses.find_one({"paciente_id": pid})
+    if existing:
+        await db.anamneses.update_one({"paciente_id": pid}, {"$set": {**dados, "atualizado_em": now_str}})
+    else:
+        doc = {"id": str(uuid.uuid4()), "paciente_id": pid, "nutricionista_id": user["id"],
+               **dados, "criado_em": now_str, "atualizado_em": now_str}
+        await db.anamneses.insert_one(doc)
+    updated = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
+    return updated or {}
+
+@api.post("/patients/{pid}/anamnese/observacoes/{tipo}")
+async def add_observacao_anamnese(pid: str, tipo: str, payload: ObsAddIn, user=Depends(require_nutritionist)):
+    tipos_validos = ["dados_iniciais","habitos_vida","patologias","avaliacao_clinica","alimentacao","atividade_fisica","mulheres"]
+    if tipo not in tipos_validos:
+        raise HTTPException(400, f"Tipo inválido: {tipo}")
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    campo = f"obs_{tipo}"
+    entrada = {"texto": payload.texto, "data": iso(now_utc())}
+    now_str = iso(now_utc())
+    existing = await db.anamneses.find_one({"paciente_id": pid})
+    if existing:
+        await db.anamneses.update_one({"paciente_id": pid},
+            {"$push": {campo: entrada}, "$set": {"atualizado_em": now_str}})
+    else:
+        doc = {"id": str(uuid.uuid4()), "paciente_id": pid, "nutricionista_id": user["id"],
+               campo: [entrada], "criado_em": now_str, "atualizado_em": now_str}
+        await db.anamneses.insert_one(doc)
+    return {"ok": True}
+
+# ── Enhanced evaluation endpoint v2 ─────────────────────────────
+
+@api.post("/patients/{pid}/evaluations-v2")
+async def add_evaluation_v2(pid: str, payload: EvaluationV2In, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    count = await db.evaluations.count_documents({"paciente_id": pid})
+    if count >= 10:
+        raise HTTPException(400, "Máximo de 10 avaliações por paciente")
+    data = payload.model_dump()
+    comp = calc_bodycomp_v2(data)
+    eid = str(uuid.uuid4())
+    doc = {"id": eid, "paciente_id": pid, "nutricionista_id": user["id"],
+           **data, "composicao": comp, "created_at": iso(now_utc())}
+    await db.evaluations.insert_one(doc)
+    await db.patients.update_one({"id": pid}, {"$set": {
+        "peso": payload.peso, "altura": payload.altura, "ultima_avaliacao": iso(now_utc()),
+    }})
+    return {"ok": True, "evaluation_id": eid, "composicao": comp}
+
+# ── Recordatório endpoints ───────────────────────────────────────
+
+@api.get("/patients/{pid}/recordatorios")
+async def list_recordatorios(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    rows = await db.recordatorios.find({"paciente_id": pid}, {"_id": 0}).sort("data", -1).to_list(100)
+    return rows
+
+@api.post("/patients/{pid}/recordatorios")
+async def create_recordatorio(pid: str, payload: RecordatorioIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    rid = str(uuid.uuid4())
+    now_str = iso(now_utc())
+    doc = {"id": rid, "paciente_id": pid, "nutricionista_id": user["id"],
+           "data": payload.data,
+           "refeicoes": [r.model_dump() for r in payload.refeicoes],
+           "observacoes": payload.observacoes or "",
+           "criado_em": now_str, "atualizado_em": now_str}
+    await db.recordatorios.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+@api.put("/patients/{pid}/recordatorios/{rid}")
+async def update_recordatorio(pid: str, rid: str, payload: RecordatorioIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    await db.recordatorios.update_one({"id": rid, "paciente_id": pid}, {"$set": {
+        "data": payload.data,
+        "refeicoes": [r.model_dump() for r in payload.refeicoes],
+        "observacoes": payload.observacoes or "",
+        "atualizado_em": iso(now_utc()),
+    }})
+    updated = await db.recordatorios.find_one({"id": rid}, {"_id": 0})
+    if not updated:
+        raise HTTPException(404, "Recordatório não encontrado")
+    return updated
+
+@api.delete("/patients/{pid}/recordatorios/{rid}")
+async def delete_recordatorio(pid: str, rid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    res = await db.recordatorios.delete_one({"id": rid, "paciente_id": pid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Recordatório não encontrado")
+    return {"ok": True}
+
+# ── Configurações do nutricionista ───────────────────────────────
+
+@api.get("/configuracoes")
+async def get_configuracoes(user=Depends(require_nutritionist)):
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
+    return u or {}
+
+@api.put("/configuracoes")
+async def update_configuracoes(payload: ConfigNutricionistaIn, user=Depends(require_nutritionist)):
+    upd = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    upd["atualizado_em"] = iso(now_utc())
+    await db.users.update_one({"id": user["id"]}, {"$set": upd})
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
+    return u or {}
+
+# ── TACO Food Database ──────────────────────────────────────────
+
+_TACO_SEED = [
+    {"id":"taco-1","nome":"Arroz, branco, cozido","categoria":"Cereais e derivados","porcao_padrao_g":125,"medida_caseira":"1 escumadeira cheia","por_100g":{"energia_kcal":128,"proteinas_g":2.5,"carboidratos_g":28.1,"lipidios_g":0.2,"fibras_g":1.6,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.3,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":34,"magnesio_mg":9}},
+    {"id":"taco-2","nome":"Arroz, integral, cozido","categoria":"Cereais e derivados","porcao_padrao_g":125,"medida_caseira":"1 escumadeira cheia","por_100g":{"energia_kcal":124,"proteinas_g":2.6,"carboidratos_g":25.8,"lipidios_g":1.0,"fibras_g":2.7,"sodio_mg":1,"calcio_mg":7,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.2,"acidos_graxos_mono_g":0.3,"acidos_graxos_poli_g":0.4,"potassio_mg":60,"magnesio_mg":43}},
+    {"id":"taco-3","nome":"Macarrão, cozido","categoria":"Cereais e derivados","porcao_padrao_g":140,"medida_caseira":"1 prato fundo","por_100g":{"energia_kcal":148,"proteinas_g":5.3,"carboidratos_g":29.9,"lipidios_g":0.9,"fibras_g":1.6,"sodio_mg":1,"calcio_mg":7,"ferro_mg":0.7,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.2,"acidos_graxos_poli_g":0.4,"potassio_mg":24,"magnesio_mg":16}},
+    {"id":"taco-4","nome":"Pão francês","categoria":"Cereais e derivados","porcao_padrao_g":50,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":300,"proteinas_g":8.0,"carboidratos_g":58.6,"lipidios_g":3.1,"fibras_g":2.3,"sodio_mg":588,"calcio_mg":25,"ferro_mg":1.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.7,"acidos_graxos_mono_g":1.4,"acidos_graxos_poli_g":0.7,"potassio_mg":104,"magnesio_mg":24}},
+    {"id":"taco-5","nome":"Aveia, flocos, crua","categoria":"Cereais e derivados","porcao_padrao_g":40,"medida_caseira":"4 colheres de sopa","por_100g":{"energia_kcal":394,"proteinas_g":13.9,"carboidratos_g":66.6,"lipidios_g":8.5,"fibras_g":9.1,"sodio_mg":4,"calcio_mg":54,"ferro_mg":4.5,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":1.5,"acidos_graxos_mono_g":2.9,"acidos_graxos_poli_g":3.5,"potassio_mg":372,"magnesio_mg":119}},
+    {"id":"taco-6","nome":"Feijão, preto, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":77,"proteinas_g":4.5,"carboidratos_g":14.0,"lipidios_g":0.5,"fibras_g":8.4,"sodio_mg":2,"calcio_mg":29,"ferro_mg":1.5,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":255,"magnesio_mg":43}},
+    {"id":"taco-7","nome":"Feijão, carioca, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":76,"proteinas_g":4.8,"carboidratos_g":13.6,"lipidios_g":0.5,"fibras_g":8.5,"sodio_mg":2,"calcio_mg":27,"ferro_mg":1.8,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":258,"magnesio_mg":37}},
+    {"id":"taco-8","nome":"Lentilha, cozida","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":93,"proteinas_g":7.0,"carboidratos_g":15.9,"lipidios_g":0.5,"fibras_g":5.8,"sodio_mg":2,"calcio_mg":19,"ferro_mg":3.4,"vitamina_c_mg":1.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":319,"magnesio_mg":35}},
+    {"id":"taco-9","nome":"Grão-de-bico, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":164,"proteinas_g":9.0,"carboidratos_g":27.4,"lipidios_g":2.6,"fibras_g":6.0,"sodio_mg":7,"calcio_mg":57,"ferro_mg":3.2,"vitamina_c_mg":1.3,"colesterol_mg":0,"acidos_graxos_saturados_g":0.3,"acidos_graxos_mono_g":0.6,"acidos_graxos_poli_g":1.2,"potassio_mg":291,"magnesio_mg":48}},
+    {"id":"taco-10","nome":"Frango, peito, grelhado","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 filé médio","por_100g":{"energia_kcal":159,"proteinas_g":32.0,"carboidratos_g":0,"lipidios_g":2.9,"fibras_g":0,"sodio_mg":67,"calcio_mg":5,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":81,"acidos_graxos_saturados_g":0.8,"acidos_graxos_mono_g":1.0,"acidos_graxos_poli_g":0.6,"potassio_mg":355,"magnesio_mg":28}},
+    {"id":"taco-11","nome":"Frango, coxa, assada","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 coxa","por_100g":{"energia_kcal":213,"proteinas_g":24.7,"carboidratos_g":0,"lipidios_g":12.4,"fibras_g":0,"sodio_mg":75,"calcio_mg":14,"ferro_mg":0.7,"vitamina_c_mg":0,"colesterol_mg":88,"acidos_graxos_saturados_g":3.4,"acidos_graxos_mono_g":5.0,"acidos_graxos_poli_g":2.7,"potassio_mg":245,"magnesio_mg":22}},
+    {"id":"taco-12","nome":"Carne bovina, patinho, cozido","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 bife médio","por_100g":{"energia_kcal":219,"proteinas_g":30.6,"carboidratos_g":0,"lipidios_g":10.9,"fibras_g":0,"sodio_mg":60,"calcio_mg":10,"ferro_mg":3.4,"vitamina_c_mg":0,"colesterol_mg":104,"acidos_graxos_saturados_g":4.3,"acidos_graxos_mono_g":4.7,"acidos_graxos_poli_g":0.4,"potassio_mg":326,"magnesio_mg":24}},
+    {"id":"taco-13","nome":"Atum, enlatado em água, escorrido","categoria":"Peixes e frutos do mar","porcao_padrao_g":80,"medida_caseira":"1/2 lata","por_100g":{"energia_kcal":130,"proteinas_g":28.8,"carboidratos_g":0,"lipidios_g":1.7,"fibras_g":0,"sodio_mg":347,"calcio_mg":20,"ferro_mg":1.2,"vitamina_c_mg":0,"colesterol_mg":49,"acidos_graxos_saturados_g":0.4,"acidos_graxos_mono_g":0.4,"acidos_graxos_poli_g":0.5,"potassio_mg":265,"magnesio_mg":32}},
+    {"id":"taco-14","nome":"Salmão, assado","categoria":"Peixes e frutos do mar","porcao_padrao_g":100,"medida_caseira":"1 filé médio","por_100g":{"energia_kcal":181,"proteinas_g":25.4,"carboidratos_g":0,"lipidios_g":8.6,"fibras_g":0,"sodio_mg":55,"calcio_mg":14,"ferro_mg":0.6,"vitamina_c_mg":0,"colesterol_mg":71,"acidos_graxos_saturados_g":2.0,"acidos_graxos_mono_g":3.5,"acidos_graxos_poli_g":2.4,"potassio_mg":440,"magnesio_mg":28}},
+    {"id":"taco-15","nome":"Ovo de galinha, cozido","categoria":"Ovos e derivados","porcao_padrao_g":50,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":146,"proteinas_g":13.3,"carboidratos_g":0.6,"lipidios_g":9.5,"fibras_g":0,"sodio_mg":164,"calcio_mg":50,"ferro_mg":1.9,"vitamina_c_mg":0,"colesterol_mg":425,"acidos_graxos_saturados_g":2.9,"acidos_graxos_mono_g":3.6,"acidos_graxos_poli_g":1.3,"potassio_mg":140,"magnesio_mg":11}},
+    {"id":"taco-16","nome":"Leite integral","categoria":"Leite e derivados","porcao_padrao_g":200,"medida_caseira":"1 copo","por_100g":{"energia_kcal":61,"proteinas_g":3.2,"carboidratos_g":4.5,"lipidios_g":3.2,"fibras_g":0,"sodio_mg":38,"calcio_mg":113,"ferro_mg":0,"vitamina_c_mg":1.0,"colesterol_mg":10,"acidos_graxos_saturados_g":1.9,"acidos_graxos_mono_g":0.8,"acidos_graxos_poli_g":0.1,"potassio_mg":141,"magnesio_mg":10}},
+    {"id":"taco-17","nome":"Iogurte, natural, integral","categoria":"Leite e derivados","porcao_padrao_g":170,"medida_caseira":"1 pote","por_100g":{"energia_kcal":66,"proteinas_g":3.7,"carboidratos_g":5.2,"lipidios_g":3.2,"fibras_g":0,"sodio_mg":49,"calcio_mg":121,"ferro_mg":0.1,"vitamina_c_mg":1.0,"colesterol_mg":11,"acidos_graxos_saturados_g":2.0,"acidos_graxos_mono_g":0.9,"acidos_graxos_poli_g":0.1,"potassio_mg":155,"magnesio_mg":11}},
+    {"id":"taco-18","nome":"Queijo mussarela","categoria":"Leite e derivados","porcao_padrao_g":30,"medida_caseira":"1 fatia","por_100g":{"energia_kcal":289,"proteinas_g":19.7,"carboidratos_g":2.2,"lipidios_g":22.4,"fibras_g":0,"sodio_mg":547,"calcio_mg":577,"ferro_mg":0.3,"vitamina_c_mg":0,"colesterol_mg":73,"acidos_graxos_saturados_g":13.2,"acidos_graxos_mono_g":6.5,"acidos_graxos_poli_g":0.8,"potassio_mg":100,"magnesio_mg":20}},
+    {"id":"taco-19","nome":"Queijo cottage","categoria":"Leite e derivados","porcao_padrao_g":100,"medida_caseira":"2 colheres de sopa","por_100g":{"energia_kcal":98,"proteinas_g":11.1,"carboidratos_g":3.4,"lipidios_g":4.3,"fibras_g":0,"sodio_mg":406,"calcio_mg":98,"ferro_mg":0.1,"vitamina_c_mg":0,"colesterol_mg":15,"acidos_graxos_saturados_g":2.7,"acidos_graxos_mono_g":1.2,"acidos_graxos_poli_g":0.1,"potassio_mg":120,"magnesio_mg":9}},
+    {"id":"taco-20","nome":"Alface, crua","categoria":"Hortaliças e derivados","porcao_padrao_g":35,"medida_caseira":"1 pires","por_100g":{"energia_kcal":11,"proteinas_g":1.3,"carboidratos_g":1.7,"lipidios_g":0.2,"fibras_g":1.8,"sodio_mg":14,"calcio_mg":28,"ferro_mg":0.4,"vitamina_c_mg":18.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":164,"magnesio_mg":12}},
+    {"id":"taco-21","nome":"Tomate, cru","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":15,"proteinas_g":1.1,"carboidratos_g":3.1,"lipidios_g":0.2,"fibras_g":1.2,"sodio_mg":5,"calcio_mg":11,"ferro_mg":0.3,"vitamina_c_mg":21.2,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":222,"magnesio_mg":11}},
+    {"id":"taco-22","nome":"Brócolis, cozido","categoria":"Hortaliças e derivados","porcao_padrao_g":90,"medida_caseira":"1 pires","por_100g":{"energia_kcal":35,"proteinas_g":2.3,"carboidratos_g":6.6,"lipidios_g":0.4,"fibras_g":3.4,"sodio_mg":18,"calcio_mg":57,"ferro_mg":1.1,"vitamina_c_mg":50.6,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":274,"magnesio_mg":22}},
+    {"id":"taco-23","nome":"Espinafre, cru","categoria":"Hortaliças e derivados","porcao_padrao_g":40,"medida_caseira":"1 pires","por_100g":{"energia_kcal":18,"proteinas_g":2.2,"carboidratos_g":2.9,"lipidios_g":0.4,"fibras_g":2.2,"sodio_mg":79,"calcio_mg":84,"ferro_mg":3.0,"vitamina_c_mg":28.1,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":466,"magnesio_mg":68}},
+    {"id":"taco-24","nome":"Cenoura, crua","categoria":"Hortaliças e derivados","porcao_padrao_g":80,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":34,"proteinas_g":0.9,"carboidratos_g":7.7,"lipidios_g":0.2,"fibras_g":3.2,"sodio_mg":72,"calcio_mg":32,"ferro_mg":0.3,"vitamina_c_mg":5.6,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":263,"magnesio_mg":13}},
+    {"id":"taco-25","nome":"Batata, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade pequena","por_100g":{"energia_kcal":52,"proteinas_g":1.2,"carboidratos_g":11.9,"lipidios_g":0.1,"fibras_g":1.5,"sodio_mg":2,"calcio_mg":4,"ferro_mg":0.4,"vitamina_c_mg":10.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":392,"magnesio_mg":20}},
+    {"id":"taco-26","nome":"Batata-doce, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade pequena","por_100g":{"energia_kcal":77,"proteinas_g":0.6,"carboidratos_g":18.4,"lipidios_g":0.1,"fibras_g":2.2,"sodio_mg":37,"calcio_mg":30,"ferro_mg":0.5,"vitamina_c_mg":17.7,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":301,"magnesio_mg":18}},
+    {"id":"taco-27","nome":"Abobrinha, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":90,"medida_caseira":"2 colheres de servir","por_100g":{"energia_kcal":20,"proteinas_g":1.2,"carboidratos_g":4.1,"lipidios_g":0.2,"fibras_g":1.1,"sodio_mg":2,"calcio_mg":21,"ferro_mg":0.4,"vitamina_c_mg":10.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":248,"magnesio_mg":14}},
+    {"id":"taco-28","nome":"Banana, nanica","categoria":"Frutas e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":92,"proteinas_g":1.3,"carboidratos_g":23.8,"lipidios_g":0.1,"fibras_g":1.9,"sodio_mg":1,"calcio_mg":3,"ferro_mg":0.3,"vitamina_c_mg":5.9,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":376,"magnesio_mg":27}},
+    {"id":"taco-29","nome":"Maçã, fuji","categoria":"Frutas e derivados","porcao_padrao_g":150,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":56,"proteinas_g":0.3,"carboidratos_g":15.2,"lipidios_g":0.1,"fibras_g":1.3,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.1,"vitamina_c_mg":2.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":113,"magnesio_mg":6}},
+    {"id":"taco-30","nome":"Laranja, pera","categoria":"Frutas e derivados","porcao_padrao_g":140,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":37,"proteinas_g":1.0,"carboidratos_g":8.9,"lipidios_g":0.1,"fibras_g":0.8,"sodio_mg":1,"calcio_mg":24,"ferro_mg":0.1,"vitamina_c_mg":53.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":176,"magnesio_mg":11}},
+    {"id":"taco-31","nome":"Mamão, papaia","categoria":"Frutas e derivados","porcao_padrao_g":170,"medida_caseira":"1 fatia média","por_100g":{"energia_kcal":40,"proteinas_g":0.5,"carboidratos_g":10.4,"lipidios_g":0.1,"fibras_g":1.8,"sodio_mg":4,"calcio_mg":20,"ferro_mg":0.1,"vitamina_c_mg":78.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":206,"magnesio_mg":10}},
+    {"id":"taco-32","nome":"Abacate","categoria":"Frutas e derivados","porcao_padrao_g":85,"medida_caseira":"1/2 unidade média","por_100g":{"energia_kcal":96,"proteinas_g":1.2,"carboidratos_g":6.0,"lipidios_g":8.4,"fibras_g":6.3,"sodio_mg":2,"calcio_mg":10,"ferro_mg":0.4,"vitamina_c_mg":12.5,"colesterol_mg":0,"acidos_graxos_saturados_g":1.6,"acidos_graxos_mono_g":5.5,"acidos_graxos_poli_g":1.1,"potassio_mg":485,"magnesio_mg":29}},
+    {"id":"taco-33","nome":"Morango","categoria":"Frutas e derivados","porcao_padrao_g":120,"medida_caseira":"1 xícara","por_100g":{"energia_kcal":30,"proteinas_g":0.8,"carboidratos_g":6.9,"lipidios_g":0.3,"fibras_g":1.7,"sodio_mg":1,"calcio_mg":14,"ferro_mg":0.4,"vitamina_c_mg":58.8,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":168,"magnesio_mg":14}},
+    {"id":"taco-34","nome":"Azeite de oliva extra virgem","categoria":"Óleos e gorduras","porcao_padrao_g":10,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":884,"proteinas_g":0,"carboidratos_g":0,"lipidios_g":100.0,"fibras_g":0,"sodio_mg":2,"calcio_mg":1,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":13.8,"acidos_graxos_mono_g":73.0,"acidos_graxos_poli_g":10.5,"potassio_mg":1,"magnesio_mg":0}},
+    {"id":"taco-35","nome":"Óleo de soja","categoria":"Óleos e gorduras","porcao_padrao_g":10,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":884,"proteinas_g":0,"carboidratos_g":0,"lipidios_g":100.0,"fibras_g":0,"sodio_mg":0,"calcio_mg":0,"ferro_mg":0,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":15.6,"acidos_graxos_mono_g":22.8,"acidos_graxos_poli_g":57.7,"potassio_mg":0,"magnesio_mg":0}},
+    {"id":"taco-36","nome":"Açúcar cristal","categoria":"Açúcares e doces","porcao_padrao_g":5,"medida_caseira":"1 colher de chá","por_100g":{"energia_kcal":387,"proteinas_g":0,"carboidratos_g":99.6,"lipidios_g":0,"fibras_g":0,"sodio_mg":0,"calcio_mg":2,"ferro_mg":0.2,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":3,"magnesio_mg":1}},
+    {"id":"taco-37","nome":"Mel de abelha","categoria":"Açúcares e doces","porcao_padrao_g":15,"medida_caseira":"1 colher de sobremesa","por_100g":{"energia_kcal":309,"proteinas_g":0.3,"carboidratos_g":84.0,"lipidios_g":0,"fibras_g":0.2,"sodio_mg":8,"calcio_mg":5,"ferro_mg":0.3,"vitamina_c_mg":2.4,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":50,"magnesio_mg":2}},
+    {"id":"taco-38","nome":"Café, infusão 5%","categoria":"Bebidas","porcao_padrao_g":200,"medida_caseira":"1 xícara","por_100g":{"energia_kcal":2,"proteinas_g":0.2,"carboidratos_g":0.4,"lipidios_g":0,"fibras_g":0,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":64,"magnesio_mg":8}},
+    {"id":"taco-39","nome":"Amendoim, torrado, sem sal","categoria":"Nozes e sementes","porcao_padrao_g":30,"medida_caseira":"1 punhado","por_100g":{"energia_kcal":603,"proteinas_g":27.0,"carboidratos_g":21.4,"lipidios_g":49.5,"fibras_g":8.0,"sodio_mg":382,"calcio_mg":54,"ferro_mg":2.3,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":9.1,"acidos_graxos_mono_g":24.4,"acidos_graxos_poli_g":14.6,"potassio_mg":740,"magnesio_mg":178}},
+    {"id":"taco-40","nome":"Castanha-do-pará","categoria":"Nozes e sementes","porcao_padrao_g":10,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":643,"proteinas_g":14.3,"carboidratos_g":15.1,"lipidios_g":63.5,"fibras_g":7.9,"sodio_mg":3,"calcio_mg":160,"ferro_mg":2.4,"vitamina_c_mg":0.7,"colesterol_mg":0,"acidos_graxos_saturados_g":15.1,"acidos_graxos_mono_g":24.5,"acidos_graxos_poli_g":20.6,"potassio_mg":659,"magnesio_mg":376}},
+    {"id":"taco-41","nome":"Chia, semente","categoria":"Nozes e sementes","porcao_padrao_g":15,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":490,"proteinas_g":16.5,"carboidratos_g":42.1,"lipidios_g":30.7,"fibras_g":34.4,"sodio_mg":16,"calcio_mg":631,"ferro_mg":7.7,"vitamina_c_mg":1.6,"colesterol_mg":0,"acidos_graxos_saturados_g":3.3,"acidos_graxos_mono_g":2.3,"acidos_graxos_poli_g":23.7,"potassio_mg":407,"magnesio_mg":335}},
+    {"id":"taco-42","nome":"Linhaça, semente dourada","categoria":"Nozes e sementes","porcao_padrao_g":15,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":534,"proteinas_g":18.3,"carboidratos_g":28.9,"lipidios_g":42.2,"fibras_g":27.3,"sodio_mg":30,"calcio_mg":255,"ferro_mg":5.7,"vitamina_c_mg":0.6,"colesterol_mg":0,"acidos_graxos_saturados_g":3.7,"acidos_graxos_mono_g":7.5,"acidos_graxos_poli_g":28.7,"potassio_mg":813,"magnesio_mg":392}},
+    {"id":"taco-43","nome":"Whey protein, concentrado","categoria":"Suplementos","porcao_padrao_g":30,"medida_caseira":"1 scoop","por_100g":{"energia_kcal":378,"proteinas_g":80.0,"carboidratos_g":8.0,"lipidios_g":4.0,"fibras_g":0,"sodio_mg":200,"calcio_mg":600,"ferro_mg":1.0,"vitamina_c_mg":0,"colesterol_mg":40,"acidos_graxos_saturados_g":2.0,"acidos_graxos_mono_g":1.0,"acidos_graxos_poli_g":0.5,"potassio_mg":450,"magnesio_mg":50}},
+    {"id":"taco-44","nome":"Biscoito, cream-cracker","categoria":"Cereais e derivados","porcao_padrao_g":30,"medida_caseira":"6 unidades","por_100g":{"energia_kcal":442,"proteinas_g":9.6,"carboidratos_g":72.1,"lipidios_g":12.1,"fibras_g":3.0,"sodio_mg":769,"calcio_mg":25,"ferro_mg":2.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":2.9,"acidos_graxos_mono_g":5.1,"acidos_graxos_poli_g":3.4,"potassio_mg":138,"magnesio_mg":24}},
+    {"id":"taco-45","nome":"Tilápia, filé, grelhado","categoria":"Peixes e frutos do mar","porcao_padrao_g":100,"medida_caseira":"1 filé médio","por_100g":{"energia_kcal":96,"proteinas_g":20.1,"carboidratos_g":0,"lipidios_g":1.7,"fibras_g":0,"sodio_mg":52,"calcio_mg":10,"ferro_mg":0.5,"vitamina_c_mg":0,"colesterol_mg":56,"acidos_graxos_saturados_g":0.6,"acidos_graxos_mono_g":0.5,"acidos_graxos_poli_g":0.5,"potassio_mg":302,"magnesio_mg":27}},
+    {"id":"taco-46","nome":"Sardinha, assada","categoria":"Peixes e frutos do mar","porcao_padrao_g":40,"medida_caseira":"2 unidades","por_100g":{"energia_kcal":185,"proteinas_g":27.0,"carboidratos_g":0,"lipidios_g":8.4,"fibras_g":0,"sodio_mg":81,"calcio_mg":354,"ferro_mg":2.2,"vitamina_c_mg":0,"colesterol_mg":90,"acidos_graxos_saturados_g":2.4,"acidos_graxos_mono_g":3.1,"acidos_graxos_poli_g":2.1,"potassio_mg":414,"magnesio_mg":39}},
+    {"id":"taco-47","nome":"Carne bovina, contrafilé, grelhado","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 bife médio","por_100g":{"energia_kcal":252,"proteinas_g":26.6,"carboidratos_g":0,"lipidios_g":15.8,"fibras_g":0,"sodio_mg":53,"calcio_mg":7,"ferro_mg":3.0,"vitamina_c_mg":0,"colesterol_mg":86,"acidos_graxos_saturados_g":6.2,"acidos_graxos_mono_g":7.0,"acidos_graxos_poli_g":0.7,"potassio_mg":296,"magnesio_mg":23}},
+    {"id":"taco-48","nome":"Peru, peito, cozido","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 fatia grossa","por_100g":{"energia_kcal":139,"proteinas_g":28.6,"carboidratos_g":0,"lipidios_g":2.3,"fibras_g":0,"sodio_mg":68,"calcio_mg":11,"ferro_mg":0.7,"vitamina_c_mg":0,"colesterol_mg":76,"acidos_graxos_saturados_g":0.6,"acidos_graxos_mono_g":0.5,"acidos_graxos_poli_g":0.6,"potassio_mg":298,"magnesio_mg":28}},
+    {"id":"taco-49","nome":"Leite desnatado","categoria":"Leite e derivados","porcao_padrao_g":200,"medida_caseira":"1 copo","por_100g":{"energia_kcal":35,"proteinas_g":3.4,"carboidratos_g":4.8,"lipidios_g":0.1,"fibras_g":0,"sodio_mg":47,"calcio_mg":123,"ferro_mg":0.1,"vitamina_c_mg":1.0,"colesterol_mg":2,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":156,"magnesio_mg":12}},
+    {"id":"taco-50","nome":"Queijo ricota","categoria":"Leite e derivados","porcao_padrao_g":50,"medida_caseira":"2 colheres de sopa","por_100g":{"energia_kcal":164,"proteinas_g":11.3,"carboidratos_g":2.0,"lipidios_g":12.6,"fibras_g":0,"sodio_mg":104,"calcio_mg":204,"ferro_mg":0.3,"vitamina_c_mg":0,"colesterol_mg":46,"acidos_graxos_saturados_g":7.9,"acidos_graxos_mono_g":3.7,"acidos_graxos_poli_g":0.4,"potassio_mg":125,"magnesio_mg":10}},
+    {"id":"taco-51","nome":"Couve, refogada","categoria":"Hortaliças e derivados","porcao_padrao_g":35,"medida_caseira":"1 colher de servir","por_100g":{"energia_kcal":64,"proteinas_g":3.0,"carboidratos_g":8.7,"lipidios_g":2.4,"fibras_g":3.6,"sodio_mg":44,"calcio_mg":199,"ferro_mg":1.6,"vitamina_c_mg":107.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.3,"acidos_graxos_mono_g":1.6,"acidos_graxos_poli_g":0.3,"potassio_mg":460,"magnesio_mg":46}},
+    {"id":"taco-52","nome":"Mandioca, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"2 pedaços médios","por_100g":{"energia_kcal":125,"proteinas_g":0.6,"carboidratos_g":30.1,"lipidios_g":0.3,"fibras_g":1.9,"sodio_mg":7,"calcio_mg":18,"ferro_mg":0.3,"vitamina_c_mg":19.1,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":271,"magnesio_mg":25}},
+    {"id":"taco-53","nome":"Milho verde, cozido","categoria":"Cereais e derivados","porcao_padrao_g":85,"medida_caseira":"3 colheres de sopa","por_100g":{"energia_kcal":90,"proteinas_g":3.1,"carboidratos_g":18.8,"lipidios_g":1.3,"fibras_g":2.0,"sodio_mg":1,"calcio_mg":2,"ferro_mg":0.8,"vitamina_c_mg":11.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0.2,"acidos_graxos_mono_g":0.4,"acidos_graxos_poli_g":0.6,"potassio_mg":270,"magnesio_mg":37}},
+    {"id":"taco-54","nome":"Quinoa, cozida","categoria":"Cereais e derivados","porcao_padrao_g":100,"medida_caseira":"4 colheres de sopa","por_100g":{"energia_kcal":120,"proteinas_g":4.4,"carboidratos_g":21.3,"lipidios_g":1.9,"fibras_g":2.8,"sodio_mg":7,"calcio_mg":17,"ferro_mg":1.5,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.2,"acidos_graxos_mono_g":0.5,"acidos_graxos_poli_g":1.0,"potassio_mg":172,"magnesio_mg":64}},
+]
+
+async def seed_alimentos():
+    for item in _TACO_SEED:
+        existing = await db.alimentos.find_one({"id": item["id"]})
+        if not existing:
+            await db.alimentos.insert_one({**item, "fonte": "TACO", "criado_em": iso(now_utc())})
+
+class AlimentoCustomIn(BaseModel):
+    nome: str
+    categoria: str = "Outros"
+    porcao_padrao_g: float = 100
+    medida_caseira: str = "100g"
+    por_100g: dict
+
+@api.get("/alimentos")
+async def search_alimentos(
+    q: str = "",
+    categoria: str = "",
+    fonte: str = "",
+    page: int = 1,
+    limit: int = 50,
+    user=Depends(require_nutritionist),
+):
+    filt: dict = {}
+    if q:
+        filt["nome"] = {"$regex": q, "$options": "i"}
+    if categoria:
+        filt["categoria"] = {"$regex": categoria, "$options": "i"}
+    if fonte == "CUSTOM":
+        filt["nutricionista_id"] = user["id"]
+    elif fonte == "TACO":
+        filt["fonte"] = "TACO"
+    else:
+        filt["$or"] = [{"fonte": "TACO"}, {"nutricionista_id": user["id"]}]
+    skip = (page - 1) * limit
+    cursor = db.alimentos.find(filt, {"_id": 0}).skip(skip).limit(limit).sort("nome", 1)
+    return [a async for a in cursor]
+
+@api.post("/alimentos", status_code=201)
+async def create_alimento(payload: AlimentoCustomIn, user=Depends(require_nutritionist)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "nome": payload.nome,
+        "categoria": payload.categoria,
+        "fonte": "CUSTOM",
+        "nutricionista_id": user["id"],
+        "porcao_padrao_g": payload.porcao_padrao_g,
+        "medida_caseira": payload.medida_caseira,
+        "por_100g": payload.por_100g,
+        "criado_em": iso(now_utc()),
+    }
+    await db.alimentos.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+@api.put("/alimentos/{aid}")
+async def update_alimento(aid: str, payload: AlimentoCustomIn, user=Depends(require_nutritionist)):
+    existing = await db.alimentos.find_one({"id": aid})
+    if not existing:
+        raise HTTPException(404, "Alimento não encontrado")
+    if existing.get("fonte") == "TACO":
+        raise HTTPException(403, "Alimentos TACO não podem ser editados")
+    if existing.get("nutricionista_id") != user["id"]:
+        raise HTTPException(403, "Sem permissão")
+    upd = {**payload.model_dump(), "atualizado_em": iso(now_utc())}
+    await db.alimentos.update_one({"id": aid}, {"$set": upd})
+    return await db.alimentos.find_one({"id": aid}, {"_id": 0})
+
+@api.delete("/alimentos/{aid}")
+async def delete_alimento(aid: str, user=Depends(require_nutritionist)):
+    existing = await db.alimentos.find_one({"id": aid})
+    if not existing:
+        raise HTTPException(404, "Alimento não encontrado")
+    if existing.get("fonte") == "TACO":
+        raise HTTPException(403, "Alimentos TACO não podem ser excluídos")
+    if existing.get("nutricionista_id") != user["id"]:
+        raise HTTPException(403, "Sem permissão")
+    await db.alimentos.delete_one({"id": aid})
+    return {"ok": True}
+
+# ── Plano Alimentar Manual ────────────────────────────────────────
+
+def _nutrientes_por_porcao(alimento: dict, quantidade_g: float) -> dict:
+    p = alimento.get("por_100g", {})
+    f = quantidade_g / 100.0
+    keys = ["energia_kcal","proteinas_g","carboidratos_g","lipidios_g","fibras_g",
+            "sodio_mg","calcio_mg","ferro_mg","vitamina_c_mg","colesterol_mg",
+            "potassio_mg","magnesio_mg"]
+    return {k: round((p.get(k) or 0) * f, 2) for k in keys}
+
+class AlimentoPlanoItem(BaseModel):
+    alimento_id: str
+    quantidade_g: float
+    observacao: Optional[str] = None
+
+class RefeicaoPlano(BaseModel):
+    nome: str
+    horario: Optional[str] = None
+    alimentos: List[AlimentoPlanoItem] = []
+
+class PlanoManualIn(BaseModel):
+    titulo: str = "Plano Alimentar"
+    objetivo: Optional[str] = None
+    meta_kcal: Optional[float] = None
+    meta_proteina_g: Optional[float] = None
+    meta_carboidrato_g: Optional[float] = None
+    meta_lipidio_g: Optional[float] = None
+    refeicoes: List[RefeicaoPlano] = []
+    observacoes: Optional[str] = None
+
+async def _enrich_plano(doc: dict) -> dict:
+    refeicoes_out = []
+    totais_dia = {k: 0.0 for k in ["energia_kcal","proteinas_g","carboidratos_g","lipidios_g","fibras_g","sodio_mg"]}
+    for ref in doc.get("refeicoes", []):
+        alimentos_out = []
+        totais_ref = {k: 0.0 for k in totais_dia}
+        for item in ref.get("alimentos", []):
+            alim = await db.alimentos.find_one({"id": item.get("alimento_id")}, {"_id": 0})
+            if not alim:
+                continue
+            nutr = _nutrientes_por_porcao(alim, item.get("quantidade_g", 100))
+            for k in totais_ref:
+                totais_ref[k] = round(totais_ref[k] + nutr.get(k, 0), 2)
+            alimentos_out.append({**item, "alimento_nome": alim.get("nome", ""), "nutrientes": nutr})
+        for k in totais_dia:
+            totais_dia[k] = round(totais_dia[k] + totais_ref.get(k, 0), 2)
+        refeicoes_out.append({**ref, "alimentos": alimentos_out, "totais": totais_ref})
+    return {**doc, "refeicoes": refeicoes_out, "totais_dia": totais_dia}
+
+@api.get("/patients/{pid}/planos-manuais")
+async def list_planos_manuais(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    return [d async for d in db.planos_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("criado_em", -1)]
+
+@api.post("/patients/{pid}/planos-manuais", status_code=201)
+async def create_plano_manual(pid: str, payload: PlanoManualIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "paciente_id": pid,
+        "nutricionista_id": user["id"],
+        **payload.model_dump(),
+        "criado_em": iso(now_utc()),
+        "atualizado_em": iso(now_utc()),
+    }
+    await db.planos_manuais.insert_one(doc)
+    return await _enrich_plano({k: v for k, v in doc.items() if k != "_id"})
+
+@api.get("/patients/{pid}/planos-manuais/{pmid}")
+async def get_plano_manual(pid: str, pmid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Plano não encontrado")
+    return await _enrich_plano(doc)
+
+@api.put("/patients/{pid}/planos-manuais/{pmid}")
+async def update_plano_manual(pid: str, pmid: str, payload: PlanoManualIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid})
+    if not doc:
+        raise HTTPException(404, "Plano não encontrado")
+    upd = {**payload.model_dump(), "atualizado_em": iso(now_utc())}
+    await db.planos_manuais.update_one({"id": pmid}, {"$set": upd})
+    updated = await db.planos_manuais.find_one({"id": pmid}, {"_id": 0})
+    return await _enrich_plano(updated)
+
+@api.delete("/patients/{pid}/planos-manuais/{pmid}")
+async def delete_plano_manual(pid: str, pmid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    res = await db.planos_manuais.delete_one({"id": pmid, "paciente_id": pid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Plano não encontrado")
+    return {"ok": True}
+
+# ── Exames laboratoriais — catálogo + entrada manual ─────────────
+
+_EXAMES_CATALOG = {
+    "Hemograma": [
+        {"codigo":"HEM-01","nome":"Hemoglobina","unidade":"g/dL","ref_m_min":13.5,"ref_m_max":17.5,"ref_f_min":12.0,"ref_f_max":16.0},
+        {"codigo":"HEM-02","nome":"Hematócrito","unidade":"%","ref_m_min":41,"ref_m_max":53,"ref_f_min":36,"ref_f_max":46},
+        {"codigo":"HEM-03","nome":"VCM","unidade":"fL","ref_m_min":80,"ref_m_max":100,"ref_f_min":80,"ref_f_max":100},
+        {"codigo":"HEM-04","nome":"HCM","unidade":"pg","ref_m_min":27,"ref_m_max":33,"ref_f_min":27,"ref_f_max":33},
+        {"codigo":"HEM-05","nome":"Leucócitos totais","unidade":"mil/mm³","ref_m_min":4.5,"ref_m_max":11.0,"ref_f_min":4.5,"ref_f_max":11.0},
+        {"codigo":"HEM-06","nome":"Plaquetas","unidade":"mil/mm³","ref_m_min":150,"ref_m_max":400,"ref_f_min":150,"ref_f_max":400},
+        {"codigo":"HEM-07","nome":"Neutrófilos","unidade":"%","ref_m_min":45,"ref_m_max":75,"ref_f_min":45,"ref_f_max":75},
+        {"codigo":"HEM-08","nome":"Linfócitos","unidade":"%","ref_m_min":20,"ref_m_max":40,"ref_f_min":20,"ref_f_max":40},
+    ],
+    "Glicemia e Diabetes": [
+        {"codigo":"GLI-01","nome":"Glicemia em jejum","unidade":"mg/dL","ref_m_min":70,"ref_m_max":99,"ref_f_min":70,"ref_f_max":99},
+        {"codigo":"GLI-02","nome":"Hemoglobina glicada (HbA1c)","unidade":"%","ref_m_min":None,"ref_m_max":5.7,"ref_f_min":None,"ref_f_max":5.7},
+        {"codigo":"GLI-03","nome":"Insulina em jejum","unidade":"µUI/mL","ref_m_min":2.6,"ref_m_max":24.9,"ref_f_min":2.6,"ref_f_max":24.9},
+        {"codigo":"GLI-04","nome":"HOMA-IR","unidade":"","ref_m_min":None,"ref_m_max":2.7,"ref_f_min":None,"ref_f_max":2.7},
+    ],
+    "Lipidograma": [
+        {"codigo":"LIP-01","nome":"Colesterol total","unidade":"mg/dL","ref_m_min":None,"ref_m_max":200,"ref_f_min":None,"ref_f_max":200},
+        {"codigo":"LIP-02","nome":"LDL","unidade":"mg/dL","ref_m_min":None,"ref_m_max":130,"ref_f_min":None,"ref_f_max":130},
+        {"codigo":"LIP-03","nome":"HDL","unidade":"mg/dL","ref_m_min":40,"ref_m_max":None,"ref_f_min":50,"ref_f_max":None},
+        {"codigo":"LIP-04","nome":"VLDL","unidade":"mg/dL","ref_m_min":None,"ref_m_max":40,"ref_f_min":None,"ref_f_max":40},
+        {"codigo":"LIP-05","nome":"Triglicerídeos","unidade":"mg/dL","ref_m_min":None,"ref_m_max":150,"ref_f_min":None,"ref_f_max":150},
+    ],
+    "Função Renal": [
+        {"codigo":"REN-01","nome":"Creatinina sérica","unidade":"mg/dL","ref_m_min":0.7,"ref_m_max":1.3,"ref_f_min":0.5,"ref_f_max":1.1},
+        {"codigo":"REN-02","nome":"Ureia","unidade":"mg/dL","ref_m_min":15,"ref_m_max":45,"ref_f_min":15,"ref_f_max":45},
+        {"codigo":"REN-03","nome":"Ácido úrico","unidade":"mg/dL","ref_m_min":3.5,"ref_m_max":7.2,"ref_f_min":2.6,"ref_f_max":6.0},
+        {"codigo":"REN-04","nome":"TFG (CKD-EPI)","unidade":"mL/min/1,73m²","ref_m_min":60,"ref_m_max":None,"ref_f_min":60,"ref_f_max":None},
+    ],
+    "Função Hepática": [
+        {"codigo":"HEP-01","nome":"TGO (AST)","unidade":"U/L","ref_m_min":None,"ref_m_max":40,"ref_f_min":None,"ref_f_max":32},
+        {"codigo":"HEP-02","nome":"TGP (ALT)","unidade":"U/L","ref_m_min":None,"ref_m_max":41,"ref_f_min":None,"ref_f_max":31},
+        {"codigo":"HEP-03","nome":"GGT","unidade":"U/L","ref_m_min":None,"ref_m_max":61,"ref_f_min":None,"ref_f_max":36},
+        {"codigo":"HEP-04","nome":"Fosfatase alcalina","unidade":"U/L","ref_m_min":40,"ref_m_max":130,"ref_f_min":35,"ref_f_max":105},
+        {"codigo":"HEP-05","nome":"Bilirrubina total","unidade":"mg/dL","ref_m_min":None,"ref_m_max":1.2,"ref_f_min":None,"ref_f_max":1.2},
+        {"codigo":"HEP-06","nome":"Albumina","unidade":"g/dL","ref_m_min":3.5,"ref_m_max":5.0,"ref_f_min":3.5,"ref_f_max":5.0},
+    ],
+    "Tireoide": [
+        {"codigo":"TIR-01","nome":"TSH","unidade":"µUI/mL","ref_m_min":0.4,"ref_m_max":4.0,"ref_f_min":0.4,"ref_f_max":4.0},
+        {"codigo":"TIR-02","nome":"T4 livre","unidade":"ng/dL","ref_m_min":0.8,"ref_m_max":1.9,"ref_f_min":0.8,"ref_f_max":1.9},
+        {"codigo":"TIR-03","nome":"T3 livre","unidade":"pg/mL","ref_m_min":2.3,"ref_m_max":4.2,"ref_f_min":2.3,"ref_f_max":4.2},
+        {"codigo":"TIR-04","nome":"Anti-TPO","unidade":"UI/mL","ref_m_min":None,"ref_m_max":35,"ref_f_min":None,"ref_f_max":35},
+    ],
+    "Minerais e Vitaminas": [
+        {"codigo":"MIN-01","nome":"Ferro sérico","unidade":"µg/dL","ref_m_min":65,"ref_m_max":175,"ref_f_min":50,"ref_f_max":170},
+        {"codigo":"MIN-02","nome":"Ferritina","unidade":"ng/mL","ref_m_min":22,"ref_m_max":322,"ref_f_min":10,"ref_f_max":291},
+        {"codigo":"MIN-03","nome":"Vitamina B12","unidade":"pg/mL","ref_m_min":200,"ref_m_max":900,"ref_f_min":200,"ref_f_max":900},
+        {"codigo":"MIN-04","nome":"Vitamina D (25-OH)","unidade":"ng/mL","ref_m_min":30,"ref_m_max":100,"ref_f_min":30,"ref_f_max":100},
+        {"codigo":"MIN-05","nome":"Zinco","unidade":"µg/dL","ref_m_min":70,"ref_m_max":150,"ref_f_min":70,"ref_f_max":150},
+        {"codigo":"MIN-06","nome":"Magnésio sérico","unidade":"mg/dL","ref_m_min":1.6,"ref_m_max":2.6,"ref_f_min":1.6,"ref_f_max":2.6},
+        {"codigo":"MIN-07","nome":"Cálcio total","unidade":"mg/dL","ref_m_min":8.5,"ref_m_max":10.5,"ref_f_min":8.5,"ref_f_max":10.5},
+        {"codigo":"MIN-08","nome":"Fósforo","unidade":"mg/dL","ref_m_min":2.5,"ref_m_max":4.5,"ref_f_min":2.5,"ref_f_max":4.5},
+        {"codigo":"MIN-09","nome":"Potássio","unidade":"mEq/L","ref_m_min":3.5,"ref_m_max":5.0,"ref_f_min":3.5,"ref_f_max":5.0},
+        {"codigo":"MIN-10","nome":"Sódio","unidade":"mEq/L","ref_m_min":135,"ref_m_max":145,"ref_f_min":135,"ref_f_max":145},
+    ],
+    "Inflamatórios": [
+        {"codigo":"INF-01","nome":"PCR ultra-sensível","unidade":"mg/L","ref_m_min":None,"ref_m_max":1.0,"ref_f_min":None,"ref_f_max":1.0},
+        {"codigo":"INF-02","nome":"VHS (Eritrossedimentação)","unidade":"mm/h","ref_m_min":None,"ref_m_max":20,"ref_f_min":None,"ref_f_max":30},
+        {"codigo":"INF-03","nome":"Homocisteína","unidade":"µmol/L","ref_m_min":None,"ref_m_max":15,"ref_f_min":None,"ref_f_max":12},
+    ],
+    "Proteínas Séricas": [
+        {"codigo":"PRO-01","nome":"Proteína total","unidade":"g/dL","ref_m_min":6.4,"ref_m_max":8.3,"ref_f_min":6.4,"ref_f_max":8.3},
+        {"codigo":"PRO-02","nome":"Pré-albumina","unidade":"mg/dL","ref_m_min":16,"ref_m_max":35,"ref_f_min":16,"ref_f_max":35},
+        {"codigo":"PRO-03","nome":"Transferrina","unidade":"mg/dL","ref_m_min":200,"ref_m_max":360,"ref_f_min":200,"ref_f_max":360},
+    ],
+    "Hormônios": [
+        {"codigo":"HOR-01","nome":"Insulina pós-prandial (2h)","unidade":"µUI/mL","ref_m_min":None,"ref_m_max":30,"ref_f_min":None,"ref_f_max":30},
+        {"codigo":"HOR-02","nome":"Cortisol (manhã)","unidade":"µg/dL","ref_m_min":5,"ref_m_max":25,"ref_f_min":5,"ref_f_max":25},
+        {"codigo":"HOR-03","nome":"DHEA-S","unidade":"µg/dL","ref_m_min":85,"ref_m_max":690,"ref_f_min":45,"ref_f_max":430},
+        {"codigo":"HOR-04","nome":"Testosterona total","unidade":"ng/dL","ref_m_min":270,"ref_m_max":1070,"ref_f_min":15,"ref_f_max":70},
+        {"codigo":"HOR-05","nome":"Estradiol","unidade":"pg/mL","ref_m_min":None,"ref_m_max":40,"ref_f_min":30,"ref_f_max":400},
+        {"codigo":"HOR-06","nome":"FSH","unidade":"mUI/mL","ref_m_min":1.5,"ref_m_max":12.4,"ref_f_min":2.5,"ref_f_max":10.2},
+        {"codigo":"HOR-07","nome":"LH","unidade":"mUI/mL","ref_m_min":1.7,"ref_m_max":8.6,"ref_f_min":2.4,"ref_f_max":12.6},
+    ],
+    "Urina": [
+        {"codigo":"URI-01","nome":"Creatinina urinária","unidade":"mg/24h","ref_m_min":800,"ref_m_max":2000,"ref_f_min":600,"ref_f_max":1800},
+        {"codigo":"URI-02","nome":"Microalbuminúria","unidade":"mg/24h","ref_m_min":None,"ref_m_max":30,"ref_f_min":None,"ref_f_max":30},
+    ],
+}
+
+def _classif_exame(valor: float, ref: dict, sexo: str) -> str:
+    if str(sexo) in ("M", "1"):
+        mn, mx = ref.get("ref_m_min"), ref.get("ref_m_max")
+    else:
+        mn, mx = ref.get("ref_f_min"), ref.get("ref_f_max")
+    if mn is not None and valor < mn:
+        return "baixo"
+    if mx is not None and valor > mx:
+        return "alto"
+    return "normal"
+
+class ExameManualItem(BaseModel):
+    codigo: str
+    nome: str
+    valor: float
+    unidade: str
+    grupo: str
+
+class ExamesManualIn(BaseModel):
+    data_coleta: str
+    laboratorio: Optional[str] = None
+    exames: List[ExameManualItem]
+
+@api.get("/referencias/exames-catalog")
+async def get_exames_catalog(q: str = "", grupo: str = "", user=Depends(require_nutritionist)):
+    results = []
+    for grupo_nome, itens in _EXAMES_CATALOG.items():
+        if grupo and grupo.lower() not in grupo_nome.lower():
+            continue
+        for item in itens:
+            if q and q.lower() not in item["nome"].lower():
+                continue
+            results.append({"grupo": grupo_nome, **item})
+    return results
+
+@api.get("/referencias/exames-grupos")
+async def get_exames_grupos(user=Depends(require_nutritionist)):
+    return list(_EXAMES_CATALOG.keys())
+
+@api.post("/patients/{pid}/exames-manuais", status_code=201)
+async def create_exame_manual(pid: str, payload: ExamesManualIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    sexo = p.get("sexo", "M")
+    catalog_flat = {item["codigo"]: item for itens in _EXAMES_CATALOG.values() for item in itens}
+    exames_enrich = []
+    for e in payload.exames:
+        ref = catalog_flat.get(e.codigo, {})
+        classif = _classif_exame(e.valor, ref, sexo) if ref else "sem_referencia"
+        exames_enrich.append({**e.model_dump(), "classificacao": classif, "referencia": ref})
+    doc = {
+        "id": str(uuid.uuid4()),
+        "paciente_id": pid,
+        "nutricionista_id": user["id"],
+        "tipo": "manual",
+        "data_coleta": payload.data_coleta,
+        "laboratorio": payload.laboratorio,
+        "exames": exames_enrich,
+        "criado_em": iso(now_utc()),
+    }
+    await db.exames_manuais.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+@api.get("/patients/{pid}/exames-manuais")
+async def list_exames_manuais(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    return [d async for d in db.exames_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("data_coleta", -1)]
+
+@api.delete("/patients/{pid}/exames-manuais/{emid}")
+async def delete_exame_manual(pid: str, emid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    res = await db.exames_manuais.delete_one({"id": emid, "paciente_id": pid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Exame não encontrado")
+    return {"ok": True}
+
+# ── Configurações — logo upload ──────────────────────────────────
+
+@api.post("/configuracoes/logo")
+async def upload_logo(file: UploadFile = File(...), user=Depends(require_nutritionist)):
+    if file.content_type not in ("image/png", "image/jpeg", "image/jpg", "image/webp"):
+        raise HTTPException(400, "Formato inválido. Use PNG, JPEG ou WebP.")
+    data = await file.read()
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo muito grande. Máximo 2MB.")
+    import base64
+    b64 = base64.b64encode(data).decode("utf-8")
+    logo_uri = f"data:{file.content_type};base64,{b64}"
+    await db.users.update_one({"id": user["id"]}, {"$set": {"logo_url": logo_uri, "atualizado_em": iso(now_utc())}})
+    return {"logo_url": logo_uri}
+
+# ── PDF Reports ──────────────────────────────────────────────────
+
+def _pdf_html_base(titulo: str, paciente: dict, nutri: dict, conteudo: str) -> str:
+    logo = nutri.get("logo_url", "")
+    logo_html = f'<img src="{logo}" style="height:56px;object-fit:contain;" />' if logo else ""
+    nome_nutri = nutri.get("name", "") or nutri.get("nome", "")
+    crn = nutri.get("crn", "")
+    crn_txt = f" — CRN: {crn}" if crn else ""
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"/>
+<style>
+@page {{size:A4;margin:2cm 2cm 2.5cm 2cm;}}
+body{{font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#222;margin:0;}}
+.hdr{{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #7c3aed;padding-bottom:12px;margin-bottom:20px;}}
+.hdr h1{{margin:0;font-size:16pt;color:#7c3aed;}}
+.hdr p{{margin:2px 0;font-size:9pt;color:#555;}}
+.sec{{margin-bottom:18px;}}
+.sec-title{{background:#7c3aed;color:white;padding:5px 10px;font-size:11pt;font-weight:bold;border-radius:4px;margin-bottom:10px;}}
+table{{width:100%;border-collapse:collapse;margin-bottom:10px;}}
+th{{background:#ede9fe;color:#4c1d95;text-align:left;padding:5px 8px;font-size:10pt;}}
+td{{padding:4px 8px;font-size:10pt;border-bottom:1px solid #eee;}}
+tr:nth-child(even) td{{background:#faf9ff;}}
+.baixo{{color:#dc2626;font-weight:bold;}}.alto{{color:#ea580c;font-weight:bold;}}.normal{{color:#16a34a;font-weight:bold;}}
+.ftr{{position:fixed;bottom:0;left:0;right:0;text-align:center;font-size:8pt;color:#aaa;border-top:1px solid #eee;padding:8px;}}
+</style></head><body>
+<div class="hdr">
+  <div><h1>{titulo}</h1>
+    <p>Paciente: <strong>{paciente.get('nome','')}</strong> &nbsp;|&nbsp; Gerado em: {datetime.now(TZ_BR).strftime('%d/%m/%Y %H:%M')}</p>
+    {f'<p>{nome_nutri}{crn_txt}</p>' if nome_nutri else ''}
+  </div>
+  <div>{logo_html}</div>
+</div>
+{conteudo}
+<div class="ftr">RCTEAM — Sistema Nutricional {datetime.now(TZ_BR).strftime('%Y')} | {nome_nutri} {('CRN ' + crn) if crn else ''}</div>
+</body></html>"""
+
+@api.get("/patients/{pid}/relatorios/antropometria")
+async def relatorio_antropometria(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
+    evals = [e async for e in db.evaluations.find({"paciente_id": pid}, {"_id": 0}).sort("data", -1).limit(5)]
+    rows = ""
+    for e in evals:
+        r = e.get("resultado", {})
+        rows += (f"<tr><td>{str(e.get('data',''))[:10]}</td>"
+                 f"<td>{r.get('peso_kg', e.get('peso','—'))}</td>"
+                 f"<td>{r.get('imc','—')}</td><td>{r.get('imc_classificacao','—')}</td>"
+                 f"<td>{r.get('pct_gordura','—')}</td>"
+                 f"<td>{r.get('tmb','—')}</td><td>{r.get('get_kcal','—')}</td></tr>")
+    conteudo = f"""<div class="sec"><div class="sec-title">Avaliações Antropométricas (últimas 5)</div>
+      <table><tr><th>Data</th><th>Peso (kg)</th><th>IMC</th><th>Classificação</th><th>%Gordura</th><th>TMB (kcal)</th><th>GET (kcal)</th></tr>
+      {rows or '<tr><td colspan="7" style="text-align:center;color:#888">Nenhuma avaliação registrada</td></tr>'}
+      </table></div>"""
+    html = _pdf_html_base("Relatório Antropométrico", p, nutri, conteudo)
+    pdf_bytes = HTML(string=html).write_pdf()
+    fname = f"antropometria_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+@api.get("/patients/{pid}/relatorios/anamnese")
+async def relatorio_anamnese(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
+    anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
+    secoes_html = ""
+    label_map = {
+        "dados_sociais": "Dados Sociais",
+        "habitos_vida": "Hábitos de Vida",
+        "patologias": "Patologias e Histórico",
+        "avaliacao_clinica": "Avaliação Clínica",
+        "alimentacao": "Alimentação",
+        "atividade_fisica": "Atividade Física",
+        "mulheres": "Dados Femininos",
+    }
+    if anam:
+        for sec_key, sec_label in label_map.items():
+            fields = SECOES_ANAMNESE.get(sec_key, [])
+            rows = "".join(
+                f"<tr><td><strong>{f.replace('_',' ').title()}</strong></td><td>{anam.get(f) or '—'}</td></tr>"
+                for f in fields if anam.get(f)
+            )
+            if rows:
+                secoes_html += f'<div class="sec"><div class="sec-title">{sec_label}</div><table>{rows}</table></div>'
+        for obs_key, obs_label in [
+            ("observacoes_medicas","Observações Médicas"),
+            ("observacoes_nutricionais","Observações Nutricionais"),
+            ("observacoes_evolucao","Observações de Evolução"),
+        ]:
+            obs_list = anam.get(obs_key, [])
+            if obs_list:
+                items = "".join(
+                    f"<tr><td>{o.get('data_hora','')[:16]}</td><td>{o.get('texto','')}</td></tr>"
+                    for o in obs_list
+                )
+                secoes_html += (f'<div class="sec"><div class="sec-title">{obs_label}</div>'
+                                f'<table><tr><th>Data</th><th>Observação</th></tr>{items}</table></div>')
+    if not secoes_html:
+        secoes_html = '<p style="color:#888">Anamnese não preenchida.</p>'
+    html = _pdf_html_base("Relatório de Anamnese", p, nutri, secoes_html)
+    pdf_bytes = HTML(string=html).write_pdf()
+    fname = f"anamnese_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+@api.get("/patients/{pid}/relatorios/exames")
+async def relatorio_exames(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
+    lotes = [e async for e in db.exames_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("data_coleta", -1)]
+    conteudo = ""
+    if not lotes:
+        conteudo = '<p style="color:#888">Nenhum exame laboratorial registrado.</p>'
+    else:
+        sexo = p.get("sexo", "M")
+        for lote in lotes:
+            rows = ""
+            for e in lote.get("exames", []):
+                cls = e.get("classificacao", "sem_referencia")
+                badge = f'<span class="{cls}">{cls.upper()}</span>' if cls != "sem_referencia" else "—"
+                ref = e.get("referencia", {})
+                mn = ref.get("ref_f_min") if sexo == "F" else ref.get("ref_m_min")
+                mx = ref.get("ref_f_max") if sexo == "F" else ref.get("ref_m_max")
+                parts = []
+                if mn is not None: parts.append(f"≥{mn}")
+                if mx is not None: parts.append(f"≤{mx}")
+                ref_txt = " — ".join(parts) if parts else "—"
+                rows += (f"<tr><td>{e.get('grupo','')}</td><td>{e.get('nome','')}</td>"
+                         f"<td><strong>{e.get('valor','')}</strong> {e.get('unidade','')}</td>"
+                         f"<td>{ref_txt}</td><td>{badge}</td></tr>")
+            lab = lote.get("laboratorio") or "Laboratório não informado"
+            conteudo += (f'<div class="sec"><div class="sec-title">Exames de '
+                         f'{str(lote.get("data_coleta",""))[:10]} — {lab}</div>'
+                         f'<table><tr><th>Grupo</th><th>Exame</th><th>Resultado</th>'
+                         f'<th>Referência</th><th>Status</th></tr>{rows}</table></div>')
+    html = _pdf_html_base("Relatório de Exames Laboratoriais", p, nutri, conteudo)
+    pdf_bytes = HTML(string=html).write_pdf()
+    fname = f"exames_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+@api.get("/patients/{pid}/relatorios/plano-alimentar/{pmid}")
+async def relatorio_plano_alimentar(pid: str, pmid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
+    doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Plano não encontrado")
+    plano = await _enrich_plano(doc)
+    conteudo = ""
+    metas = []
+    if plano.get("meta_kcal"): metas.append(f"Energia: {plano['meta_kcal']} kcal")
+    if plano.get("meta_proteina_g"): metas.append(f"Proteínas: {plano['meta_proteina_g']}g")
+    if plano.get("meta_carboidrato_g"): metas.append(f"Carboidratos: {plano['meta_carboidrato_g']}g")
+    if plano.get("meta_lipidio_g"): metas.append(f"Lipídios: {plano['meta_lipidio_g']}g")
+    if metas:
+        conteudo += f'<div class="sec"><div class="sec-title">Metas Nutricionais</div><p>{" &nbsp;|&nbsp; ".join(metas)}</p></div>'
+    for ref in plano.get("refeicoes", []):
+        rows = ""
+        for a in ref.get("alimentos", []):
+            n = a.get("nutrientes", {})
+            rows += (f"<tr><td>{a.get('alimento_nome','')}</td><td>{a.get('quantidade_g','')}g</td>"
+                     f"<td>{n.get('energia_kcal',0)}</td><td>{n.get('proteinas_g',0)}</td>"
+                     f"<td>{n.get('carboidratos_g',0)}</td><td>{n.get('lipidios_g',0)}</td></tr>")
+        tot = ref.get("totais", {})
+        horario = f" — {ref.get('horario')}" if ref.get("horario") else ""
+        conteudo += (f'<div class="sec"><div class="sec-title">{ref.get("nome","")}{horario}</div>'
+                     f'<table><tr><th>Alimento</th><th>Qtd</th><th>Energia (kcal)</th>'
+                     f'<th>Prot (g)</th><th>CHO (g)</th><th>Lip (g)</th></tr>'
+                     f'{rows}<tr style="font-weight:bold;background:#ede9fe">'
+                     f'<td colspan="2">Total da refeição</td>'
+                     f'<td>{tot.get("energia_kcal",0)}</td><td>{tot.get("proteinas_g",0)}</td>'
+                     f'<td>{tot.get("carboidratos_g",0)}</td><td>{tot.get("lipidios_g",0)}</td>'
+                     f'</tr></table></div>')
+    t = plano.get("totais_dia", {})
+    conteudo += (f'<div class="sec"><div class="sec-title">Total do Dia</div>'
+                 f'<table><tr><th>Energia</th><th>Proteínas</th><th>Carboidratos</th><th>Lipídios</th><th>Fibras</th><th>Sódio</th></tr>'
+                 f'<tr><td>{t.get("energia_kcal",0)} kcal</td><td>{t.get("proteinas_g",0)}g</td>'
+                 f'<td>{t.get("carboidratos_g",0)}g</td><td>{t.get("lipidios_g",0)}g</td>'
+                 f'<td>{t.get("fibras_g",0)}g</td><td>{t.get("sodio_mg",0)}mg</td></tr></table></div>')
+    if plano.get("observacoes"):
+        conteudo += f'<div class="sec"><div class="sec-title">Observações</div><p>{plano["observacoes"]}</p></div>'
+    html = _pdf_html_base(plano.get("titulo","Plano Alimentar"), p, nutri, conteudo)
+    pdf_bytes = HTML(string=html).write_pdf()
+    fname = f"plano_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+# ================================================================
+# END MOTOR CLÍNICO
+# ================================================================
+
 # ---------- Bootstrap ----------
 @app.on_event("startup")
 async def startup():
@@ -1642,6 +2908,14 @@ async def startup():
     await db.patient_messages.create_index([("session_id", 1), ("created_at", 1)])
     await db.patient_nudges.create_index([("active", 1), ("next_run_at", 1)])
     await db.patient_nudges.create_index("patient_id")
+    await db.recordatorios.create_index([("paciente_id", 1), ("data", -1)])
+    await db.anamneses.create_index("paciente_id")
+    await db.alimentos.create_index([("nome", 1)])
+    await db.alimentos.create_index([("fonte", 1), ("categoria", 1)])
+    await db.planos_manuais.create_index([("paciente_id", 1), ("criado_em", -1)])
+    await db.exames_manuais.create_index([("paciente_id", 1), ("data_coleta", -1)])
+    # seed alimentos TACO
+    await seed_alimentos()
     # seed agents
     await ensure_agents_seeded()
     # start proactive nudge scheduler

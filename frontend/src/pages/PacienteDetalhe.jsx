@@ -6,7 +6,7 @@ import StatusBadge from "@/components/evonut/StatusBadge";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing } from "lucide-react";
+import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing, Zap, ClipboardList, Plus, ChevronDown, ChevronRight, Save, X, Scale, Edit2 } from "lucide-react";
 import { toast } from "sonner";
 import NudgeManager from "@/components/evonut/NudgeManager";
 
@@ -14,8 +14,10 @@ const TABS = [
   { k: "anamnese", l: "Anamnese", icon: FileText },
   { k: "ia", l: "Análise IA", icon: Brain },
   { k: "antropometria", l: "Antropometria", icon: Activity },
+  { k: "gasto", l: "Gasto Energético", icon: Zap },
   { k: "exames", l: "Exames", icon: FlaskConical },
   { k: "plano", l: "Plano Alimentar", icon: Utensils },
+  { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
   { k: "lembretes", l: "Lembretes", icon: BellRing },
   { k: "comparativo", l: "Comparativo", icon: Sparkles },
 ];
@@ -47,10 +49,17 @@ export default function PacienteDetalhe() {
               <div className="mt-2"><StatusBadge status={p.status_funil} /></div>
             </div>
           </div>
-          <div className="flex gap-3">
-            <Pill l="Peso" v={p.peso ? `${p.peso} kg` : "—"} />
-            <Pill l="Altura" v={p.altura ? `${p.altura} cm` : "—"} />
-            <Pill l="Objetivo" v={p.objetivo || "—"} />
+          <div className="flex flex-col gap-2 items-end">
+            <div className="flex gap-2">
+              <Pill l="Peso" v={p.peso ? `${p.peso} kg` : "—"} />
+              <Pill l="Altura" v={p.altura ? `${p.altura} cm` : "—"} />
+              <Pill l="Objetivo" v={p.objetivo || "—"} />
+            </div>
+            <div className="flex gap-2 flex-wrap justify-end">
+              <PdfBtn pid={p.id} tipo="anamnese" label="PDF Anamnese" />
+              <PdfBtn pid={p.id} tipo="antropometria" label="PDF Antrop." />
+              <PdfBtn pid={p.id} tipo="exames" label="PDF Exames" />
+            </div>
           </div>
         </div>
       </div>
@@ -72,11 +81,13 @@ export default function PacienteDetalhe() {
         ))}
       </div>
 
-      {tab === "anamnese" && <Anamnese d={d} />}
+      {tab === "anamnese" && <Anamnese d={d} reload={reload} />}
       {tab === "ia" && <IATab d={d} reload={reload} />}
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
+      {tab === "gasto" && <GastoEnergetico d={d} />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
       {tab === "plano" && <PlanoAlimentar d={d} reload={reload} />}
+      {tab === "recordatorio" && <Recordatorio d={d} reload={reload} />}
       {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
       {tab === "comparativo" && <Comparativo id={d.patient.id} />}
     </NutriLayout>
@@ -92,18 +103,232 @@ function Pill({ l, v }) {
   );
 }
 
-function Anamnese({ d }) {
-  const last = d.anamneses?.[0];
-  if (!last) return <div className="evo-card p-8 text-gray-400">Anamnese ainda não preenchida.</div>;
-  const r = last.respostas || {};
+function PdfBtn({ pid, tipo, label }) {
+  const [loading, setLoading] = useState(false);
+  const download = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get(`/patients/${pid}/relatorios/${tipo}`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      const a = document.createElement("a"); a.href = url; a.download = `${tipo}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+    } catch { toast.error(`Erro ao gerar PDF de ${tipo}`); }
+    finally { setLoading(false); }
+  };
   return (
-    <div className="grid md:grid-cols-2 gap-4">
-      {Object.entries(r).map(([k, v]) => (
-        <div key={k} className="evo-card p-4">
-          <div className="text-[11px] uppercase tracking-wider text-gray-500">{k.replaceAll("_", " ")}</div>
-          <div className="mt-1 text-sm whitespace-pre-wrap">{String(v) || "—"}</div>
+    <button onClick={download} disabled={loading} className="evo-btn-ghost text-xs flex items-center gap-1 px-2 py-1">
+      <Download className="w-3 h-3" /> {loading ? "..." : label}
+    </button>
+  );
+}
+
+const ANAMNESE_SECOES = [
+  { key: "dados_sociais", label: "Dados Sociais", campos: [
+    ["estado_civil","Estado civil"],["ocupacao","Ocupação"],["escolaridade","Escolaridade"],
+    ["naturalidade","Naturalidade"],["email","E-mail"],["telefone","Telefone"],
+    ["celular","Celular"],["endereco","Endereço"],["bairro","Bairro"],
+    ["cidade_uf","Cidade/UF"],["cep","CEP"],["redes_sociais","Redes sociais"],
+  ]},
+  { key: "habitos_vida", label: "Hábitos de Vida", campos: [
+    ["restricao_alimentar","Restrição alimentar"],["alcool","Álcool"],
+    ["tabagismo","Tabagismo"],["refeicoes_fora","Refeições fora"],
+    ["pessoas_casa","Pessoas em casa"],["compras_casa","Compras da casa"],
+    ["sal_oleo_mes","Sal/óleo/mês"],["habitos_sono","Hábitos de sono"],
+  ]},
+  { key: "patologias", label: "Patologias e Histórico", campos: [
+    ["sintomas_gerais","Sintomas gerais"],["outros_sintomas","Outros sintomas"],
+    ["lesoes","Lesões"],["cirurgias","Cirurgias"],["patologias","Patologias"],
+    ["medicamentos","Medicamentos"],["historico_familiar","Histórico familiar"],
+  ]},
+  { key: "avaliacao_clinica", label: "Avaliação Clínica", campos: [
+    ["apetite","Apetite"],["mastigacao","Mastigação"],["habito_intestinal","Hábito intestinal"],
+    ["cor_fezes","Cor das fezes"],["formato_fezes","Escala de Bristol (1-7)"],
+    ["habito_urinario","Hábito urinário"],["ingestao_hidrica","Ingestão hídrica"],
+    ["hidratacao_urinaria","Hidratação urinária"],
+  ]},
+  { key: "alimentacao", label: "Alimentação", campos: [
+    ["intolerancia_alimentar","Intolerância alimentar"],["preferencia_alimentar","Preferências"],
+    ["aversao_alimentar","Aversões"],["alergia_alimentar","Alergias"],
+    ["alteracoes_apetite","Alterações de apetite"],["inicio_obesidade","Início da obesidade"],
+    ["dieta_especial","Dieta especial"],["num_refeicoes_dia","Refeições/dia"],["suplementos","Suplementos"],
+  ]},
+  { key: "atividade_fisica", label: "Atividade Física", campos: [
+    ["atividades_praticadas","Atividades praticadas"],["intensidade_atividades","Intensidade"],
+    ["horario_atividades","Horário"],["duracao_atividades","Duração"],
+    ["frequencia_semana","Frequência/semana"],["sintomas_durante","Sintomas durante"],
+    ["sintomas_apos","Sintomas após"],["hidratacao_atividade","Hidratação"],
+    ["alimentacao_pre","Alimentação pré"],["alimentacao_durante","Alimentação durante"],
+    ["alimentacao_pos","Alimentação pós"],
+  ]},
+  { key: "mulheres", label: "Dados Femininos", campos: [
+    ["ultima_menstruacao","Última menstruação"],["tpm","TPM"],
+    ["ciclo_menstrual","Ciclo menstrual"],["contraceptivo","Contraceptivo"],
+    ["colicas","Cólicas"],["lactante","Lactante"],["menopausa","Menopausa"],
+  ]},
+];
+
+function Anamnese({ d, reload }) {
+  const [anam, setAnam] = useState(d.anamnese_v2 || {});
+  const [openSec, setOpenSec] = useState(null);
+  const [editSec, setEditSec] = useState(null);
+  const [draft, setDraft] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [obs, setObs] = useState("");
+  const [obsSecao, setObsSecao] = useState("dados_iniciais");
+
+  const startEdit = (secKey) => {
+    const sec = ANAMNESE_SECOES.find(s => s.key === secKey);
+    const init = {};
+    if (sec) sec.campos.forEach(([k]) => { init[k] = anam[k] || ""; });
+    setDraft(init);
+    setEditSec(secKey);
+  };
+
+  const save = async (secKey) => {
+    setSaving(true);
+    try {
+      const { data } = await api.patch(`/patients/${d.patient.id}/anamnese/${secKey}`, { dados: draft });
+      setAnam(data);
+      setEditSec(null);
+      toast.success("Seção salva!");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setSaving(false); }
+  };
+
+  const addObs = async () => {
+    if (!obs.trim()) return;
+    try {
+      await api.post(`/patients/${d.patient.id}/anamnese/observacoes/${obsSecao}`, { texto: obs });
+      const { data } = await api.get(`/patients/${d.patient.id}/anamnese-v2`);
+      setAnam(data);
+      setObs("");
+      toast.success("Observação adicionada!");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    }
+  };
+
+  const old = d.anamneses?.[0];
+
+  return (
+    <div className="space-y-3">
+      {old && !d.anamnese_v2?.criado_em && (
+        <div className="evo-card p-4 border-evo-amber/30 bg-evo-amber/5">
+          <div className="text-xs text-evo-amber font-semibold mb-2">Anamnese da pré-consulta (formato legado)</div>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {Object.entries(old.respostas || {}).map(([k, v]) => (
+              <div key={k} className="text-xs">
+                <span className="text-gray-500">{k.replaceAll("_"," ")}: </span>
+                <span className="text-gray-200">{String(v)}</span>
+              </div>
+            ))}
+          </div>
         </div>
-      ))}
+      )}
+
+      {ANAMNESE_SECOES.map((sec) => {
+        const isOpen = openSec === sec.key;
+        const isEdit = editSec === sec.key;
+        const filled = sec.campos.filter(([k]) => anam[k]).length;
+        const obsKey = `obs_${sec.key === "dados_sociais" ? "dados_iniciais" : sec.key}`;
+        const obsEntries = anam[obsKey] || [];
+
+        return (
+          <div key={sec.key} className="evo-card overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between p-4 text-left hover:bg-white/[0.02] transition-colors"
+              onClick={() => setOpenSec(isOpen ? null : sec.key)}
+            >
+              <div className="flex items-center gap-3">
+                {isOpen ? <ChevronDown className="w-4 h-4 text-evo-purple" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                <span className="font-semibold text-sm">{sec.label}</span>
+                <span className="text-[11px] text-gray-500">{filled}/{sec.campos.length} campos</span>
+                {obsEntries.length > 0 && <span className="text-[10px] bg-evo-teal/15 text-evo-teal px-2 py-0.5 rounded-full">{obsEntries.length} obs.</span>}
+              </div>
+              {isOpen && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); isEdit ? setEditSec(null) : startEdit(sec.key); }}
+                  className="text-xs flex items-center gap-1 px-3 py-1 rounded-md border border-white/10 hover:border-evo-purple/40 transition-colors"
+                >
+                  {isEdit ? <><X className="w-3 h-3" /> Cancelar</> : <><Edit2 className="w-3 h-3" /> Editar</>}
+                </button>
+              )}
+            </button>
+
+            {isOpen && (
+              <div className="px-4 pb-4 space-y-4">
+                {isEdit ? (
+                  <>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      {sec.campos.map(([k, label]) => (
+                        <div key={k}>
+                          <label className="evo-label">{label}</label>
+                          <input
+                            className="evo-input"
+                            value={draft[k] || ""}
+                            onChange={(e) => setDraft(prev => ({ ...prev, [k]: e.target.value }))}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => save(sec.key)} disabled={saving} className="evo-btn-primary">
+                      <Save className="w-4 h-4" /> {saving ? "Salvando..." : "Salvar seção"}
+                    </button>
+                  </>
+                ) : (
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    {sec.campos.map(([k, label]) => anam[k] ? (
+                      <div key={k} className="text-sm">
+                        <span className="text-gray-500 text-[11px]">{label}: </span>
+                        <span className="text-gray-200">{String(anam[k])}</span>
+                      </div>
+                    ) : null)}
+                    {filled === 0 && <div className="text-sm text-gray-500 col-span-2">Seção não preenchida. Clique em Editar.</div>}
+                  </div>
+                )}
+
+                {obsEntries.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold">Observações</div>
+                    {obsEntries.map((o, i) => (
+                      <div key={i} className="text-xs p-2 rounded bg-evo-bg border border-white/[0.04]">
+                        <span className="text-gray-500 mr-2">{new Date(o.data).toLocaleDateString("pt-BR")}</span>
+                        {o.texto}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="evo-card p-4">
+        <div className="text-sm font-semibold mb-3">Adicionar observação</div>
+        <div className="flex gap-2 flex-wrap items-end">
+          <div>
+            <label className="evo-label">Seção</label>
+            <select className="evo-input" value={obsSecao} onChange={(e) => setObsSecao(e.target.value)}>
+              <option value="dados_iniciais">Dados iniciais</option>
+              <option value="habitos_vida">Hábitos de vida</option>
+              <option value="patologias">Patologias</option>
+              <option value="avaliacao_clinica">Avaliação clínica</option>
+              <option value="alimentacao">Alimentação</option>
+              <option value="atividade_fisica">Atividade física</option>
+              <option value="mulheres">Dados femininos</option>
+            </select>
+          </div>
+          <div className="flex-1 min-w-[200px]">
+            <label className="evo-label">Observação</label>
+            <input className="evo-input" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Digite a observação..." />
+          </div>
+          <button onClick={addObs} className="evo-btn-primary" disabled={!obs.trim()}>
+            <Plus className="w-4 h-4" /> Adicionar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -141,41 +366,55 @@ function IATab({ d, reload }) {
   );
 }
 
+const DOBRAS_FIELDS = {
+  pollock7: ["subescapular","triceps","peitoral","axilar","suprailiaca","abdominal","coxa"],
+  pollock3_M: ["peitoral","abdominal","coxa"],
+  pollock3_F: ["triceps","suprailiaca","coxa"],
+  faulkner: ["triceps","subescapular","suprailiaca","abdominal"],
+};
+const PERIM_FIELDS = [
+  ["braco_relaxado_d","Braco Rel. D"],["cintura","Cintura"],["abdomen","Abdômen"],
+  ["quadril","Quadril"],["coxa_d","Coxa D"],["panturrilha_d","Panturrilha D"],
+  ["torax","Tórax"],["pescoco","Pescoço"],
+];
+
 function Antropometria({ d, reload }) {
   const [form, setForm] = useState({
-    peso: d.patient.peso || "",
-    altura: d.patient.altura || "",
-    idade: 30, sexo: d.patient.sexo || "F",
+    peso: d.patient.peso || "", altura: d.patient.altura || "",
+    idade: 30, sexo: d.patient.sexo || "F", sexo_num: d.patient.sexo === "M" ? 1 : 2,
+    gestante: false, ig_semanas: "",
     nivel_atividade: 1.55, objetivo: d.patient.objetivo || "manutencao",
-    protocolo_dobras: "pollock3", dobras: {}, perimetria: {},
+    protocolo_dobras: "pollock3", protocolo_tmb: "mifflin_st_jeor",
+    dobras: {}, perimetria: {},
   });
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }));
   const setD = (k, v) => setForm((s) => ({ ...s, dobras: { ...s.dobras, [k]: v } }));
   const setP = (k, v) => setForm((s) => ({ ...s, perimetria: { ...s.perimetria, [k]: v } }));
 
   const dobrasFields = useMemo(() => {
-    if (form.protocolo_dobras === "pollock7") return ["subescapular", "triceps", "peitoral", "axilar", "suprailiaca", "abdominal", "coxa"];
-    if (form.protocolo_dobras === "pollock3") return form.sexo === "M" ? ["peitoral", "abdominal", "coxa"] : ["triceps", "suprailiaca", "coxa"];
-    if (form.protocolo_dobras === "faulkner") return ["triceps", "subescapular", "suprailiaca", "abdominal"];
+    if (form.protocolo_dobras === "pollock7") return DOBRAS_FIELDS.pollock7;
+    if (form.protocolo_dobras === "pollock3") return form.sexo === "M" ? DOBRAS_FIELDS.pollock3_M : DOBRAS_FIELDS.pollock3_F;
+    if (form.protocolo_dobras === "faulkner") return DOBRAS_FIELDS.faulkner;
     return [];
   }, [form.protocolo_dobras, form.sexo]);
 
-  const perimFields = ["braco", "torax", "cintura", "abdomen", "quadril", "coxa", "panturrilha"];
   const [saving, setSaving] = useState(false);
-
   const save = async () => {
     setSaving(true);
     try {
       const payload = {
         peso: parseFloat(form.peso), altura: parseFloat(form.altura),
         idade: parseInt(form.idade), sexo: form.sexo,
+        sexo_num: form.sexo === "M" ? 1 : 2,
+        gestante: form.gestante,
+        ig_semanas: form.ig_semanas ? parseInt(form.ig_semanas) : null,
         nivel_atividade: parseFloat(form.nivel_atividade), objetivo: form.objetivo,
-        protocolo_dobras: form.protocolo_dobras,
+        protocolo_dobras: form.protocolo_dobras, protocolo_tmb: form.protocolo_tmb,
         dobras: Object.fromEntries(Object.entries(form.dobras).map(([k, v]) => [k, parseFloat(v) || 0])),
-        perimetria: Object.fromEntries(Object.entries(form.perimetria).map(([k, v]) => [k, parseFloat(v) || 0])),
+        perimetria: Object.fromEntries(Object.entries(form.perimetria).filter(([,v]) => v).map(([k, v]) => [k, parseFloat(v)])),
       };
-      const { data } = await api.post(`/patients/${d.patient.id}/evaluations`, payload);
-      toast.success(`Avaliação salva. % Gordura: ${data.composicao.pct_gordura ?? "—"}%`);
+      const { data } = await api.post(`/patients/${d.patient.id}/evaluations-v2`, payload);
+      toast.success(`Avaliação salva. IMC: ${data.composicao.imc} (${data.composicao.imc_classificacao})`);
       reload();
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
@@ -183,9 +422,10 @@ function Antropometria({ d, reload }) {
   };
 
   const evaluations = d.evaluations || [];
+  const last = evaluations[0];
+  const comp = last?.composicao || {};
   const chartData = [...evaluations].reverse().map((e, i) => ({
-    name: `Av${i + 1}`,
-    peso: e.peso,
+    name: `Av${i + 1}`, peso: e.peso,
     pct_gordura: e.composicao?.pct_gordura,
     massa_magra: e.composicao?.massa_magra,
   }));
@@ -199,46 +439,44 @@ function Antropometria({ d, reload }) {
             <Inp l="Peso (kg)" v={form.peso} onChange={(v) => set("peso", v)} t="number" tid="anth-peso" />
             <Inp l="Altura (cm)" v={form.altura} onChange={(v) => set("altura", v)} t="number" tid="anth-altura" />
             <Inp l="Idade" v={form.idade} onChange={(v) => set("idade", v)} t="number" tid="anth-idade" />
-            <Sel l="Sexo" v={form.sexo} onChange={(v) => set("sexo", v)} opts={[["M", "M"], ["F", "F"]]} tid="anth-sexo" />
+            <Sel l="Sexo" v={form.sexo} onChange={(v) => set("sexo", v)} opts={[["M","Masculino"],["F","Feminino"]]} tid="anth-sexo" />
+            <Sel l="Protocolo TMB" v={form.protocolo_tmb} onChange={(v) => set("protocolo_tmb", v)}
+              opts={[["mifflin_st_jeor","Mifflin St Jeor"],["harris_benedict_1984","Harris-Benedict 1984"],["harris_benedict_1919","Harris-Benedict 1919"],["fao_who_1985","FAO/WHO 1985"],["fao_who_2004","FAO/WHO 2004"],["cunningham","Cunningham"],["tinsley_peso","Tinsley Peso"]]} tid="anth-tmb" />
             <Sel l="Nível atividade" v={form.nivel_atividade} onChange={(v) => set("nivel_atividade", v)}
-              opts={[[1.2, "Sedentário"], [1.375, "Leve"], [1.55, "Moderado"], [1.725, "Intenso"], [1.9, "Atleta"]]} tid="anth-atividade" />
-            <Sel l="Objetivo" v={form.objetivo} onChange={(v) => set("objetivo", v)}
-              opts={[["emagrecimento", "Emagrecimento"], ["manutencao", "Manutenção"], ["hipertrofia", "Hipertrofia"]]} tid="anth-objetivo" />
+              opts={[[1.2,"Sedentário"],[1.375,"Leve"],[1.55,"Moderado"],[1.725,"Intenso"],[1.9,"Atleta"]]} tid="anth-atividade" />
+          </div>
+          <div className="flex items-center gap-3 mt-3">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={form.gestante} onChange={(e) => set("gestante", e.target.checked)} className="w-4 h-4" />
+              Gestante
+            </label>
+            {form.gestante && (
+              <Inp l="IG (semanas)" v={form.ig_semanas} onChange={(v) => set("ig_semanas", v)} t="number" tid="anth-ig" />
+            )}
           </div>
 
           <div className="mt-5">
             <label className="evo-label">Protocolo de dobras</label>
             <div className="flex gap-2 flex-wrap">
-              {[
-                ["pollock7", "Pollock 7"],
-                ["pollock3", "Pollock 3"],
-                ["faulkner", "Faulkner"],
-              ].map(([k, l]) => (
-                <button
-                  key={k}
-                  data-testid={`proto-${k}`}
-                  onClick={() => set("protocolo_dobras", k)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-                    form.protocolo_dobras === k
-                      ? "bg-evo-purple/20 border-evo-purple/40 text-white"
-                      : "border-white/[0.08] text-gray-300 hover:border-white/[0.2]"
-                  }`}
-                >{l}</button>
+              {[["pollock7","Pollock 7"],["pollock3","Pollock 3"],["faulkner","Faulkner"]].map(([k, l]) => (
+                <button key={k} data-testid={`proto-${k}`} onClick={() => set("protocolo_dobras", k)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${form.protocolo_dobras === k ? "bg-evo-purple/20 border-evo-purple/40 text-white" : "border-white/[0.08] text-gray-300 hover:border-white/[0.2]"}`}>
+                  {l}
+                </button>
               ))}
             </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {dobrasFields.map((k) => (
-              <Inp key={k} l={`${k} (mm)`} v={form.dobras[k] || ""} onChange={(v) => setD(k, v)} t="number" tid={`dobra-${k}`} />
-            ))}
+            <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {dobrasFields.map((k) => (
+                <Inp key={k} l={`${k} (mm)`} v={form.dobras[k] || ""} onChange={(v) => setD(k, v)} t="number" tid={`dobra-${k}`} />
+              ))}
+            </div>
           </div>
 
           <div className="mt-5">
             <div className="evo-label">Perimetria (cm)</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {perimFields.map((k) => (
-                <Inp key={k} l={k} v={form.perimetria[k] || ""} onChange={(v) => setP(k, v)} t="number" tid={`perim-${k}`} />
+              {PERIM_FIELDS.map(([k, l]) => (
+                <Inp key={k} l={l} v={form.perimetria[k] || ""} onChange={(v) => setP(k, v)} t="number" tid={`perim-${k}`} />
               ))}
             </div>
           </div>
@@ -251,18 +489,28 @@ function Antropometria({ d, reload }) {
 
       <div className="lg:col-span-2 space-y-4">
         <div className="evo-card p-5">
-          <h3 className="evo-h3 mb-4">Composição (última)</h3>
-          {evaluations[0] ? (
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <Metric l="IMC" v={evaluations[0].composicao.imc} tag={evaluations[0].composicao.imc_classificacao} />
-              <Metric l="TMB" v={`${evaluations[0].composicao.tmb_mifflin} kcal`} />
-              <Metric l="GET" v={`${evaluations[0].composicao.get_kcal} kcal`} />
-              <Metric l="% Gordura" v={evaluations[0].composicao.pct_gordura ?? "—"} />
-              <Metric l="Massa Magra" v={evaluations[0].composicao.massa_magra ?? "—"} />
-              <Metric l="Massa Gorda" v={evaluations[0].composicao.massa_gorda ?? "—"} />
+          <h3 className="evo-h3 mb-3">Resultados (última avaliação)</h3>
+          {last ? (
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <Metric l="IMC" v={comp.imc} tag={comp.imc_classificacao} />
+              <Metric l="Peso Ideal" v={comp.peso_ideal_min ? `${comp.peso_ideal_min}–${comp.peso_ideal_max} kg` : "—"} />
+              <Metric l="TMB" v={comp.tmb ? `${comp.tmb} kcal` : "—"} />
+              <Metric l="GET" v={comp.get_kcal ? `${comp.get_kcal} kcal` : "—"} />
+              <Metric l="% Gordura" v={comp.pct_gordura ?? "—"} tag={comp.pct_gordura_classificacao} />
+              <Metric l="Massa Magra" v={comp.massa_magra ? `${comp.massa_magra} kg` : "—"} />
+              <Metric l="Massa Gorda" v={comp.massa_gorda ? `${comp.massa_gorda} kg` : "—"} />
+              <Metric l="Peso Residual" v={comp.peso_residual ? `${comp.peso_residual} kg` : "—"} />
+              {comp.ic != null && <Metric l="Índice Conicidade" v={comp.ic} tag={comp.ic_classificacao} />}
+              {comp.rcq != null && <Metric l="RCQ" v={comp.rcq} tag={comp.rcq_risco ? "Risco" : "Normal"} />}
+              {comp.amb != null && <Metric l="AMB (cm²)" v={comp.amb} />}
+              {comp.agb != null && <Metric l="AGB (cm²)" v={comp.agb} />}
+              {comp.imc_gestacional_classificacao && (
+                <Metric l="IMC Gestacional" v={comp.imc_gestacional_classificacao} />
+              )}
             </div>
           ) : <div className="text-sm text-gray-500">Sem avaliação ainda.</div>}
         </div>
+
         <div className="evo-card p-5">
           <h3 className="evo-h3 mb-4">Evolução</h3>
           {chartData.length === 0 ? (
@@ -316,6 +564,24 @@ function Metric({ l, v, tag }) {
 }
 
 function PlanoAlimentar({ d, reload }) {
+  const [subTab, setSubTab] = useState("manual");
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        {[["manual","Plano Manual"],["ia","IA"]].map(([k,l]) => (
+          <button key={k} onClick={() => setSubTab(k)}
+            className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-all ${subTab===k?"bg-evo-purple/15 text-white border-evo-purple/40":"border-white/[0.06] text-gray-400 hover:text-white"}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {subTab === "manual" && <PlanoManual d={d} reload={reload} />}
+      {subTab === "ia" && <PlanoIA d={d} reload={reload} />}
+    </div>
+  );
+}
+
+function PlanoIA({ d, reload }) {
   const [obj, setObj] = useState(d.patient.objetivo || "manutencao");
   const [restr, setRestr] = useState("");
   const [loading, setLoading] = useState(false);
@@ -413,6 +679,622 @@ function Macro({ l, v, pct, color }) {
   );
 }
 
+// ── Plano Manual ─────────────────────────────────────────────────
+
+const REFEICOES_PADRAO = ["Café da manhã","Lanche da manhã","Almoço","Lanche da tarde","Jantar","Ceia"];
+
+function PlanoManual({ d }) {
+  const pid = d.patient.id;
+  const [planos, setPlanos] = useState([]);
+  const [sel, setSel] = useState(null);
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [foodQuery, setFoodQuery] = useState("");
+  const [foodResults, setFoodResults] = useState([]);
+  const [addTo, setAddTo] = useState(null); // refIndex
+
+  const loadPlanos = async () => {
+    try {
+      const { data } = await api.get(`/patients/${pid}/planos-manuais`);
+      setPlanos(data);
+      if (data.length && !sel) setSel(data[0]);
+    } catch {}
+  };
+  useEffect(() => { loadPlanos(); }, [pid]);
+
+  const searchFood = async (q) => {
+    setFoodQuery(q);
+    if (q.length < 2) { setFoodResults([]); return; }
+    try {
+      const { data } = await api.get(`/alimentos?q=${encodeURIComponent(q)}&limit=20`);
+      setFoodResults(data);
+    } catch {}
+  };
+
+  const newDraft = () => setDraft({
+    titulo: "Plano Alimentar", objetivo: "", meta_kcal: "", meta_proteina_g: "", meta_carboidrato_g: "", meta_lipidio_g: "",
+    refeicoes: REFEICOES_PADRAO.map(n => ({ nome: n, horario: "", alimentos: [] })),
+    observacoes: "",
+  });
+
+  const addFood = (refIdx, alim) => {
+    const qtd = parseFloat(alim.porcao_padrao_g) || 100;
+    setDraft(prev => {
+      const refs = [...prev.refeicoes];
+      refs[refIdx] = { ...refs[refIdx], alimentos: [...refs[refIdx].alimentos, { alimento_id: alim.id, quantidade_g: qtd, _nome: alim.nome }] };
+      return { ...prev, refeicoes: refs };
+    });
+    setFoodResults([]); setFoodQuery(""); setAddTo(null);
+  };
+
+  const removeFood = (refIdx, fIdx) => {
+    setDraft(prev => {
+      const refs = [...prev.refeicoes];
+      refs[refIdx] = { ...refs[refIdx], alimentos: refs[refIdx].alimentos.filter((_,i) => i !== fIdx) };
+      return { ...prev, refeicoes: refs };
+    });
+  };
+
+  const updateFoodQtd = (refIdx, fIdx, val) => {
+    setDraft(prev => {
+      const refs = [...prev.refeicoes];
+      const alims = [...refs[refIdx].alimentos];
+      alims[fIdx] = { ...alims[fIdx], quantidade_g: parseFloat(val) || 0 };
+      refs[refIdx] = { ...refs[refIdx], alimentos: alims };
+      return { ...prev, refeicoes: refs };
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const payload = { ...draft, meta_kcal: draft.meta_kcal || null, meta_proteina_g: draft.meta_proteina_g || null, meta_carboidrato_g: draft.meta_carboidrato_g || null, meta_lipidio_g: draft.meta_lipidio_g || null };
+      let saved;
+      if (editMode && sel?.id) {
+        const { data } = await api.put(`/patients/${pid}/planos-manuais/${sel.id}`, payload);
+        saved = data;
+      } else {
+        const { data } = await api.post(`/patients/${pid}/planos-manuais`, payload);
+        saved = data;
+      }
+      toast.success("Plano salvo!");
+      setDraft(null); setEditMode(false);
+      await loadPlanos();
+      setSel(saved);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Erro ao salvar plano");
+    } finally { setSaving(false); }
+  };
+
+  const deletePlano = async (pmid) => {
+    if (!window.confirm("Excluir este plano?")) return;
+    await api.delete(`/patients/${pid}/planos-manuais/${pmid}`);
+    toast.success("Plano excluído");
+    setSel(null); await loadPlanos();
+  };
+
+  const downloadPdf = async (pmid, nome) => {
+    try {
+      const r = await api.get(`/patients/${pid}/relatorios/plano-alimentar/${pmid}`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      const a = document.createElement("a"); a.href = url; a.download = `plano-${(nome||"").replace(/\s+/g,"-")}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+    } catch { toast.error("Erro ao gerar PDF"); }
+  };
+
+  if (draft !== null) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="evo-h3">{editMode ? "Editar Plano" : "Novo Plano"}</h3>
+          <div className="flex gap-2">
+            <button onClick={() => { setDraft(null); setEditMode(false); }} className="evo-btn-ghost">Cancelar</button>
+            <button onClick={save} disabled={saving} className="evo-btn-primary">{saving ? "Salvando..." : "Salvar Plano"}</button>
+          </div>
+        </div>
+        <div className="evo-card p-4 grid sm:grid-cols-3 gap-3">
+          <div><label className="evo-label">Título</label><input className="evo-input" value={draft.titulo} onChange={e => setDraft(p=>({...p,titulo:e.target.value}))} /></div>
+          <div><label className="evo-label">Meta kcal/dia</label><input type="number" className="evo-input" value={draft.meta_kcal} onChange={e => setDraft(p=>({...p,meta_kcal:e.target.value}))} /></div>
+          <div><label className="evo-label">Meta Proteína (g)</label><input type="number" className="evo-input" value={draft.meta_proteina_g} onChange={e => setDraft(p=>({...p,meta_proteina_g:e.target.value}))} /></div>
+          <div><label className="evo-label">Meta CHO (g)</label><input type="number" className="evo-input" value={draft.meta_carboidrato_g} onChange={e => setDraft(p=>({...p,meta_carboidrato_g:e.target.value}))} /></div>
+          <div><label className="evo-label">Meta Lip (g)</label><input type="number" className="evo-input" value={draft.meta_lipidio_g} onChange={e => setDraft(p=>({...p,meta_lipidio_g:e.target.value}))} /></div>
+          <div><label className="evo-label">Objetivo/Observações</label><input className="evo-input" value={draft.observacoes} onChange={e => setDraft(p=>({...p,observacoes:e.target.value}))} /></div>
+        </div>
+        {draft.refeicoes.map((ref, ri) => (
+          <div key={ri} className="evo-card p-4">
+            <div className="flex items-center gap-3 mb-3 flex-wrap">
+              <input className="evo-input w-36 text-sm font-semibold" value={ref.nome} onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],nome:e.target.value}; return {...p,refeicoes:rs}; })} />
+              <input className="evo-input w-24 text-sm" placeholder="Horário" value={ref.horario} onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],horario:e.target.value}; return {...p,refeicoes:rs}; })} />
+            </div>
+            <div className="space-y-1 mb-3">
+              {ref.alimentos.map((a, fi) => (
+                <div key={fi} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1 text-gray-300">{a._nome || a.alimento_id}</span>
+                  <input type="number" className="evo-input w-20 text-xs" value={a.quantidade_g} onChange={e => updateFoodQtd(ri, fi, e.target.value)} />
+                  <span className="text-gray-500 text-xs">g</span>
+                  <button onClick={() => removeFood(ri, fi)} className="text-evo-coral hover:text-red-400"><X className="w-3.5 h-3.5" /></button>
+                </div>
+              ))}
+            </div>
+            {addTo === ri ? (
+              <div className="relative">
+                <input autoFocus className="evo-input text-sm" placeholder="Buscar alimento..." value={foodQuery} onChange={e => searchFood(e.target.value)} onBlur={() => setTimeout(() => { setAddTo(null); setFoodQuery(""); setFoodResults([]); }, 150)} />
+                {foodResults.length > 0 && (
+                  <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-evo-card border border-white/10 rounded-lg shadow-xl max-h-52 overflow-y-auto">
+                    {foodResults.map(f => (
+                      <button key={f.id} onMouseDown={() => addFood(ri, f)} className="w-full text-left px-3 py-2 text-sm hover:bg-evo-purple/10 flex items-center justify-between gap-2">
+                        <span>{f.nome}</span>
+                        <span className="text-xs text-gray-500">{f.categoria} · {f.porcao_padrao_g}g · {f.por_100g?.energia_kcal ?? "—"} kcal/100g</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button onClick={() => setAddTo(ri)} className="text-xs text-evo-purple hover:text-purple-300 flex items-center gap-1"><Plus className="w-3 h-3" /> Adicionar alimento</button>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid lg:grid-cols-5 gap-5">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="evo-card p-4">
+          <button onClick={newDraft} className="evo-btn-primary w-full"><Plus className="w-4 h-4" /> Novo Plano</button>
+        </div>
+        <div className="evo-card p-4">
+          <h3 className="evo-h3 mb-3">Planos salvos</h3>
+          {planos.length === 0 ? <div className="text-sm text-gray-500">Nenhum plano criado.</div> : (
+            <div className="space-y-2">
+              {planos.map(p => (
+                <button key={p.id} onClick={() => setSel(p)} className={`w-full text-left p-3 rounded-lg border transition-all ${sel?.id===p.id?"border-evo-purple/50 bg-evo-purple/10":"border-white/[0.06] hover:border-white/20 bg-evo-bg"}`}>
+                  <div className="font-semibold text-sm">{p.titulo}</div>
+                  <div className="text-[11px] text-gray-500">{p.criado_em ? new Date(p.criado_em).toLocaleDateString("pt-BR") : "—"}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="lg:col-span-3">
+        {!sel ? (
+          <div className="evo-card p-12 text-center text-gray-500 text-sm"><Utensils className="w-7 h-7 mx-auto mb-3 text-gray-600" />Selecione ou crie um plano.</div>
+        ) : (
+          <PlanoDetail plano={sel} onEdit={() => { setDraft({ ...sel, refeicoes: (sel.refeicoes||[]).map(r => ({...r, alimentos: (r.alimentos||[]).map(a => ({...a, _nome: a.alimento_nome||a.alimento_id}))})) }); setEditMode(true); }} onDelete={() => deletePlano(sel.id)} onPdf={() => downloadPdf(sel.id, sel.titulo)} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlanoDetail({ plano, onEdit, onDelete, onPdf }) {
+  return (
+    <div className="evo-card p-5 space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h3 className="evo-h3">{plano.titulo}</h3>
+        <div className="flex gap-2">
+          <button onClick={onPdf} className="evo-btn-secondary text-xs"><Download className="w-3.5 h-3.5" /> PDF</button>
+          <button onClick={onEdit} className="evo-btn-secondary text-xs"><Edit2 className="w-3.5 h-3.5" /> Editar</button>
+          <button onClick={onDelete} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3.5 h-3.5" /> Excluir</button>
+        </div>
+      </div>
+      {plano.totais_dia && (
+        <div className="grid grid-cols-3 gap-2">
+          <TotalPill l="Energia" v={`${plano.totais_dia.energia_kcal} kcal`} />
+          <TotalPill l="Proteínas" v={`${plano.totais_dia.proteinas_g} g`} />
+          <TotalPill l="Carboidratos" v={`${plano.totais_dia.carboidratos_g} g`} />
+          <TotalPill l="Lipídios" v={`${plano.totais_dia.lipidios_g} g`} />
+          <TotalPill l="Fibras" v={`${plano.totais_dia.fibras_g} g`} />
+          <TotalPill l="Sódio" v={`${plano.totais_dia.sodio_mg} mg`} />
+        </div>
+      )}
+      {(plano.refeicoes || []).map((ref, ri) => (
+        <div key={ri} className="border border-white/[0.06] rounded-lg overflow-hidden">
+          <div className="bg-evo-purple/10 px-4 py-2 flex items-center justify-between">
+            <span className="font-semibold text-sm">{ref.nome}{ref.horario ? ` — ${ref.horario}` : ""}</span>
+            <span className="text-xs text-gray-400">{ref.totais?.energia_kcal ?? 0} kcal</span>
+          </div>
+          <table className="w-full text-xs">
+            <thead><tr className="text-gray-500 border-b border-white/[0.04]">
+              <th className="text-left px-3 py-1.5">Alimento</th><th className="px-2">Qtd</th><th className="px-2">kcal</th><th className="px-2">Prot</th><th className="px-2">CHO</th><th className="px-2">Lip</th>
+            </tr></thead>
+            <tbody>
+              {(ref.alimentos || []).map((a, ai) => (
+                <tr key={ai} className="border-b border-white/[0.02] hover:bg-white/[0.02]">
+                  <td className="px-3 py-1.5 text-gray-200">{a.alimento_nome || a.alimento_id}</td>
+                  <td className="px-2 text-center text-gray-400">{a.quantidade_g}g</td>
+                  <td className="px-2 text-center">{a.nutrientes?.energia_kcal ?? "—"}</td>
+                  <td className="px-2 text-center">{a.nutrientes?.proteinas_g ?? "—"}</td>
+                  <td className="px-2 text-center">{a.nutrientes?.carboidratos_g ?? "—"}</td>
+                  <td className="px-2 text-center">{a.nutrientes?.lipidios_g ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TotalPill({ l, v }) {
+  return (
+    <div className="p-2 rounded bg-evo-bg border border-white/[0.04] text-center">
+      <div className="text-[9px] uppercase tracking-wider text-gray-500">{l}</div>
+      <div className="font-semibold text-sm mt-0.5">{v}</div>
+    </div>
+  );
+}
+
+// ── Gasto Energético ─────────────────────────────────────────────
+
+const PROTOCOLOS_TMB = [
+  ["mifflin_st_jeor","Mifflin St Jeor"],
+  ["harris_benedict_1984","Harris-Benedict (1984)"],
+  ["harris_benedict_1919","Harris-Benedict (1919)"],
+  ["fao_who_1985","FAO/WHO (1985)"],
+  ["fao_who_2004","FAO/WHO (2004)"],
+  ["cunningham","Cunningham (requer MLG)"],
+  ["tinsley_peso","Tinsley (por Peso)"],
+  ["tinsley_mlg","Tinsley (por MLG)"],
+];
+
+function GastoEnergetico({ d }) {
+  const p = d.patient;
+  const lastEval = (d.evaluations || [])[0];
+  const comp = lastEval?.composicao || {};
+
+  const [form, setForm] = useState({
+    protocolo: "mifflin_st_jeor",
+    peso: p.peso || lastEval?.peso || "",
+    altura_cm: p.altura || lastEval?.altura || "",
+    idade: 30,
+    sexo_num: p.sexo === "M" ? 1 : 2,
+    mlg_kg: comp.massa_magra || "",
+    naf_codigo: 2,
+    naf_manual: "",
+    fi_codigo: "",
+    fi_manual: "",
+  });
+  const set = (k, v) => setForm(s => ({ ...s, [k]: v }));
+
+  const [nafOpts, setNafOpts] = useState([]);
+  const [fiOpts, setFiOpts] = useState([]);
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // Venta
+  const [venta, setVenta] = useState({ peso_desejado: "", prazo_dias: 30 });
+  const [ventaResult, setVentaResult] = useState(null);
+
+  useEffect(() => {
+    api.get(`/referencias/naf?protocolo=${form.protocolo}&sexo=${form.sexo_num}`)
+      .then(r => setNafOpts(r.data)).catch(() => {});
+    api.get("/referencias/fatores-injuria")
+      .then(r => setFiOpts(r.data)).catch(() => {});
+  }, [form.protocolo, form.sexo_num]);
+
+  const calcular = async () => {
+    setLoading(true);
+    try {
+      const tmbRes = await api.post("/calculos/tmb", {
+        protocolo: form.protocolo,
+        peso: parseFloat(form.peso),
+        altura_cm: parseFloat(form.altura_cm),
+        idade: parseInt(form.idade),
+        sexo_num: parseInt(form.sexo_num),
+        mlg_kg: form.mlg_kg ? parseFloat(form.mlg_kg) : null,
+      });
+      const tmb = tmbRes.data.tmb;
+
+      const getRes = await api.post("/calculos/get", {
+        tmb,
+        naf_codigo: form.naf_manual ? null : parseInt(form.naf_codigo),
+        naf_manual: form.naf_manual ? parseFloat(form.naf_manual) : null,
+        fi_codigo: form.fi_codigo ? parseInt(form.fi_codigo) : null,
+        fi_manual: form.fi_manual ? parseFloat(form.fi_manual) : null,
+        protocolo_tmb: form.protocolo,
+        sexo_num: parseInt(form.sexo_num),
+      });
+      setResult({ ...tmbRes.data, ...getRes.data });
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setLoading(false); }
+  };
+
+  const calcVenta = async () => {
+    if (!venta.peso_desejado || !form.peso) return;
+    try {
+      const r = await api.post("/calculos/venta", {
+        peso_atual: parseFloat(form.peso),
+        peso_desejado: parseFloat(venta.peso_desejado),
+        prazo_dias: parseInt(venta.prazo_dias),
+      });
+      setVentaResult(r.data);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    }
+  };
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-5">
+      <div className="space-y-4">
+        <div className="evo-card p-5">
+          <h3 className="evo-h3 mb-4">Cálculo de TMB / GET</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <label className="evo-label">Protocolo TMB</label>
+              <select className="evo-input" value={form.protocolo} onChange={e => set("protocolo", e.target.value)}>
+                {PROTOCOLOS_TMB.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </div>
+            <Inp l="Peso (kg)" v={form.peso} onChange={v => set("peso", v)} t="number" />
+            <Inp l="Altura (cm)" v={form.altura_cm} onChange={v => set("altura_cm", v)} t="number" />
+            <Inp l="Idade" v={form.idade} onChange={v => set("idade", v)} t="number" />
+            <div>
+              <label className="evo-label">Sexo</label>
+              <select className="evo-input" value={form.sexo_num} onChange={e => set("sexo_num", e.target.value)}>
+                <option value={1}>Masculino</option>
+                <option value={2}>Feminino</option>
+              </select>
+            </div>
+            {(form.protocolo === "cunningham" || form.protocolo === "tinsley_mlg") && (
+              <div className="col-span-2">
+                <Inp l="MLG — Massa Livre de Gordura (kg)" v={form.mlg_kg} onChange={v => set("mlg_kg", v)} t="number" />
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <div>
+              <label className="evo-label">NAF — Nível de Atividade Física</label>
+              <select className="evo-input" value={form.naf_codigo} onChange={e => set("naf_codigo", e.target.value)}>
+                {nafOpts.map(o => <option key={o.codigo} value={o.codigo}>{o.codigo} — {o.descricao} (NAF {o.naf})</option>)}
+              </select>
+            </div>
+            <Inp l="NAF manual (sobrescreve a tabela)" v={form.naf_manual} onChange={v => set("naf_manual", v)} t="number" />
+            <div>
+              <label className="evo-label">Fator de Injúria (opcional)</label>
+              <select className="evo-input" value={form.fi_codigo} onChange={e => set("fi_codigo", e.target.value)}>
+                <option value="">Sem fator de injúria</option>
+                {fiOpts.map(o => <option key={o.codigo} value={o.codigo}>{o.descricao} (FI {o.fator})</option>)}
+              </select>
+            </div>
+            <Inp l="FI manual (sobrescreve a tabela)" v={form.fi_manual} onChange={v => set("fi_manual", v)} t="number" />
+          </div>
+
+          <button onClick={calcular} disabled={loading || !form.peso || !form.altura_cm} className="evo-btn-primary w-full mt-4">
+            <Zap className="w-4 h-4" /> {loading ? "Calculando..." : "Calcular TMB / GET"}
+          </button>
+        </div>
+
+        <div className="evo-card p-5">
+          <h3 className="evo-h3 mb-4">Planejamento de Meta (Venta)</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <Inp l="Peso desejado (kg)" v={venta.peso_desejado} onChange={v => setVenta(s => ({...s, peso_desejado: v}))} t="number" />
+            <Inp l="Prazo (dias)" v={venta.prazo_dias} onChange={v => setVenta(s => ({...s, prazo_dias: v}))} t="number" />
+          </div>
+          <button onClick={calcVenta} disabled={!venta.peso_desejado || !form.peso} className="evo-btn-primary w-full mt-3">
+            <Scale className="w-4 h-4" /> Calcular venta
+          </button>
+          {ventaResult && (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Metric l="Diferença" v={`${Math.abs(ventaResult.diferenca_kg)} kg`} tag={ventaResult.objetivo} />
+              <Metric l="Total kcal" v={`${Math.abs(ventaResult.total_kcal).toLocaleString("pt-BR")} kcal`} />
+              <Metric l="Saldo diário" v={`${ventaResult.saldo_diario_kcal > 0 ? "-" : "+"}${Math.abs(ventaResult.saldo_diario_kcal)} kcal/dia`} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {result ? (
+          <div className="evo-card p-5">
+            <h3 className="evo-h3 mb-4">Resultados</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <Metric l="TMB" v={`${result.tmb} kcal`} tag={PROTOCOLOS_TMB.find(p => p[0] === result.protocolo)?.[1]} />
+              <Metric l="GET" v={`${result.get} kcal`} />
+              <Metric l="NAF" v={result.naf} />
+              <Metric l="FI" v={result.fi} />
+            </div>
+            <div className="mt-4 p-3 rounded-lg bg-evo-purple/10 border border-evo-purple/20 text-sm">
+              <div className="text-evo-purple font-semibold text-xs uppercase tracking-wider mb-1">VET estimado</div>
+              <div className="text-2xl font-display font-bold">{result.get} <span className="text-sm text-gray-400">kcal/dia</span></div>
+            </div>
+          </div>
+        ) : (
+          <div className="evo-card p-12 text-center text-gray-500">
+            <Zap className="w-7 h-7 mx-auto text-gray-600 mb-3" />
+            <div className="text-sm">Preencha os dados e clique em <strong>Calcular</strong>.</div>
+            {lastEval && (
+              <div className="mt-4 text-xs text-gray-600">
+                Última avaliação: TMB={comp.tmb_mifflin} kcal · GET={comp.get_kcal} kcal
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Recordatório ─────────────────────────────────────────────────
+
+function Recordatorio({ d, reload }) {
+  const [recs, setRecs] = useState(d.recordatorios || []);
+  const [open, setOpen] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "" });
+
+  const addRefeicao = () => setDraft(s => ({
+    ...s,
+    refeicoes: [...s.refeicoes, { nome: `Refeição ${s.refeicoes.length + 1}`, horario: "", alimentos: [], observacao: "" }]
+  }));
+  const removeRefeicao = (i) => setDraft(s => ({ ...s, refeicoes: s.refeicoes.filter((_, idx) => idx !== i) }));
+  const setRef = (i, k, v) => setDraft(s => {
+    const r = [...s.refeicoes]; r[i] = { ...r[i], [k]: v }; return { ...s, refeicoes: r };
+  });
+  const addAlimento = (ri) => setDraft(s => {
+    const r = [...s.refeicoes];
+    r[ri] = { ...r[ri], alimentos: [...(r[ri].alimentos || []), { nome: "", quantidade: "", horario: "" }] };
+    return { ...s, refeicoes: r };
+  });
+  const setAlim = (ri, ai, k, v) => setDraft(s => {
+    const r = [...s.refeicoes];
+    const alims = [...(r[ri].alimentos || [])];
+    alims[ai] = { ...alims[ai], [k]: v };
+    r[ri] = { ...r[ri], alimentos: alims };
+    return { ...s, refeicoes: r };
+  });
+  const removeAlim = (ri, ai) => setDraft(s => {
+    const r = [...s.refeicoes];
+    r[ri] = { ...r[ri], alimentos: r[ri].alimentos.filter((_, i) => i !== ai) };
+    return { ...s, refeicoes: r };
+  });
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { data } = await api.post(`/patients/${d.patient.id}/recordatorios`, draft);
+      setRecs(s => [data, ...s]);
+      setCreating(false);
+      setDraft({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "" });
+      toast.success("Recordatório salvo!");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setSaving(false); }
+  };
+
+  const remove = async (rid) => {
+    if (!window.confirm("Remover este recordatório?")) return;
+    try {
+      await api.delete(`/patients/${d.patient.id}/recordatorios/${rid}`);
+      setRecs(s => s.filter(r => r.id !== rid));
+      if (open?.id === rid) setOpen(null);
+      toast.success("Removido");
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  return (
+    <div className="grid lg:grid-cols-5 gap-5">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="evo-card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="evo-h3">Recordatórios</h3>
+            <button onClick={() => setCreating(c => !c)} className="evo-btn-primary text-xs">
+              <Plus className="w-3 h-3" /> Novo
+            </button>
+          </div>
+          {recs.length === 0 ? (
+            <div className="text-sm text-gray-500">Nenhum recordatório registrado.</div>
+          ) : (
+            <div className="space-y-2">
+              {recs.map(r => (
+                <button key={r.id} onClick={() => setOpen(r)}
+                  className={`w-full text-left p-3 rounded-lg border transition-all ${open?.id === r.id ? "border-evo-purple/50 bg-evo-purple/10" : "border-white/[0.06] hover:border-white/[0.15] bg-evo-bg"}`}>
+                  <div className="font-semibold text-sm">{r.data}</div>
+                  <div className="text-[11px] text-gray-500 mt-0.5">{r.refeicoes?.length || 0} refeições</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {creating && (
+          <div className="evo-card p-4 space-y-3">
+            <h3 className="evo-h3">Novo recordatório</h3>
+            <Inp l="Data" v={draft.data} onChange={v => setDraft(s => ({...s, data: v}))} t="date" />
+            {draft.refeicoes.map((ref, ri) => (
+              <div key={ri} className="p-3 rounded-lg bg-evo-bg border border-white/[0.06] space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <input className="evo-input flex-1 text-sm" value={ref.nome} onChange={e => setRef(ri,"nome",e.target.value)} placeholder="Nome da refeição" />
+                  <input className="evo-input w-24 text-sm" type="time" value={ref.horario} onChange={e => setRef(ri,"horario",e.target.value)} />
+                  <button onClick={() => removeRefeicao(ri)} className="text-evo-coral"><X className="w-4 h-4" /></button>
+                </div>
+                {(ref.alimentos || []).map((a, ai) => (
+                  <div key={ai} className="flex gap-1 items-center">
+                    <input className="evo-input flex-1 text-xs" value={a.nome} onChange={e => setAlim(ri,ai,"nome",e.target.value)} placeholder="Alimento" />
+                    <input className="evo-input w-24 text-xs" value={a.quantidade} onChange={e => setAlim(ri,ai,"quantidade",e.target.value)} placeholder="Qtd." />
+                    <button onClick={() => removeAlim(ri, ai)} className="text-gray-500 hover:text-evo-coral"><X className="w-3 h-3" /></button>
+                  </div>
+                ))}
+                <button onClick={() => addAlimento(ri)} className="text-xs text-evo-teal flex items-center gap-1">
+                  <Plus className="w-3 h-3" /> Alimento
+                </button>
+              </div>
+            ))}
+            <button onClick={addRefeicao} className="text-sm text-evo-purple flex items-center gap-1 w-full justify-center p-2 rounded-lg border border-dashed border-evo-purple/30 hover:border-evo-purple/60 transition-colors">
+              <Plus className="w-4 h-4" /> Adicionar refeição
+            </button>
+            <div>
+              <label className="evo-label">Observações gerais</label>
+              <textarea className="evo-input h-20 resize-none" value={draft.observacoes} onChange={e => setDraft(s => ({...s, observacoes: e.target.value}))} placeholder="Observações..." />
+            </div>
+            <button onClick={save} disabled={saving} className="evo-btn-primary w-full">
+              <Save className="w-4 h-4" /> {saving ? "Salvando..." : "Salvar recordatório"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="lg:col-span-3">
+        {!open ? (
+          <div className="evo-card p-12 text-center text-gray-500">
+            <ClipboardList className="w-7 h-7 mx-auto text-gray-600 mb-3" />
+            <div className="text-sm">Selecione um recordatório para visualizar.</div>
+          </div>
+        ) : (
+          <div className="evo-card p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="evo-h3">Recordatório — {open.data}</h3>
+              <button onClick={() => remove(open.id)} className="evo-btn-ghost text-evo-coral text-xs">
+                <Trash2 className="w-3 h-3" /> Remover
+              </button>
+            </div>
+            {(open.refeicoes || []).map((ref, i) => (
+              <div key={i} className="p-4 rounded-lg bg-evo-bg border border-white/[0.06]">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-sm">{ref.nome}</span>
+                  {ref.horario && <span className="text-xs text-gray-400">{ref.horario}</span>}
+                </div>
+                {(ref.alimentos || []).length === 0 ? (
+                  <div className="text-xs text-gray-500">Sem alimentos registrados.</div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead><tr className="text-gray-500">
+                      <th className="text-left pb-1">Alimento</th><th className="text-left pb-1">Quantidade</th>
+                    </tr></thead>
+                    <tbody>
+                      {ref.alimentos.map((a, ai) => (
+                        <tr key={ai} className="border-t border-white/[0.04]">
+                          <td className="py-1">{a.nome}</td>
+                          <td className="py-1 text-gray-400">{a.quantidade}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {ref.observacao && <div className="text-xs text-gray-400 mt-2 italic">{ref.observacao}</div>}
+              </div>
+            ))}
+            {open.observacoes && (
+              <div className="p-3 rounded-lg bg-evo-bg border border-white/[0.06] text-sm text-gray-300">
+                <div className="text-[11px] text-gray-500 mb-1">Observações gerais</div>
+                {open.observacoes}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Comparativo({ id }) {
   const [rows, setRows] = useState([]);
   useEffect(() => { api.get(`/patients/${id}/comparativo`).then((r) => setRows(r.data || [])); }, [id]);
@@ -463,9 +1345,27 @@ function Comparativo({ id }) {
 
 
 function Exames({ d, reload }) {
+  const [subTab, setSubTab] = useState("pdf");
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        {[["pdf","Exames PDF (IA)"],["manual","Entrada Manual"]].map(([k,l]) => (
+          <button key={k} onClick={() => setSubTab(k)}
+            className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition-all ${subTab===k?"bg-evo-purple/15 text-white border-evo-purple/40":"border-white/[0.06] text-gray-400 hover:text-white"}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {subTab === "pdf" && <ExamesPDF d={d} reload={reload} />}
+      {subTab === "manual" && <ExamesManuais d={d} />}
+    </div>
+  );
+}
+
+function ExamesPDF({ d, reload }) {
   const [exams, setExams] = useState(d.exams || []);
   const [uploading, setUploading] = useState(false);
-  const [open, setOpen] = useState(null); // exam being viewed in detail
+  const [open, setOpen] = useState(null);
   const fileRef = React.useRef(null);
 
   React.useEffect(() => { setExams(d.exams || []); }, [d.exams]);
@@ -629,6 +1529,195 @@ function Exames({ d, reload }) {
                 <div className="text-sm text-gray-200 whitespace-pre-wrap">{open.conduta_sugerida}</div>
               </div>
             )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Exames Manuais ────────────────────────────────────────────────
+
+const BADGE = { normal: "bg-evo-teal/15 text-evo-teal border-evo-teal/30", baixo: "bg-blue-500/15 text-blue-400 border-blue-500/30", alto: "bg-evo-coral/15 text-evo-coral border-evo-coral/30", sem_referencia: "bg-white/5 text-gray-400 border-white/10" };
+const BADGE_LABEL = { normal: "Normal", baixo: "Abaixo", alto: "Elevado", sem_referencia: "—" };
+
+function ExamesManuais({ d }) {
+  const pid = d.patient.id;
+  const [lotes, setLotes] = useState([]);
+  const [grupos, setGrupos] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [grupoFiltro, setGrupoFiltro] = useState("");
+  const [dataColeta, setDataColeta] = useState(new Date().toISOString().split("T")[0]);
+  const [laboratorio, setLaboratorio] = useState("");
+  const [itens, setItens] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(null);
+
+  const load = async () => {
+    try {
+      const [{ data: ls }, { data: gs }, { data: cat }] = await Promise.all([
+        api.get(`/patients/${pid}/exames-manuais`),
+        api.get("/referencias/exames-grupos"),
+        api.get("/referencias/exames-catalog"),
+      ]);
+      setLotes(ls); setGrupos(gs); setCatalog(cat);
+    } catch {}
+  };
+  useEffect(() => { load(); }, [pid]);
+
+  const filteredCat = grupoFiltro ? catalog.filter(e => e.grupo === grupoFiltro) : catalog;
+
+  const toggleItem = (exame) => {
+    setItens(prev => {
+      const exists = prev.find(i => i.codigo === exame.codigo);
+      if (exists) return prev.filter(i => i.codigo !== exame.codigo);
+      return [...prev, { codigo: exame.codigo, nome: exame.nome, unidade: exame.unidade, grupo: exame.grupo, valor: "" }];
+    });
+  };
+
+  const setValor = (codigo, val) => {
+    setItens(prev => prev.map(i => i.codigo === codigo ? { ...i, valor: val } : i));
+  };
+
+  const submitExames = async () => {
+    const valid = itens.filter(i => i.valor !== "" && !isNaN(parseFloat(i.valor)));
+    if (!valid.length) { toast.error("Preencha ao menos um valor"); return; }
+    setSaving(true);
+    try {
+      await api.post(`/patients/${pid}/exames-manuais`, {
+        data_coleta: dataColeta,
+        laboratorio: laboratorio || null,
+        exames: valid.map(i => ({ ...i, valor: parseFloat(i.valor) })),
+      });
+      toast.success("Exames registrados!");
+      setShowForm(false); setItens([]);
+      await load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "Erro ao salvar"); }
+    finally { setSaving(false); }
+  };
+
+  const deleteLote = async (emid) => {
+    if (!window.confirm("Excluir este registro?")) return;
+    await api.delete(`/patients/${pid}/exames-manuais/${emid}`);
+    toast.success("Excluído"); await load();
+    if (open?.id === emid) setOpen(null);
+  };
+
+  const downloadPdf = async () => {
+    try {
+      const r = await api.get(`/patients/${pid}/relatorios/exames`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      const a = document.createElement("a"); a.href = url; a.download = "exames.pdf";
+      document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+    } catch { toast.error("Erro ao gerar PDF"); }
+  };
+
+  return (
+    <div className="grid lg:grid-cols-5 gap-5">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="evo-card p-4 space-y-2">
+          <button onClick={() => setShowForm(s => !s)} className="evo-btn-primary w-full"><Plus className="w-4 h-4" /> {showForm ? "Cancelar" : "Registrar exames"}</button>
+          {lotes.length > 0 && <button onClick={downloadPdf} className="evo-btn-secondary w-full"><Download className="w-4 h-4" /> PDF completo</button>}
+        </div>
+        <div className="evo-card p-4">
+          <h3 className="evo-h3 mb-3">Histórico</h3>
+          {lotes.length === 0 ? <div className="text-sm text-gray-500">Nenhum exame manual registrado.</div> : (
+            <div className="space-y-2">
+              {lotes.map(l => (
+                <button key={l.id} onClick={() => setOpen(l)} className={`w-full text-left p-3 rounded-lg border transition-all ${open?.id===l.id?"border-evo-purple/50 bg-evo-purple/10":"border-white/[0.06] hover:border-white/20 bg-evo-bg"}`}>
+                  <div className="font-semibold text-sm">{l.data_coleta}</div>
+                  <div className="text-[11px] text-gray-500">{l.laboratorio || "—"} · {(l.exames||[]).length} exames</div>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {(l.exames||[]).filter(e => e.classificacao !== "normal").slice(0,3).map((e,i) => (
+                      <span key={i} className={`text-[9px] px-1.5 py-0.5 rounded-full border ${BADGE[e.classificacao]||BADGE.sem_referencia}`}>{(e.nome||"").slice(0,12)}</span>
+                    ))}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="lg:col-span-3">
+        {showForm ? (
+          <div className="evo-card p-5 space-y-4">
+            <h3 className="evo-h3">Novo Registro de Exames</h3>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div><label className="evo-label">Data da coleta</label><input type="date" className="evo-input" value={dataColeta} onChange={e => setDataColeta(e.target.value)} /></div>
+              <div><label className="evo-label">Laboratório</label><input className="evo-input" value={laboratorio} onChange={e => setLaboratorio(e.target.value)} placeholder="Opcional" /></div>
+            </div>
+            <div>
+              <label className="evo-label">Filtrar por grupo</label>
+              <select className="evo-input" value={grupoFiltro} onChange={e => setGrupoFiltro(e.target.value)}>
+                <option value="">Todos os grupos</option>
+                {grupos.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <div className="max-h-64 overflow-y-auto space-y-1 border border-white/[0.06] rounded-lg p-2">
+              {filteredCat.map(exame => {
+                const sel = itens.find(i => i.codigo === exame.codigo);
+                return (
+                  <div key={exame.codigo} className={`flex items-center gap-2 p-2 rounded ${sel ? "bg-evo-purple/10" : "hover:bg-white/[0.02]"}`}>
+                    <input type="checkbox" checked={!!sel} onChange={() => toggleItem(exame)} className="accent-evo-purple" />
+                    <span className="flex-1 text-sm">{exame.nome}</span>
+                    <span className="text-xs text-gray-500">{exame.unidade}</span>
+                    {sel && <input type="number" step="0.01" className="evo-input w-24 text-xs" placeholder="Valor" value={sel.valor} onChange={e => setValor(exame.codigo, e.target.value)} />}
+                  </div>
+                );
+              })}
+            </div>
+            {itens.length > 0 && (
+              <div className="bg-evo-bg rounded-lg p-3">
+                <div className="text-xs text-gray-500 mb-2">Selecionados com valor: {itens.filter(i=>i.valor).length}/{itens.length}</div>
+                <div className="space-y-1">
+                  {itens.map(i => (
+                    <div key={i.codigo} className="flex items-center gap-2 text-sm">
+                      <span className="flex-1">{i.nome}</span>
+                      <input type="number" step="0.01" className="evo-input w-24 text-xs" placeholder="Valor" value={i.valor} onChange={e => setValor(i.codigo, e.target.value)} />
+                      <span className="text-xs text-gray-500 w-12">{i.unidade}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <button onClick={submitExames} disabled={saving} className="evo-btn-primary w-full">{saving ? "Salvando..." : "Salvar Exames"}</button>
+          </div>
+        ) : !open ? (
+          <div className="evo-card p-12 text-center text-gray-500 text-sm"><FlaskConical className="w-7 h-7 mx-auto mb-3 text-gray-600" />Selecione um registro ou registre novos exames.</div>
+        ) : (
+          <div className="evo-card p-5 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="evo-h3">{open.data_coleta}</h3>
+                <div className="text-xs text-gray-500">{open.laboratorio || "Laboratório não informado"}</div>
+              </div>
+              <button onClick={() => deleteLote(open.id)} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3.5 h-3.5" /> Excluir</button>
+            </div>
+            {Object.entries(
+              (open.exames||[]).reduce((acc, e) => { (acc[e.grupo] = acc[e.grupo] || []).push(e); return acc; }, {})
+            ).map(([grupo, exs]) => (
+              <div key={grupo}>
+                <div className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">{grupo}</div>
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {exs.map((e, i) => (
+                    <div key={i} className="p-3 rounded-lg bg-evo-bg border border-white/[0.04]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold">{e.nome}</div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${BADGE[e.classificacao]||BADGE.sem_referencia}`}>{BADGE_LABEL[e.classificacao]||"—"}</span>
+                      </div>
+                      <div className="text-sm mt-1"><span className="font-bold text-white">{e.valor}</span> <span className="text-gray-400">{e.unidade}</span></div>
+                      {e.referencia && (
+                        <div className="text-[10px] text-gray-500 mt-1">
+                          Ref: {[e.referencia.ref_m_min != null && `≥${e.referencia.ref_m_min}`, e.referencia.ref_m_max != null && `≤${e.referencia.ref_m_max}`].filter(Boolean).join(" — ") || "—"}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>

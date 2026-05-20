@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python server.py)",
+      "Bash(yarn start *)",
+      "Bash(pip install *)",
+      "Bash(yarn install *)",
+      "Bash(pip show *)",
+      "Bash(pip list *)",
+      "Bash(ping -n 4 127.0.0.1)",
+      "Bash(python -c \"print\\(sum\\(1 for _ in open\\('c:/Users/MARLOS/Documents/NUTRIÇÃO/RCTEAM-NUTRI/backend/server.py', encoding='utf-8'\\)\\)\\)\")",
+      "Bash(uvicorn server:app --host 0.0.0.0 --port 8001 --reload)",
+      "Bash(curl -s -X POST http://localhost:8001/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@rcteam.com\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -c /tmp/cookies.txt -X POST http://localhost:8001/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@rcteam.com\",\"password\":\"admin123\"}' -D -)",
+      "Bash(python seed_test.py)",
+      "Bash(python -X utf8 seed_test.py)"
+    ]
+  }
+}
