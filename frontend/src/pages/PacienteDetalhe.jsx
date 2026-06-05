@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
@@ -6,7 +6,7 @@ import StatusBadge from "@/components/evonut/StatusBadge";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing, Zap, ClipboardList, Plus, ChevronDown, ChevronRight, Save, X, Scale, Edit2 } from "lucide-react";
+import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing, Zap, ClipboardList, Plus, ChevronDown, ChevronRight, Save, X, Scale, Edit2, Search, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import NudgeManager from "@/components/evonut/NudgeManager";
 
@@ -683,6 +683,121 @@ function Macro({ l, v, pct, color }) {
 
 const REFEICOES_PADRAO = ["Café da manhã","Lanche da manhã","Almoço","Lanche da tarde","Jantar","Ceia"];
 
+const GRUPOS_FILTRO = [
+  "Carnes e Proteínas","Cereais, Raízes, Tubérculos e Frutos",
+  "Feijão e Leguminosas","Frutas","Frutas Oleosas","Leite e Derivados",
+  "Vegetais A (livres para o consumo)","Vegetais B","Fibras A","Fibras B",
+  "Oleaginosas e Sementes","Óleos e Gorduras","Pães e Variedades",
+  "Sucos Naturais e Integrais","Livres","Outros",
+];
+
+function FoodSearchModal({ refNome, onSelect, onClose }) {
+  const [q, setQ] = useState("");
+  const [grupo, setGrupo] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 60); }, []);
+
+  useEffect(() => {
+    if (q.length < 2 && !grupo) { setResults([]); return; }
+    const t = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ limit: "30" });
+        if (q.length >= 2) params.set("q", q);
+        if (grupo) params.set("grupo", grupo);
+        const { data } = await api.get(`/alimentos?${params}`);
+        setResults(data.items ?? data);
+      } catch {} finally { setLoading(false); }
+    }, 280);
+    return () => clearTimeout(t);
+  }, [q, grupo]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full sm:max-w-xl flex flex-col bg-[#0C1018] border border-white/[0.1] rounded-t-3xl sm:rounded-2xl shadow-[0_32px_80px_-8px_rgba(0,0,0,0.8)] max-h-[90vh] sm:max-h-[74vh]">
+        {/* Handle mobile */}
+        <div className="flex justify-center pt-3 pb-1 sm:hidden shrink-0">
+          <div className="w-10 h-1 rounded-full bg-white/[0.15]" />
+        </div>
+
+        {/* Context label */}
+        <div className="px-5 pt-2 pb-1 sm:pt-4 shrink-0">
+          <p className="text-[11px] font-bold uppercase tracking-widest text-[#3DA0FF]">{refNome}</p>
+        </div>
+
+        {/* Search bar */}
+        <div className="px-4 pb-3 shrink-0">
+          <div className="flex items-center gap-3 bg-white/[0.05] rounded-xl px-4 py-3 border border-white/[0.08] focus-within:border-[#0081FD]/50 focus-within:bg-white/[0.07] transition-all duration-200">
+            <Search className="w-4 h-4 text-gray-500 shrink-0" />
+            <input
+              ref={inputRef}
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              placeholder="Buscar alimento..."
+              className="flex-1 bg-transparent text-white placeholder-gray-600 text-sm outline-none"
+            />
+            {loading
+              ? <Loader2 className="w-4 h-4 text-gray-600 animate-spin shrink-0" />
+              : q && <button onClick={() => setQ("")} className="text-gray-600 hover:text-gray-300 transition-colors shrink-0"><X className="w-4 h-4" /></button>
+            }
+          </div>
+        </div>
+
+        {/* Group chips */}
+        <div className="flex gap-1.5 px-4 pb-3 overflow-x-auto shrink-0" style={{scrollbarWidth:"none",msOverflowStyle:"none"}}>
+          <button onClick={() => setGrupo("")}
+            className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-bold transition-all border ${!grupo ? "bg-[#0081FD] text-black border-[#0081FD]" : "bg-white/[0.05] text-gray-400 hover:bg-white/[0.09] border-white/[0.08]"}`}
+          >Todos</button>
+          {GRUPOS_FILTRO.map(g => (
+            <button key={g} onClick={() => setGrupo(g === grupo ? "" : g)}
+              className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-bold transition-all border whitespace-nowrap ${grupo === g ? "bg-[#0081FD] text-black border-[#0081FD]" : "bg-white/[0.05] text-gray-400 hover:bg-white/[0.09] border-white/[0.08]"}`}
+            >{g}</button>
+          ))}
+        </div>
+
+        <div className="h-px bg-white/[0.06] shrink-0" />
+
+        {/* Results */}
+        <div className="overflow-y-auto flex-1">
+          {results.length === 0 && !loading && (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-600 gap-2">
+              <Search className="w-7 h-7 opacity-30" />
+              <p className="text-sm">{(q.length >= 2 || grupo) ? "Nenhum resultado encontrado" : "Digite para buscar ou filtre por grupo"}</p>
+            </div>
+          )}
+          {results.map(f => (
+            <button key={f.id} onMouseDown={() => { onSelect(f); onClose(); }}
+              className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-white/[0.04] border-b border-white/[0.04] text-left transition-colors group"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-white font-medium leading-snug truncate group-hover:text-[#3DA0FF] transition-colors">{f.nome}</div>
+                <div className="text-[11px] text-gray-500 mt-0.5 truncate">
+                  {f.grupo_display ?? f.grupo ?? f.categoria ?? "—"}
+                  {f.fonte ? <span className="text-gray-700"> · {f.fonte}</span> : null}
+                </div>
+              </div>
+              <div className="text-right shrink-0 pl-3">
+                <div className="text-sm font-bold text-white tabular-nums">{f.energia_kcal_100g != null ? Math.round(f.energia_kcal_100g) : "—"}</div>
+                <div className="text-[10px] text-gray-600">kcal/100g</div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-white/[0.06] flex items-center justify-between shrink-0">
+          <p className="text-[11px] text-gray-600">{results.length > 0 ? `${results.length} resultado${results.length !== 1 ? "s" : ""}` : ""}</p>
+          <button onClick={onClose} className="text-xs text-gray-500 hover:text-white transition-colors font-bold uppercase tracking-wider">Fechar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PlanoManual({ d }) {
   const pid = d.patient.id;
   const [planos, setPlanos] = useState([]);
@@ -690,9 +805,7 @@ function PlanoManual({ d }) {
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [foodQuery, setFoodQuery] = useState("");
-  const [foodResults, setFoodResults] = useState([]);
-  const [addTo, setAddTo] = useState(null); // refIndex
+  const [addTo, setAddTo] = useState(null); // refeição index
 
   const loadPlanos = async () => {
     try {
@@ -703,15 +816,6 @@ function PlanoManual({ d }) {
   };
   useEffect(() => { loadPlanos(); }, [pid]);
 
-  const searchFood = async (q) => {
-    setFoodQuery(q);
-    if (q.length < 2) { setFoodResults([]); return; }
-    try {
-      const { data } = await api.get(`/alimentos?q=${encodeURIComponent(q)}&limit=20`);
-      setFoodResults(data);
-    } catch {}
-  };
-
   const newDraft = () => setDraft({
     titulo: "Plano Alimentar", objetivo: "", meta_kcal: "", meta_proteina_g: "", meta_carboidrato_g: "", meta_lipidio_g: "",
     refeicoes: REFEICOES_PADRAO.map(n => ({ nome: n, horario: "", alimentos: [] })),
@@ -719,28 +823,37 @@ function PlanoManual({ d }) {
   });
 
   const addFood = (refIdx, alim) => {
-    const qtd = parseFloat(alim.porcao_padrao_g) || 100;
+    const qtd = parseFloat(alim.porcao_padrao_g) || parseFloat(alim.quantidade_referencia_g) || 100;
     setDraft(prev => {
       const refs = [...prev.refeicoes];
-      refs[refIdx] = { ...refs[refIdx], alimentos: [...refs[refIdx].alimentos, { alimento_id: alim.id, quantidade_g: qtd, _nome: alim.nome }] };
+      refs[refIdx] = {
+        ...refs[refIdx],
+        alimentos: [...refs[refIdx].alimentos, {
+          alimento_id: alim.id,
+          quantidade_g: qtd,
+          _nome: alim.nome,
+          _kcal100g: alim.energia_kcal_100g ?? null,
+          _grupo: alim.grupo_display ?? alim.grupo ?? alim.categoria ?? null,
+        }],
+      };
       return { ...prev, refeicoes: refs };
     });
-    setFoodResults([]); setFoodQuery(""); setAddTo(null);
   };
 
   const removeFood = (refIdx, fIdx) => {
     setDraft(prev => {
       const refs = [...prev.refeicoes];
-      refs[refIdx] = { ...refs[refIdx], alimentos: refs[refIdx].alimentos.filter((_,i) => i !== fIdx) };
+      refs[refIdx] = { ...refs[refIdx], alimentos: refs[refIdx].alimentos.filter((_, i) => i !== fIdx) };
       return { ...prev, refeicoes: refs };
     });
   };
 
   const updateFoodQtd = (refIdx, fIdx, val) => {
+    const v = Math.max(0, parseFloat(val) || 0);
     setDraft(prev => {
       const refs = [...prev.refeicoes];
       const alims = [...refs[refIdx].alimentos];
-      alims[fIdx] = { ...alims[fIdx], quantidade_g: parseFloat(val) || 0 };
+      alims[fIdx] = { ...alims[fIdx], quantidade_g: v };
       refs[refIdx] = { ...refs[refIdx], alimentos: alims };
       return { ...prev, refeicoes: refs };
     });
@@ -783,77 +896,169 @@ function PlanoManual({ d }) {
     } catch { toast.error("Erro ao gerar PDF"); }
   };
 
+  // — EDIT MODE —
   if (draft !== null) {
     return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="evo-h3">{editMode ? "Editar Plano" : "Novo Plano"}</h3>
-          <div className="flex gap-2">
-            <button onClick={() => { setDraft(null); setEditMode(false); }} className="evo-btn-ghost">Cancelar</button>
-            <button onClick={save} disabled={saving} className="evo-btn-primary">{saving ? "Salvando..." : "Salvar Plano"}</button>
+      <>
+        {addTo !== null && (
+          <FoodSearchModal
+            refNome={draft.refeicoes[addTo]?.nome ?? "Refeição"}
+            onSelect={f => addFood(addTo, f)}
+            onClose={() => setAddTo(null)}
+          />
+        )}
+        <div className="space-y-5 pb-10">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-base font-bold text-white">{editMode ? "Editando plano" : "Novo plano"}</h3>
+              <p className="text-xs text-gray-500 mt-0.5">Preencha as metas e monte as refeições</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => { setDraft(null); setEditMode(false); }} className="evo-btn-ghost text-xs">Cancelar</button>
+              <button onClick={save} disabled={saving} className="evo-btn-primary text-xs px-5 py-2">
+                {saving ? "Salvando..." : "Salvar Plano"}
+              </button>
+            </div>
           </div>
-        </div>
-        <div className="evo-card p-4 grid sm:grid-cols-3 gap-3">
-          <div><label className="evo-label">Título</label><input className="evo-input" value={draft.titulo} onChange={e => setDraft(p=>({...p,titulo:e.target.value}))} /></div>
-          <div><label className="evo-label">Meta kcal/dia</label><input type="number" className="evo-input" value={draft.meta_kcal} onChange={e => setDraft(p=>({...p,meta_kcal:e.target.value}))} /></div>
-          <div><label className="evo-label">Meta Proteína (g)</label><input type="number" className="evo-input" value={draft.meta_proteina_g} onChange={e => setDraft(p=>({...p,meta_proteina_g:e.target.value}))} /></div>
-          <div><label className="evo-label">Meta CHO (g)</label><input type="number" className="evo-input" value={draft.meta_carboidrato_g} onChange={e => setDraft(p=>({...p,meta_carboidrato_g:e.target.value}))} /></div>
-          <div><label className="evo-label">Meta Lip (g)</label><input type="number" className="evo-input" value={draft.meta_lipidio_g} onChange={e => setDraft(p=>({...p,meta_lipidio_g:e.target.value}))} /></div>
-          <div><label className="evo-label">Objetivo/Observações</label><input className="evo-input" value={draft.observacoes} onChange={e => setDraft(p=>({...p,observacoes:e.target.value}))} /></div>
-        </div>
-        {draft.refeicoes.map((ref, ri) => (
-          <div key={ri} className="evo-card p-4">
-            <div className="flex items-center gap-3 mb-3 flex-wrap">
-              <input className="evo-input w-36 text-sm font-semibold" value={ref.nome} onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],nome:e.target.value}; return {...p,refeicoes:rs}; })} />
-              <input className="evo-input w-24 text-sm" placeholder="Horário" value={ref.horario} onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],horario:e.target.value}; return {...p,refeicoes:rs}; })} />
-            </div>
-            <div className="space-y-1 mb-3">
-              {ref.alimentos.map((a, fi) => (
-                <div key={fi} className="flex items-center gap-2 text-sm">
-                  <span className="flex-1 text-gray-300">{a._nome || a.alimento_id}</span>
-                  <input type="number" className="evo-input w-20 text-xs" value={a.quantidade_g} onChange={e => updateFoodQtd(ri, fi, e.target.value)} />
-                  <span className="text-gray-500 text-xs">g</span>
-                  <button onClick={() => removeFood(ri, fi)} className="text-evo-coral hover:text-red-400"><X className="w-3.5 h-3.5" /></button>
-                </div>
-              ))}
-            </div>
-            {addTo === ri ? (
-              <div className="relative">
-                <input autoFocus className="evo-input text-sm" placeholder="Buscar alimento..." value={foodQuery} onChange={e => searchFood(e.target.value)} onBlur={() => setTimeout(() => { setAddTo(null); setFoodQuery(""); setFoodResults([]); }, 150)} />
-                {foodResults.length > 0 && (
-                  <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-evo-card border border-white/10 rounded-lg shadow-xl max-h-52 overflow-y-auto">
-                    {foodResults.map(f => (
-                      <button key={f.id} onMouseDown={() => addFood(ri, f)} className="w-full text-left px-3 py-2 text-sm hover:bg-evo-purple/10 flex items-center justify-between gap-2">
-                        <span>{f.nome}</span>
-                        <span className="text-xs text-gray-500">{f.categoria} · {f.porcao_padrao_g}g · {f.por_100g?.energia_kcal ?? "—"} kcal/100g</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+
+          {/* Meta fields */}
+          <div className="evo-card p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-3">Informações do plano</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="col-span-2 sm:col-span-3">
+                <label className="evo-label">Título</label>
+                <input className="evo-input" value={draft.titulo} onChange={e => setDraft(p=>({...p,titulo:e.target.value}))} />
               </div>
-            ) : (
-              <button onClick={() => setAddTo(ri)} className="text-xs text-evo-purple hover:text-purple-300 flex items-center gap-1"><Plus className="w-3 h-3" /> Adicionar alimento</button>
-            )}
+              <div>
+                <label className="evo-label">Meta kcal/dia</label>
+                <input type="number" className="evo-input" placeholder="ex: 2000" value={draft.meta_kcal} onChange={e => setDraft(p=>({...p,meta_kcal:e.target.value}))} />
+              </div>
+              <div>
+                <label className="evo-label">Proteína (g)</label>
+                <input type="number" className="evo-input" placeholder="ex: 150" value={draft.meta_proteina_g} onChange={e => setDraft(p=>({...p,meta_proteina_g:e.target.value}))} />
+              </div>
+              <div>
+                <label className="evo-label">Carboidratos (g)</label>
+                <input type="number" className="evo-input" placeholder="ex: 250" value={draft.meta_carboidrato_g} onChange={e => setDraft(p=>({...p,meta_carboidrato_g:e.target.value}))} />
+              </div>
+              <div>
+                <label className="evo-label">Lipídios (g)</label>
+                <input type="number" className="evo-input" placeholder="ex: 70" value={draft.meta_lipidio_g} onChange={e => setDraft(p=>({...p,meta_lipidio_g:e.target.value}))} />
+              </div>
+              <div className="col-span-2">
+                <label className="evo-label">Observações / Objetivo</label>
+                <input className="evo-input" value={draft.observacoes} onChange={e => setDraft(p=>({...p,observacoes:e.target.value}))} />
+              </div>
+            </div>
           </div>
-        ))}
-      </div>
+
+          {/* Refeições */}
+          {draft.refeicoes.map((ref, ri) => {
+            const kcalRef = ref.alimentos.reduce((s, a) => s + (a._kcal100g ? Math.round((a._kcal100g / 100) * a.quantidade_g) : 0), 0);
+            return (
+              <div key={ri} className="evo-card overflow-hidden">
+                {/* Meal header */}
+                <div className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-[#0081FD]/[0.07] to-transparent border-b border-white/[0.06]">
+                  <div className="w-7 h-7 rounded-lg bg-[#0081FD]/15 border border-[#0081FD]/20 flex items-center justify-center shrink-0">
+                    <span className="text-xs font-bold text-[#3DA0FF]">{ri + 1}</span>
+                  </div>
+                  <input
+                    className="flex-1 bg-transparent text-white font-bold text-sm focus:outline-none min-w-0 placeholder-gray-600"
+                    value={ref.nome}
+                    placeholder="Nome da refeição"
+                    onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],nome:e.target.value}; return {...p,refeicoes:rs}; })}
+                  />
+                  <input
+                    className="w-20 bg-white/[0.05] border border-white/[0.06] rounded-lg px-2 py-1 text-xs text-gray-400 focus:outline-none focus:border-[#0081FD]/30 text-center shrink-0"
+                    placeholder="00:00"
+                    value={ref.horario}
+                    onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],horario:e.target.value}; return {...p,refeicoes:rs}; })}
+                  />
+                  {kcalRef > 0 && (
+                    <span className="text-xs text-gray-500 shrink-0 tabular-nums hidden sm:block">{kcalRef}&nbsp;kcal</span>
+                  )}
+                </div>
+
+                {/* Food items */}
+                <div className="px-3 pt-2 pb-1 space-y-0.5">
+                  {ref.alimentos.length === 0 && (
+                    <p className="text-xs text-gray-700 py-3 text-center">Nenhum alimento adicionado</p>
+                  )}
+                  {ref.alimentos.map((a, fi) => {
+                    const kcalItem = a._kcal100g ? Math.round((a._kcal100g / 100) * a.quantidade_g) : null;
+                    return (
+                      <div key={fi} className="flex items-center gap-2 py-2 px-2 rounded-xl hover:bg-white/[0.03] group/item transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-200 leading-tight truncate">{a._nome || a.alimento_id}</p>
+                          {a._grupo && <p className="text-[10px] text-gray-600 mt-0.5">{a._grupo}</p>}
+                        </div>
+                        {kcalItem != null && (
+                          <span className="text-[11px] text-gray-600 tabular-nums shrink-0 hidden sm:block">{kcalItem}&nbsp;kcal</span>
+                        )}
+                        {/* Quantity stepper */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => updateFoodQtd(ri, fi, Math.max(5, a.quantidade_g - 10))}
+                            className="w-6 h-6 rounded-md bg-white/[0.05] hover:bg-white/[0.1] flex items-center justify-center text-gray-500 hover:text-white transition-colors"
+                          ><Minus className="w-3 h-3" /></button>
+                          <input
+                            type="number"
+                            value={a.quantidade_g}
+                            onChange={e => updateFoodQtd(ri, fi, e.target.value)}
+                            className="w-14 bg-white/[0.05] border border-white/[0.08] rounded-lg px-1 py-1 text-center text-sm text-white focus:outline-none focus:border-[#0081FD]/40 tabular-nums"
+                          />
+                          <button
+                            onClick={() => updateFoodQtd(ri, fi, a.quantidade_g + 10)}
+                            className="w-6 h-6 rounded-md bg-white/[0.05] hover:bg-white/[0.1] flex items-center justify-center text-gray-500 hover:text-white transition-colors"
+                          ><Plus className="w-3 h-3" /></button>
+                          <span className="text-[11px] text-gray-600 w-3 ml-0.5">g</span>
+                        </div>
+                        <button
+                          onClick={() => removeFood(ri, fi)}
+                          className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-700 hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/item:opacity-100 shrink-0"
+                        ><X className="w-3.5 h-3.5" /></button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Add food button */}
+                <div className="px-3 pb-3 pt-2">
+                  <button
+                    onClick={() => setAddTo(ri)}
+                    className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-dashed border-white/[0.1] text-xs text-gray-600 hover:border-[#0081FD]/40 hover:text-[#3DA0FF] hover:bg-[#0081FD]/[0.04] transition-all duration-200"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Adicionar alimento
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>
     );
   }
 
+  // — LIST MODE —
   return (
     <div className="grid lg:grid-cols-5 gap-5">
       <div className="lg:col-span-2 space-y-4">
+        <button onClick={newDraft} className="evo-btn-primary w-full">
+          <Plus className="w-4 h-4" /> Novo Plano
+        </button>
         <div className="evo-card p-4">
-          <button onClick={newDraft} className="evo-btn-primary w-full"><Plus className="w-4 h-4" /> Novo Plano</button>
-        </div>
-        <div className="evo-card p-4">
-          <h3 className="evo-h3 mb-3">Planos salvos</h3>
-          {planos.length === 0 ? <div className="text-sm text-gray-500">Nenhum plano criado.</div> : (
+          <h3 className="text-sm font-bold text-white mb-3">Planos salvos</h3>
+          {planos.length === 0 ? (
+            <p className="text-sm text-gray-600 text-center py-6">Nenhum plano criado.</p>
+          ) : (
             <div className="space-y-2">
               {planos.map(p => (
-                <button key={p.id} onClick={() => setSel(p)} className={`w-full text-left p-3 rounded-lg border transition-all ${sel?.id===p.id?"border-evo-purple/50 bg-evo-purple/10":"border-white/[0.06] hover:border-white/20 bg-evo-bg"}`}>
-                  <div className="font-semibold text-sm">{p.titulo}</div>
-                  <div className="text-[11px] text-gray-500">{p.criado_em ? new Date(p.criado_em).toLocaleDateString("pt-BR") : "—"}</div>
+                <button key={p.id} onClick={() => setSel(p)}
+                  className={`w-full text-left p-3 rounded-xl border transition-all ${sel?.id===p.id ? "border-[#0081FD]/40 bg-[#0081FD]/[0.07]" : "border-white/[0.06] hover:border-white/[0.14] bg-white/[0.02] hover:bg-white/[0.04]"}`}
+                >
+                  <div className="font-bold text-sm truncate">{p.titulo}</div>
+                  <div className="text-[11px] text-gray-500 mt-0.5">{p.criado_em ? new Date(p.criado_em).toLocaleDateString("pt-BR") : "—"}</div>
                 </button>
               ))}
             </div>
@@ -862,9 +1067,16 @@ function PlanoManual({ d }) {
       </div>
       <div className="lg:col-span-3">
         {!sel ? (
-          <div className="evo-card p-12 text-center text-gray-500 text-sm"><Utensils className="w-7 h-7 mx-auto mb-3 text-gray-600" />Selecione ou crie um plano.</div>
+          <div className="evo-card p-14 flex flex-col items-center gap-3 text-gray-600">
+            <Utensils className="w-8 h-8 opacity-25" />
+            <p className="text-sm">Selecione ou crie um plano.</p>
+          </div>
         ) : (
-          <PlanoDetail plano={sel} onEdit={() => { setDraft({ ...sel, refeicoes: (sel.refeicoes||[]).map(r => ({...r, alimentos: (r.alimentos||[]).map(a => ({...a, _nome: a.alimento_nome||a.alimento_id}))})) }); setEditMode(true); }} onDelete={() => deletePlano(sel.id)} onPdf={() => downloadPdf(sel.id, sel.titulo)} />
+          <PlanoDetail plano={sel}
+            onEdit={() => { setDraft({ ...sel, refeicoes: (sel.refeicoes||[]).map(r => ({...r, alimentos: (r.alimentos||[]).map(a => ({...a, _nome: a.alimento_nome||a.alimento_id}))})) }); setEditMode(true); }}
+            onDelete={() => deletePlano(sel.id)}
+            onPdf={() => downloadPdf(sel.id, sel.titulo)}
+          />
         )}
       </div>
     </div>
@@ -872,60 +1084,95 @@ function PlanoManual({ d }) {
 }
 
 function PlanoDetail({ plano, onEdit, onDelete, onPdf }) {
+  const t = plano.totais_dia || {};
   return (
-    <div className="evo-card p-5 space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h3 className="evo-h3">{plano.titulo}</h3>
-        <div className="flex gap-2">
-          <button onClick={onPdf} className="evo-btn-secondary text-xs"><Download className="w-3.5 h-3.5" /> PDF</button>
-          <button onClick={onEdit} className="evo-btn-secondary text-xs"><Edit2 className="w-3.5 h-3.5" /> Editar</button>
-          <button onClick={onDelete} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3.5 h-3.5" /> Excluir</button>
+    <div className="evo-card p-5 space-y-5">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="font-bold text-base text-white">{plano.titulo}</h3>
+          {plano.objetivo && <p className="text-xs text-gray-500 mt-0.5">{plano.objetivo}</p>}
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={onPdf} className="evo-btn-secondary text-xs px-3 py-1.5"><Download className="w-3.5 h-3.5" /> PDF</button>
+          <button onClick={onEdit} className="evo-btn-secondary text-xs px-3 py-1.5"><Edit2 className="w-3.5 h-3.5" /> Editar</button>
+          <button onClick={onDelete} className="evo-btn-ghost text-xs text-red-400 hover:text-red-300 px-2"><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       </div>
-      {plano.totais_dia && (
-        <div className="grid grid-cols-3 gap-2">
-          <TotalPill l="Energia" v={`${plano.totais_dia.energia_kcal} kcal`} />
-          <TotalPill l="Proteínas" v={`${plano.totais_dia.proteinas_g} g`} />
-          <TotalPill l="Carboidratos" v={`${plano.totais_dia.carboidratos_g} g`} />
-          <TotalPill l="Lipídios" v={`${plano.totais_dia.lipidios_g} g`} />
-          <TotalPill l="Fibras" v={`${plano.totais_dia.fibras_g} g`} />
-          <TotalPill l="Sódio" v={`${plano.totais_dia.sodio_mg} mg`} />
+
+      {/* Macro summary */}
+      {(t.energia_kcal || plano.meta_kcal) && (
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+          <MacroPill label="Energia" value={t.energia_kcal ?? "—"} unit="kcal" accent="blue" colSpan2 />
+          <MacroPill label="Proteína" value={t.proteinas_g ?? t.proteina_g ?? "—"} unit="g" accent="green" />
+          <MacroPill label="Carbo" value={t.carboidratos_g ?? t.carboidrato_g ?? "—"} unit="g" accent="amber" />
+          <MacroPill label="Lipídios" value={t.lipidios_g ?? t.lipideos_g ?? "—"} unit="g" accent="orange" />
+          <MacroPill label="Fibras" value={t.fibras_g ?? t.fibra_g ?? "—"} unit="g" accent="purple" />
+          <MacroPill label="Sódio" value={t.sodio_mg ?? "—"} unit="mg" accent="slate" />
         </div>
       )}
-      {(plano.refeicoes || []).map((ref, ri) => (
-        <div key={ri} className="border border-white/[0.06] rounded-lg overflow-hidden">
-          <div className="bg-evo-purple/10 px-4 py-2 flex items-center justify-between">
-            <span className="font-semibold text-sm">{ref.nome}{ref.horario ? ` — ${ref.horario}` : ""}</span>
-            <span className="text-xs text-gray-400">{ref.totais?.energia_kcal ?? 0} kcal</span>
+
+      {/* Meals */}
+      <div className="space-y-3">
+        {(plano.refeicoes || []).map((ref, ri) => (
+          <div key={ri} className="border border-white/[0.06] rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2.5 bg-white/[0.025] border-b border-white/[0.04]">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-md bg-[#0081FD]/15 border border-[#0081FD]/20 flex items-center justify-center text-[10px] font-bold text-[#3DA0FF]">{ri+1}</span>
+                <span className="font-bold text-sm">{ref.nome}</span>
+                {ref.horario && <span className="text-xs text-gray-600">· {ref.horario}</span>}
+              </div>
+              <span className="text-xs text-gray-600 tabular-nums">{ref.totais?.energia_kcal ?? 0} kcal</span>
+            </div>
+            {(ref.alimentos || []).length > 0 ? (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-600 border-b border-white/[0.04] bg-white/[0.01]">
+                    <th className="text-left px-4 py-2 font-medium">Alimento</th>
+                    <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Qtd</th>
+                    <th className="px-3 py-2 font-medium text-right whitespace-nowrap">kcal</th>
+                    <th className="px-3 py-2 font-medium text-right whitespace-nowrap hidden sm:table-cell">PTN</th>
+                    <th className="px-3 py-2 font-medium text-right whitespace-nowrap hidden sm:table-cell">CHO</th>
+                    <th className="px-3 py-2 font-medium text-right whitespace-nowrap hidden sm:table-cell">LIP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(ref.alimentos || []).map((a, ai) => (
+                    <tr key={ai} className="border-b border-white/[0.02] hover:bg-white/[0.025] transition-colors">
+                      <td className="px-4 py-2.5 text-gray-200 max-w-[160px] sm:max-w-none truncate">{a.alimento_nome || a._nome || a.alimento_id}</td>
+                      <td className="px-3 py-2.5 text-right text-gray-500 tabular-nums whitespace-nowrap">{a.quantidade_g}g</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-medium">{a.nutrientes?.energia_kcal != null ? Math.round(a.nutrientes.energia_kcal) : "—"}</td>
+                      <td className="px-3 py-2.5 text-right text-gray-500 tabular-nums hidden sm:table-cell">{a.nutrientes?.proteinas_g ?? a.nutrientes?.proteina_g ?? "—"}</td>
+                      <td className="px-3 py-2.5 text-right text-gray-500 tabular-nums hidden sm:table-cell">{a.nutrientes?.carboidratos_g ?? a.nutrientes?.carboidrato_g ?? "—"}</td>
+                      <td className="px-3 py-2.5 text-right text-gray-500 tabular-nums hidden sm:table-cell">{a.nutrientes?.lipidios_g ?? a.nutrientes?.lipideos_g ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="text-xs text-gray-700 px-4 py-4 text-center">Sem alimentos nesta refeição.</p>
+            )}
           </div>
-          <table className="w-full text-xs">
-            <thead><tr className="text-gray-500 border-b border-white/[0.04]">
-              <th className="text-left px-3 py-1.5">Alimento</th><th className="px-2">Qtd</th><th className="px-2">kcal</th><th className="px-2">Prot</th><th className="px-2">CHO</th><th className="px-2">Lip</th>
-            </tr></thead>
-            <tbody>
-              {(ref.alimentos || []).map((a, ai) => (
-                <tr key={ai} className="border-b border-white/[0.02] hover:bg-white/[0.02]">
-                  <td className="px-3 py-1.5 text-gray-200">{a.alimento_nome || a.alimento_id}</td>
-                  <td className="px-2 text-center text-gray-400">{a.quantidade_g}g</td>
-                  <td className="px-2 text-center">{a.nutrientes?.energia_kcal ?? "—"}</td>
-                  <td className="px-2 text-center">{a.nutrientes?.proteinas_g ?? "—"}</td>
-                  <td className="px-2 text-center">{a.nutrientes?.carboidratos_g ?? "—"}</td>
-                  <td className="px-2 text-center">{a.nutrientes?.lipidios_g ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
 
-function TotalPill({ l, v }) {
+function MacroPill({ label, value, unit, accent, colSpan2 }) {
+  const styles = {
+    blue:   "text-[#3DA0FF]  bg-[#0081FD]/[0.09]  border-[#0081FD]/[0.18]",
+    green:  "text-emerald-400 bg-emerald-500/[0.09] border-emerald-500/[0.18]",
+    amber:  "text-amber-400  bg-amber-500/[0.09]  border-amber-500/[0.18]",
+    orange: "text-orange-400 bg-orange-500/[0.09] border-orange-500/[0.18]",
+    purple: "text-purple-400 bg-purple-500/[0.09] border-purple-500/[0.18]",
+    slate:  "text-gray-400  bg-white/[0.04]      border-white/[0.08]",
+  };
   return (
-    <div className="p-2 rounded bg-evo-bg border border-white/[0.04] text-center">
-      <div className="text-[9px] uppercase tracking-wider text-gray-500">{l}</div>
-      <div className="font-semibold text-sm mt-0.5">{v}</div>
+    <div className={`rounded-xl border p-3 text-center ${styles[accent] ?? styles.slate} ${colSpan2 ? "col-span-3 sm:col-span-2" : ""}`}>
+      <div className="text-[9px] uppercase tracking-widest font-bold opacity-50 mb-1">{label}</div>
+      <div className="font-bold text-sm sm:text-base tabular-nums leading-none">{value}</div>
+      <div className="text-[9px] opacity-40 mt-1">{unit}</div>
     </div>
   );
 }

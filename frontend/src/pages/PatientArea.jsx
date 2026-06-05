@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api, formatApiError } from "@/lib/evo-api";
 import Brand from "@/components/evonut/Brand";
 import GlowOrb from "@/components/evonut/GlowOrb";
-import { LogOut, Salad, MessageCircle, Send, Loader2, Sparkles, Utensils } from "lucide-react";
+import { LogOut, Salad, MessageCircle, Send, Loader2, Sparkles, Utensils, FlaskConical, FileText, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 
 // Minimal markdown render for the diet plan content (re-uses same logic as backend PDF)
@@ -43,9 +43,12 @@ function inline(s) {
 export default function PatientArea() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [tab, setTab] = useState("diet"); // diet | chat
+  const [tab, setTab] = useState("diet"); // diet | chat | exams
   const [diet, setDiet] = useState(null);
   const [loadingDiet, setLoadingDiet] = useState(true);
+  const [exams, setExams] = useState([]);
+  const [loadingExams, setLoadingExams] = useState(false);
+  const [expandedExam, setExpandedExam] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -60,6 +63,15 @@ export default function PatientArea() {
       .then((r) => setMessages(r.data || []))
       .catch(() => setMessages([]));
   }, []);
+
+  useEffect(() => {
+    if (tab !== "exams" || exams.length > 0) return;
+    setLoadingExams(true);
+    api.get("/patient/exams")
+      .then((r) => setExams(r.data || []))
+      .catch(() => setExams([]))
+      .finally(() => setLoadingExams(false));
+  }, [tab, exams.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -134,6 +146,17 @@ export default function PatientArea() {
             }`}
           >
             <MessageCircle className="w-4 h-4" /> Assistente IA
+          </button>
+          <button
+            data-testid="tab-exams"
+            onClick={() => setTab("exams")}
+            className={`px-4 py-2 rounded-lg text-sm font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
+              tab === "exams"
+                ? "bg-rc-blue/15 text-rc-blue border border-rc-blue/40"
+                : "text-gray-400 hover:text-white border border-transparent"
+            }`}
+          >
+            <FlaskConical className="w-4 h-4" /> Meus exames
           </button>
         </nav>
 
@@ -245,6 +268,93 @@ export default function PatientArea() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+        {tab === "exams" && (
+          <div data-testid="patient-exams-panel" className="animate-fade-up">
+            {loadingExams ? (
+              <div className="rc-card p-10 text-center text-gray-500 text-sm">
+                <Loader2 className="w-5 h-5 animate-spin inline mr-2" /> Carregando exames…
+              </div>
+            ) : exams.length === 0 ? (
+              <div className="rc-card p-10 text-center">
+                <FlaskConical className="w-10 h-10 mx-auto text-gray-600 mb-3" />
+                <h3 className="font-display font-black text-lg">Nenhum exame anexado</h3>
+                <p className="text-sm text-gray-400 mt-2 max-w-md mx-auto">
+                  Quando o Rogério anexar seus exames, eles aparecerão aqui com a análise completa.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {exams.map((ex) => (
+                  <div key={ex.id} className="rc-card overflow-hidden">
+                    <button
+                      className="w-full flex items-center justify-between p-5 text-left hover:bg-white/[0.02] transition-colors"
+                      onClick={() => setExpandedExam(expandedExam === ex.id ? null : ex.id)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <FileText className="w-5 h-5 text-rc-blue flex-shrink-0" />
+                        <div>
+                          <div className="font-bold text-sm">{ex.file_name}</div>
+                          <div className="text-[11px] text-gray-500 mt-0.5">
+                            {new Date(ex.created_at).toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}
+                          </div>
+                        </div>
+                      </div>
+                      {expandedExam === ex.id
+                        ? <ChevronUp className="w-4 h-4 text-gray-400" />
+                        : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                    </button>
+
+                    {expandedExam === ex.id && (
+                      <div className="border-t border-white/5 px-5 pb-5 pt-4 space-y-4">
+                        {ex.resumo && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-widest text-rc-blue font-bold mb-1">Resumo</div>
+                            <p className="text-sm text-gray-300 leading-relaxed">{ex.resumo}</p>
+                          </div>
+                        )}
+                        {ex.markers && ex.markers.length > 0 && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Marcadores</div>
+                            <div className="grid sm:grid-cols-2 gap-2">
+                              {ex.markers.map((m, i) => (
+                                <div key={i} className="flex items-center justify-between bg-white/[0.03] border border-white/5 rounded-lg px-3 py-2">
+                                  <span className="text-xs text-gray-300">{m.name}</span>
+                                  <span className={`text-xs font-bold ml-2 px-2 py-0.5 rounded-full ${
+                                    m.status === "normal"
+                                      ? "bg-emerald-400/10 text-emerald-400"
+                                      : m.status === "alto" || m.status === "elevado"
+                                      ? "bg-red-400/10 text-red-400"
+                                      : m.status === "baixo"
+                                      ? "bg-amber-400/10 text-amber-400"
+                                      : "bg-white/5 text-gray-400"
+                                  }`}>
+                                    {m.value} {m.unit || ""}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {ex.conduta_sugerida && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-1">Conduta sugerida</div>
+                            <p className="text-sm text-gray-400 leading-relaxed">{ex.conduta_sugerida}</p>
+                          </div>
+                        )}
+                        {ex.observacoes && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-1">Observações do Rogério</div>
+                            <p className="text-sm text-gray-300 leading-relaxed">{ex.observacoes}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </main>

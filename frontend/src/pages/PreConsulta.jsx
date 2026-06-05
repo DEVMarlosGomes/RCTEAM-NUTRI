@@ -348,18 +348,29 @@ export default function PreConsulta() {
     if (!token) return;
     api
       .get(`/public/lead/${token}`)
-      .then((r) => setLead(r.data))
+      .then((r) => {
+        setLead(r.data);
+        const cached = localStorage.getItem(STORAGE_KEY(token));
+        if (cached) {
+          try { setData(JSON.parse(cached)); return; } catch (_) {}
+        }
+        // Pre-fill from atendimento data
+        const ld = r.data;
+        const prefill = {};
+        if (ld.nome)   prefill.nome       = ld.nome;
+        if (ld.email)  prefill.email      = ld.email;
+        if (ld.peso)   prefill.peso_atual = String(ld.peso);
+        if (ld.altura) prefill.estatura   = String(ld.altura);
+        if (ld.objetivo) prefill.objetivo = ld.objetivo;
+        const ad = ld.atendimento_dados || {};
+        if (ad.maior_dificuldade) prefill._maior_dificuldade = ad.maior_dificuldade;
+        if (Object.keys(prefill).length) { setData(prefill); persist(prefill); }
+      })
       .catch(() => {
         toast.error("Link inválido ou expirado");
         navigate("/");
       });
-    const cached = localStorage.getItem(STORAGE_KEY(token));
-    if (cached) {
-      try {
-        setData(JSON.parse(cached));
-      } catch (_) {}
-    }
-  }, [token, navigate]);
+  }, [token, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const persist = (d) => token && localStorage.setItem(STORAGE_KEY(token), JSON.stringify(d));
 

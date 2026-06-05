@@ -18,6 +18,11 @@ import Agentes from "@/pages/Agentes";
 import Consultorio from "@/pages/Consultorio";
 import PatientArea from "@/pages/PatientArea";
 import Configuracoes from "@/pages/Configuracoes";
+import AgenteConfig from "@/pages/AgenteConfig";
+import Depoimentos from "@/pages/Depoimentos";
+import PatientLogin from "@/pages/PatientLogin";
+import Atendimento from "@/pages/Atendimento";
+import Checkout from "@/pages/Checkout";
 
 function Loader() {
   return (
@@ -27,12 +32,12 @@ function Loader() {
   );
 }
 
-function Protected({ children, role }) {
+function Protected({ children, role, loginPath }) {
   const { user } = useAuth();
   if (user === null) return <Loader />;
-  if (!user) return <Navigate to="/login" replace />;
+  const redirectTo = loginPath || (role === "patient" ? "/login-paciente" : "/login");
+  if (!user) return <Navigate to={redirectTo} replace />;
   if (role && user.role !== role) {
-    // Send each user back to the right home
     const target = user.role === "patient" ? "/paciente" : "/dashboard";
     return <Navigate to={target} replace />;
   }
@@ -54,6 +59,9 @@ function App() {
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/login-paciente" element={<PatientLogin />} />
+            <Route path="/atendimento" element={<Atendimento />} />
+            <Route path="/checkout/:token" element={<Checkout />} />
             <Route path="/pre-consulta" element={<PreConsulta />} />
             <Route path="/pre-consulta/:token" element={<PreConsulta />} />
             <Route path="/chat/:token" element={<Chat />} />
@@ -68,6 +76,8 @@ function App() {
             <Route path="/agentes" element={<Protected role="nutritionist"><Agentes /></Protected>} />
             <Route path="/consultorio" element={<Protected role="nutritionist"><Consultorio /></Protected>} />
             <Route path="/configuracoes" element={<Protected role="nutritionist"><Configuracoes /></Protected>} />
+            <Route path="/agente-config" element={<Protected role="nutritionist"><AgenteConfig /></Protected>} />
+            <Route path="/depoimentos" element={<Protected role="nutritionist"><Depoimentos /></Protected>} />
 
             {/* Patient area */}
             <Route path="/paciente" element={<Protected role="patient"><PatientArea /></Protected>} />

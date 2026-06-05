@@ -68,7 +68,7 @@ def slugify(text: str) -> str:
 PUBLIC_LEAD_FIELDS = {
     "id", "nome", "telefone", "email", "status_funil",
     "peso", "altura", "data_nascimento", "sexo", "objetivo",
-    "lead_token", "created_at",
+    "lead_token", "created_at", "atendimento_dados",
 }
 
 def public_lead_view(p: dict) -> dict:
@@ -77,6 +77,7 @@ def public_lead_view(p: dict) -> dict:
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
+GEMINI_KEY = os.environ.get('GEMINI_KEY', '').strip()
 
 # ---------- Helpers ----------
 def now_utc():
@@ -470,12 +471,6 @@ SYSTEM_CLINICAL = (
 )
 
 async def ai_clinical_analysis(anamnesis: dict, evaluation: Optional[dict]) -> str:
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"analise-{uuid.uuid4()}",
-        system_message=SYSTEM_CLINICAL,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-
     prompt = (
         "Analise clinicamente este paciente e gere um relatório estruturado em Markdown com as seções: "
         "1) Objetivo principal e prioridade. 2) Padrões alimentares e comportamentais detectados. "
@@ -483,14 +478,9 @@ async def ai_clinical_analysis(anamnesis: dict, evaluation: Optional[dict]) -> s
         "5) 3 recomendações práticas para a primeira consulta. Seja conciso (máx. 400 palavras).\n\n"
         f"ANAMNESE: {anamnesis}\n\nAVALIAÇÃO FÍSICA: {evaluation or 'não disponível'}"
     )
-    return await chat.send_message(UserMessage(text=prompt))
+    return await _ai_chat(f"analise-{uuid.uuid4()}", SYSTEM_CLINICAL, prompt)
 
 async def ai_meal_plan(patient: dict, anamnesis: dict, macros: dict, restricoes: str = None) -> str:
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"plano-{uuid.uuid4()}",
-        system_message=SYSTEM_CLINICAL,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
     prompt = (
         f"Monte um plano alimentar diário em Markdown para o paciente {patient.get('name')}. "
         f"Meta: {macros['kcal']} kcal | PTN {macros['proteina_g']}g | CHO {macros['carboidrato_g']}g | LIP {macros['gordura_g']}g. "
@@ -499,70 +489,42 @@ async def ai_meal_plan(patient: dict, anamnesis: dict, macros: dict, restricoes:
         "e finalize com uma seção 'Suplementação Sugerida' (se aplicável) e 'Hidratação'. "
         "Use linguagem clara, sem jargão. Não exceda 500 palavras."
     )
-    return await chat.send_message(UserMessage(text=prompt))
+    return await _ai_chat(f"plano-{uuid.uuid4()}", SYSTEM_CLINICAL, prompt)
 
 async def ai_adaptive_chat(token: str, message: str, anamnesis: dict, history: list) -> str:
     sys_prompt = await build_agent_system_prompt("agent1")
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"chat-{token}",
-        system_message=sys_prompt,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
     context = f"Dados iniciais do paciente:\n{anamnesis}\n\nHistórico recente:\n"
     for m in history[-10:]:
         context += f"{m['role']}: {m['content']}\n"
     context += f"\nMensagem do paciente: {message}\nResponda de forma acolhedora."
-    return await chat.send_message(UserMessage(text=context))
+    return await _ai_chat(f"chat-{token}", sys_prompt, context)
 
 async def ai_consultorio_chat(session_id: str, message: str, patient_context: dict, history: list) -> str:
-    """Agente 2 — interno do nutricionista. patient_context = anamnese + exames + avaliações."""
     extra = (
         "DADOS DO PACIENTE EM CONSULTA (use para fundamentar a resposta):\n"
         f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:18000]}"
     )
     sys_prompt = await build_agent_system_prompt("agent2", extra_context=extra)
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"consult-{session_id}",
-        system_message=sys_prompt,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-    convo = ""
-    for m in history[-10:]:
-        convo += f"{m['role']}: {m['content']}\n"
+    convo = "".join(f"{m['role']}: {m['content']}\n" for m in history[-10:])
     convo += f"user: {message}"
-    return await chat.send_message(UserMessage(text=convo))
+    return await _ai_chat(f"consult-{session_id}", sys_prompt, convo)
 
 async def ai_patient_chat(session_id: str, message: str, patient_context: dict, history: list) -> str:
-    """Agente 3 — paciente. patient_context = plano alimentar ativo, objetivo, restrições."""
     extra = (
         "CONTEXTO DO PACIENTE (plano alimentar ativo e dados-chave):\n"
         f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:14000]}"
     )
     sys_prompt = await build_agent_system_prompt("agent3", extra_context=extra)
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"patient-{session_id}",
-        system_message=sys_prompt,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-    convo = ""
-    for m in history[-10:]:
-        convo += f"{m['role']}: {m['content']}\n"
+    convo = "".join(f"{m['role']}: {m['content']}\n" for m in history[-10:])
     convo += f"user: {message}"
-    return await chat.send_message(UserMessage(text=convo))
+    return await _ai_chat(f"patient-{session_id}", sys_prompt, convo)
 
 async def ai_patient_proactive(session_id: str, instruction: str, patient_context: dict) -> str:
-    """Agente 3 — mensagem pró-ativa (nudge). instruction é a diretriz interna do nutricionista,
-    nunca exposta ao paciente. O agente compõe a mensagem como se ele mesmo iniciasse."""
     extra = (
         "CONTEXTO DO PACIENTE (plano alimentar ativo e dados-chave):\n"
         f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:14000]}"
     )
     sys_prompt = await build_agent_system_prompt("agent3", extra_context=extra)
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"patient-proactive-{session_id}-{uuid.uuid4().hex[:6]}",
-        system_message=sys_prompt,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
     prompt = (
         "[INSTRUÇÃO INTERNA — NÃO REVELAR AO PACIENTE]\n"
         f"Diretriz do nutricionista: {instruction}\n\n"
@@ -571,7 +533,62 @@ async def ai_patient_proactive(session_id: str, instruction: str, patient_contex
         "Use o nome do paciente se disponível no contexto. "
         "Não cite que isto é um lembrete automático. NÃO use emoji."
     )
-    return await chat.send_message(UserMessage(text=prompt))
+    return await _ai_chat(f"proactive-{session_id}-{uuid.uuid4().hex[:6]}", sys_prompt, prompt)
+
+_GEMINI_MODEL = "gemini-2.5-flash"
+_GEMINI_RETRY_DELAYS = [1, 2, 4, 8]  # backoff em segundos (4 tentativas)
+
+async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
+    """Chama a Gemini 2.5 Flash com retry exponencial em caso de alta demanda."""
+    import httpx, asyncio
+    contents = []
+    for m in messages:
+        role = "model" if m.get("role") == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": str(m.get("content", ""))}]})
+    if not contents:
+        contents = [{"role": "user", "parts": [{"text": "Olá!"}]}]
+    body = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": contents,
+        "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.9},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent"
+    last_err = "desconhecido"
+    async with httpx.AsyncClient(timeout=50.0) as client:
+        for attempt, delay in enumerate([0] + _GEMINI_RETRY_DELAYS):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                resp = await client.post(url, params={"key": api_key}, json=body)
+                data = resp.json()
+                if resp.is_success:
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                err_msg = data.get("error", {}).get("message", f"HTTP {resp.status_code}")
+                last_err = err_msg
+                # Erro fatal (auth, billing real) → não adianta retry
+                if resp.status_code in (401, 403):
+                    raise ValueError(err_msg)
+                # Alta demanda ou quota → retry com backoff
+                logging.warning(f"Gemini tentativa {attempt+1}: {err_msg[:120]}")
+            except httpx.TimeoutException:
+                last_err = "Timeout"
+                logging.warning(f"Gemini timeout na tentativa {attempt+1}")
+    raise ValueError(f"Gemini indisponível após {len(_GEMINI_RETRY_DELAYS)+1} tentativas: {last_err[:120]}")
+
+async def _ai_chat(session_id: str, system_prompt: str, user_text: str) -> str:
+    """Wrapper que usa Gemini quando disponível, senão Anthropic via emergentintegrations."""
+    if GEMINI_KEY:
+        return await _gemini_chat(
+            [{"role": "user", "content": user_text}],
+            system_prompt,
+            GEMINI_KEY,
+        )
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=session_id,
+        system_message=system_prompt,
+    ).with_model("anthropic", "claude-sonnet-4-6")
+    return await chat.send_message(UserMessage(text=user_text))
 
 async def ai_exam_analysis(raw_text: str) -> dict:
     """Extract laboratory markers from exam PDF text and classify them.
@@ -593,7 +610,7 @@ async def ai_exam_analysis(raw_text: str) -> dict:
             "'prioridade' (alteração relevante que merece atenção). "
             "Responda em Português (BR). NÃO faça diagnóstico médico, apenas organize."
         ),
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model("anthropic", "claude-sonnet-4-6")
     prompt = f"Texto extraído do exame:\n\n{raw_text[:8000]}"
     raw = await chat.send_message(UserMessage(text=prompt))
     # Try to parse JSON; fallback on first valid {...} block
@@ -686,6 +703,185 @@ async def create_lead(payload: LeadIn, nutri: Optional[str] = Query(None)):
     await db.patients.insert_one(patient)
     return LeadOut(token=token, patient_id=pid, name=payload.name)
 
+# ─── ATENDIMENTO PÚBLICO (Agente de Primeiro Contato) ────────────────────────
+
+ATENDIMENTO_SYSTEM_PROMPT = """Você é RC Nutri, o assistente de primeiro contato do nutricionista e treinador Rogério Costa.
+
+Seu objetivo é realizar o primeiro contato com o potencial paciente, coletar informações essenciais, qualificá-lo e apresentar os planos da consultoria.
+
+Tom: motivador, empático, linguagem informal mas profissional. Use emojis moderadamente. Valide cada resposta antes de avançar.
+
+FLUXO OBRIGATÓRIO (siga exatamente esta ordem, nunca pule etapas):
+
+ETAPA 1 — SAUDAÇÃO:
+Comece apresentando-se e pedindo o nome do visitante. Após receber o nome, use exatamente:
+"Olá {nome} tudo bem? SEJA MUITO BEM VINDO(A)! 😊
+
+Vou te explicar todos os detalhes da consultoria online do Rogério.
+Mas antes preciso fazer algumas perguntas para ver se essa consultoria serve para você, ok?"
+
+Depois pergunte: "Qual perfil e objetivo abaixo que você se encaixa atualmente?"
+1. Quero ganhar massa e volume muscular 💪
+2. Quero perder barriga, definir o corpo e emagrecer sem flacidez 🔥
+3. Apenas manutenção da saúde, sem fins estéticos ✅
+
+ETAPA 2 — DETALHES PESSOAIS:
+Após o objetivo, responda: "Agora compreendi perfeitamente seu objetivo 😊 Vou te ajudar nessa jornada! 👊 Últimos detalhes para eu entender 100% se meu método pode te ajudar!"
+Pergunte (pode ser em uma mensagem):
+1. Qual sua idade, peso e altura ATUAL?
+2. Você já teve experiência com consultoria de treino e nutrição?
+3. Qual sua maior dificuldade em atingir o objetivo?
+
+ETAPA 3 — AVALIAÇÃO CORPORAL:
+"Perfeito, obrigado pelas informações! Só mais uma coisa 👇"
+Peça que escolha uma faixa de 1 a 9 que representa o corpo HOJE e outra que representa o corpo que DESEJA:
+1 (10-12%) — Muito definido, músculos aparentes
+2 (15-17%) — Boa definição, forma atlética
+3 (20-22%) — Forma saudável, pouca definição
+4 (25%) — Acima do ideal, pouca tonicidade
+5 (30%) — Sobrepeso moderado
+6 (35%) — Sobrepeso significativo
+7 (40%) — Obesidade moderada
+8 (45%) — Obesidade severa
+9 (50%+) — Obesidade mórbida
+
+ETAPA 4 — APRESENTAÇÃO DA OFERTA:
+Apresente com entusiasmo:
+"COMO FUNCIONA A CONSULTORIA FITNESS GOLD 🏆
+
+🏋 AVALIAÇÃO FÍSICA / CONSULTA — análise do condicionamento físico atual e rotina para o planejamento perfeito
+
+📱 ACESSO EXCLUSIVO AO APP — vídeos da execução correta de cada exercício + PDF com planejamento nutricional 🍎🥗
+
+💎 SUPORTE VIP e ILIMITADO — acesso ao WhatsApp do Rogério para tirar dúvidas sempre que precisar
+
+✅ FEEDBACK SEMANAL para acompanhamento mais próximo e ajustes no planejamento
+
+É esse tipo de acompanhamento PERSONALIZADO que você está procurando?
+Pois já vou te passar o valor promocional 👇"
+
+Planos disponíveis:
+- Plano Treino (2 meses de acompanhamento)
+- Plano Nutrição (2 meses de acompanhamento)
+- Consultoria Gold (2 meses) ⭐ MAIS POPULAR
+
+Urgência: "Restam apenas algumas vagas para a consultoria Gold Fitness deste mês — oferta válida enquanto durarem as vagas!"
+"Qual plano fica melhor para você? 😊"
+
+ETAPA 5 — ENCERRAMENTO:
+Após o paciente escolher o plano:
+"Perfeito, ótima escolha! 🎉
+
+Já vou processar suas informações e o Rogério entrará em contato para finalizar sua inscrição.
+
+Fique de olho no seu WhatsApp 📱"
+
+REGRAS:
+- Nunca pule etapas. Sempre valide a resposta antes de avançar.
+- Ao finalizar TODA a coleta, inclua obrigatoriamente este bloco no final da mensagem de encerramento:
+DADOS_COLETADOS: {"nome": "", "objetivo": "", "idade": "", "peso": "", "altura": "", "experiencia_previa": "", "maior_dificuldade": "", "gordura_atual_faixa": "", "gordura_desejada_faixa": "", "plano_escolhido": ""}
+"""
+
+# Rate limit para atendimento (session_id → timestamps)
+_atendimento_rate: dict = defaultdict(deque)
+ATENDIMENTO_RATE_MAX = 30
+ATENDIMENTO_RATE_WINDOW = 60
+
+class AtendimentoMsgIn(BaseModel):
+    session_id: str
+    messages: List[dict]  # [{"role": "user"|"assistant", "content": "..."}]
+
+class AtendimentoLeadIn(BaseModel):
+    nome: Optional[str] = None
+    telefone: Optional[str] = None
+    email: Optional[str] = None
+    objetivo: Optional[str] = None
+    idade: Optional[str] = None
+    peso: Optional[str] = None
+    altura: Optional[str] = None
+    experiencia_previa: Optional[str] = None
+    maior_dificuldade: Optional[str] = None
+    gordura_atual_faixa: Optional[str] = None
+    gordura_desejada_faixa: Optional[str] = None
+    plano_escolhido: Optional[str] = None
+
+@api.post("/public/atendimento/chat")
+async def atendimento_chat(payload: AtendimentoMsgIn):
+    sid = (payload.session_id or "")[:64]
+    now = now_utc()
+    bucket = _atendimento_rate[sid]
+    cutoff = now - timedelta(seconds=ATENDIMENTO_RATE_WINDOW)
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= ATENDIMENTO_RATE_MAX:
+        raise HTTPException(429, "Muitas mensagens. Aguarde alguns segundos.")
+    bucket.append(now)
+
+    msgs = (payload.messages or [])[-25:]
+
+    try:
+        gemini_key = os.environ.get("GEMINI_KEY", "").strip()
+        if gemini_key:
+            reply = await _gemini_chat(msgs, ATENDIMENTO_SYSTEM_PROMPT, gemini_key)
+        else:
+            # Fallback: Anthropic via emergentintegrations
+            convo = "\n\n".join(
+                f"{str(m.get('role','user')).upper()}: {str(m.get('content',''))}"
+                for m in msgs
+            )
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=f"atend-{sid}-{uuid.uuid4().hex[:8]}",
+                system_message=ATENDIMENTO_SYSTEM_PROMPT,
+            ).with_model("anthropic", "claude-sonnet-4-6")
+            reply = await chat.send_message(UserMessage(text=convo.strip() or "Olá!"))
+    except Exception as e:
+        logging.exception("Atendimento chat failed")
+        raise HTTPException(503, f"Agente indisponível: {str(e)[:160]}")
+
+    # Extract DADOS_COLETADOS if present
+    collected = None
+    match = re.search(r'DADOS_COLETADOS:\s*(\{[\s\S]*?\})', reply)
+    if match:
+        try:
+            collected = json.loads(match.group(1))
+        except Exception:
+            pass
+
+    clean_reply = re.sub(r'\s*DADOS_COLETADOS:[\s\S]*$', '', reply).strip()
+    return {"reply": clean_reply, "collected_data": collected, "finished": collected is not None}
+
+@api.post("/public/atendimento/lead")
+async def atendimento_save_lead(payload: AtendimentoLeadIn):
+    nutri_doc = await db.users.find_one({"role": "nutritionist"}, sort=[("created_at", 1)])
+    if not nutri_doc:
+        raise HTTPException(500, "Nenhum nutricionista cadastrado")
+    token = secrets.token_urlsafe(16)
+    pid = str(uuid.uuid4())
+    patient = {
+        "id": pid,
+        "nome": payload.nome or "Visitante",
+        "telefone": payload.telefone or "",
+        "email": payload.email or "",
+        "status_funil": "LEAD_ATENDIMENTO",
+        "nutricionista_id": nutri_doc["id"],
+        "lead_token": token,
+        "objetivo": payload.objetivo,
+        "peso": payload.peso,
+        "altura": payload.altura,
+        "atendimento_dados": {
+            "idade": payload.idade,
+            "experiencia_previa": payload.experiencia_previa,
+            "maior_dificuldade": payload.maior_dificuldade,
+            "gordura_atual_faixa": payload.gordura_atual_faixa,
+            "gordura_desejada_faixa": payload.gordura_desejada_faixa,
+            "plano_escolhido": payload.plano_escolhido,
+        },
+        "created_at": iso(now_utc()),
+    }
+    await db.patients.insert_one(patient)
+    return {"ok": True, "token": token, "patient_id": pid}
+
 @api.get("/public/lead/{token}")
 async def get_lead(token: str):
     p = await db.patients.find_one({"lead_token": token}, {"_id": 0, "password_hash": 0})
@@ -693,20 +889,86 @@ async def get_lead(token: str):
         raise HTTPException(404, "Lead não encontrado")
     return public_lead_view(p)
 
+@api.post("/public/checkout/{token}/comprovante")
+async def upload_comprovante(token: str, file: UploadFile = File(...)):
+    p = await db.patients.find_one({"lead_token": token})
+    if not p:
+        raise HTTPException(404, "Lead não encontrado")
+    ct = (file.content_type or "")
+    if not (ct.startswith("image/") or ct == "application/pdf"):
+        raise HTTPException(400, "Envie uma imagem ou PDF")
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo maior que 10MB")
+    b64 = _base64.b64encode(contents).decode()
+    data_url = f"data:{ct};base64,{b64}"
+    await db.patients.update_one(
+        {"lead_token": token},
+        {"$set": {
+            "comprovante": {"file_name": file.filename, "data_url": data_url, "uploaded_at": iso(now_utc())},
+            "status_funil": "COMPROVANTE_ENVIADO",
+        }},
+    )
+    return {"ok": True}
+
+_COND_LABELS = {
+    "sem_experiencia": "Sem experiência",
+    "inativo": "Inativo",
+    "ativo_1": "Ativo 1 — treina às vezes",
+    "ativo_2": "Ativo 2 — treina regularmente",
+    "atleta": "Atleta",
+}
+
+def _join_list(v):
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v if x)
+    return v or ""
+
+def _map_preconsulta(r: dict) -> dict:
+    m = {}
+    # dados_sociais
+    if r.get("email"):     m["email"]    = r["email"]
+    if r.get("profissao"): m["ocupacao"] = r["profissao"]
+    # habitos_vida
+    if r.get("alcool"):   m["alcool"]              = r["alcool"]
+    if r.get("fumo"):     m["tabagismo"]            = r["fumo"]
+    if r.get("sono"):     m["habitos_sono"]         = _join_list(r["sono"])
+    if r.get("alergias"): m["restricao_alimentar"]  = r["alergias"]
+    # patologias
+    if r.get("lesoes"):    m["lesoes"]       = r["lesoes"]
+    if r.get("doencas"):   m["patologias"]   = r["doencas"]
+    if r.get("medicacao"): m["medicamentos"] = r["medicacao"]
+    # avaliacao_clinica
+    if r.get("intestino"): m["habito_intestinal"] = r["intestino"]
+    if r.get("agua"):      m["ingestao_hidrica"]  = r["agua"]
+    # alimentacao
+    if r.get("alergias"):
+        m["alergia_alimentar"]     = r["alergias"]
+        m["intolerancia_alimentar"] = r["alergias"]
+    if r.get("frutas_preferidas"): m["preferencia_alimentar"] = r["frutas_preferidas"]
+    if r.get("suplementacao"):     m["suplementos"]           = r["suplementacao"]
+    # atividade_fisica
+    cond = r.get("condicionamento")
+    if cond: m["atividades_praticadas"] = _COND_LABELS.get(cond, cond)
+    if r.get("dias_treino"):    m["frequencia_semana"]  = _join_list(r["dias_treino"])
+    if r.get("horario_treino"): m["horario_atividades"] = r["horario_treino"]
+    return m
+
 @api.post("/public/anamnesis")
 async def submit_anamnesis(payload: AnamnesisIn):
     p = await db.patients.find_one({"lead_token": payload.token})
     if not p:
         raise HTTPException(404, "Lead não encontrado")
+    r = payload.respostas
     aid = str(uuid.uuid4())
     doc = {
-        "id": aid, "paciente_id": p["id"], "respostas": payload.respostas,
+        "id": aid, "paciente_id": p["id"], "respostas": r,
         "created_at": iso(now_utc()),
+        **_map_preconsulta(r),
     }
     await db.anamneses.insert_one(doc)
     # update patient with relevant fields (support old & new field names)
     upd = {"status_funil": "ANAMNESE_COMPLETA"}
-    r = payload.respostas
 
     def first(*keys):
         for k in keys:
@@ -1600,6 +1862,107 @@ async def run_nudge_now(pid: str, nid: str, user=Depends(require_nutritionist)):
     )
     return {"ok": True, "message": text}
 
+# ─── DEPOIMENTOS (Testimonials) ──────────────────────────────────────────────
+
+import base64 as _base64
+
+class TestimonialIn(BaseModel):
+    name: str
+    stars: int = 5
+    phrase: str
+    quote: str
+    active: bool = True
+    order: int = 0
+
+@api.get("/public/testimonials")
+async def list_public_testimonials():
+    rows = await db.testimonials.find(
+        {"active": True}, {"_id": 0, "photo_data_url": 0}
+    ).sort("order", 1).to_list(50)
+    return rows
+
+@api.get("/public/testimonials/{tid}/photo")
+async def get_testimonial_photo(tid: str):
+    t = await db.testimonials.find_one({"id": tid}, {"_id": 0, "photo_data_url": 1})
+    if not t or not t.get("photo_data_url"):
+        raise HTTPException(404, "Foto não encontrada")
+    data_url = t["photo_data_url"]
+    try:
+        header, b64 = data_url.split(",", 1)
+        content_type = header.split(":")[1].split(";")[0]
+        content = _base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(400, "Dados de imagem inválidos")
+    return Response(content=content, media_type=content_type)
+
+@api.get("/testimonials")
+async def list_all_testimonials(user=Depends(require_nutritionist)):
+    rows = await db.testimonials.find(
+        {"nutricionista_id": user["id"]}, {"_id": 0, "photo_data_url": 0}
+    ).sort("order", 1).to_list(100)
+    return rows
+
+@api.post("/testimonials")
+async def create_testimonial(payload: TestimonialIn, user=Depends(require_nutritionist)):
+    tid = str(uuid.uuid4())
+    doc = {
+        "id": tid,
+        "nutricionista_id": user["id"],
+        "name": payload.name,
+        "stars": max(1, min(5, payload.stars)),
+        "phrase": payload.phrase,
+        "quote": payload.quote,
+        "photo_data_url": None,
+        "active": payload.active,
+        "order": payload.order,
+        "created_at": iso(now_utc()),
+    }
+    await db.testimonials.insert_one(doc)
+    return {k: v for k, v in doc.items() if k not in ("_id", "photo_data_url")}
+
+@api.post("/testimonials/{tid}/photo")
+async def upload_testimonial_photo(tid: str, file: UploadFile = File(...), user=Depends(require_nutritionist)):
+    t = await db.testimonials.find_one({"id": tid, "nutricionista_id": user["id"]})
+    if not t:
+        raise HTTPException(404, "Depoimento não encontrado")
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(400, "Envie uma imagem (JPG, PNG, etc.)")
+    contents = await file.read()
+    if len(contents) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Imagem maior que 3MB")
+    b64 = _base64.b64encode(contents).decode()
+    data_url = f"data:{file.content_type};base64,{b64}"
+    await db.testimonials.update_one({"id": tid}, {"$set": {"photo_data_url": data_url}})
+    return {"ok": True, "photo_url": f"/api/public/testimonials/{tid}/photo"}
+
+@api.patch("/testimonials/{tid}")
+async def update_testimonial(tid: str, payload: dict, user=Depends(require_nutritionist)):
+    t = await db.testimonials.find_one({"id": tid, "nutricionista_id": user["id"]})
+    if not t:
+        raise HTTPException(404, "Depoimento não encontrado")
+    allowed = {"name", "stars", "phrase", "quote", "active", "order"}
+    updates = {k: v for k, v in (payload or {}).items() if k in allowed}
+    if updates:
+        await db.testimonials.update_one({"id": tid}, {"$set": updates})
+    return {"ok": True}
+
+@api.delete("/testimonials/{tid}")
+async def delete_testimonial(tid: str, user=Depends(require_nutritionist)):
+    t = await db.testimonials.find_one({"id": tid, "nutricionista_id": user["id"]})
+    if not t:
+        raise HTTPException(404, "Depoimento não encontrado")
+    await db.testimonials.delete_one({"id": tid})
+    return {"ok": True}
+
+# Patient: list own exams
+@api.get("/patient/exams")
+async def patient_exams(user=Depends(require_patient)):
+    pid = user.get("patient_id")
+    rows = await db.exams.find(
+        {"paciente_id": pid}, {"_id": 0, "raw_text": 0}
+    ).sort("created_at", -1).to_list(30)
+    return rows
+
 # Background scheduler — checks every 60s for due nudges
 _scheduler_task = None
 
@@ -2024,21 +2387,26 @@ class AnamnseSecaoIn(BaseModel):
 class ObsAddIn(BaseModel):
     texto: str
 
-class RecordatorioAlimentoIn(BaseModel):
-    nome: str
-    quantidade: str
-    horario: Optional[str] = None
+class RecordatorioItemIn(BaseModel):
+    n: int = 1
+    alimento_id: Optional[str] = None   # ID string da colecao alimentos
+    alimento_nome: str
+    medida_nome: str = "Gramas"
+    quantidade: float = 0
+    quantidade_g: float
 
 class RecordatorioRefeicaoIn(BaseModel):
+    numero: int = 1
     nome: str
     horario: Optional[str] = None
-    alimentos: List[RecordatorioAlimentoIn] = []
+    itens: List[RecordatorioItemIn] = []
     observacao: Optional[str] = None
 
 class RecordatorioIn(BaseModel):
     data: str
     refeicoes: List[RecordatorioRefeicaoIn] = []
     observacoes: Optional[str] = None
+    finalizado: bool = False
 
 class ConfigNutricionistaIn(BaseModel):
     nome: Optional[str] = None
@@ -2135,6 +2503,23 @@ SECOES_ANAMNESE = {
     "mulheres": ["ultima_menstruacao","tpm","ciclo_menstrual","contraceptivo","colicas","lactante","menopausa"],
 }
 
+@api.post("/admin/migrate-anamneses")
+async def migrate_anamneses(user=Depends(require_nutritionist)):
+    """Backfill structured fields for anamneses that only have raw `respostas`."""
+    updated = 0
+    cursor = db.anamneses.find({"respostas": {"$exists": True}})
+    async for doc in cursor:
+        r = doc.get("respostas") or {}
+        mapeado = _map_preconsulta(r)
+        if not mapeado:
+            continue
+        # Only set fields that are not yet present in the document
+        to_set = {k: v for k, v in mapeado.items() if not doc.get(k)}
+        if to_set:
+            await db.anamneses.update_one({"_id": doc["_id"]}, {"$set": to_set})
+            updated += 1
+    return {"ok": True, "updated": updated}
+
 @api.get("/patients/{pid}/anamnese-v2")
 async def get_anamnese_v2(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
@@ -2215,36 +2600,72 @@ async def list_recordatorios(pid: str, user=Depends(require_nutritionist)):
     rows = await db.recordatorios.find({"paciente_id": pid}, {"_id": 0}).sort("data", -1).to_list(100)
     return rows
 
+async def _build_recordatorio_model(payload: RecordatorioIn, pid: str, nutricionista_id: str):
+    """Constroi o modelo Pydantic Recordatorio buscando nutrientes no MongoDB."""
+    from recordatorio_schema import Recordatorio as RecSchema, RefeicaoRecordatorio as RefSchema, ItemRecordatorio as ItemSchema
+    from recordatorio_calc import calcular_item
+    refeicoes = []
+    for ri, ref_in in enumerate(payload.refeicoes, 1):
+        itens = []
+        for idx, item_in in enumerate(ref_in.itens, 1):
+            item_data = item_in.model_dump()
+            item_data["n"] = idx
+            if item_in.alimento_id:
+                alim = await db.alimentos.find_one({"id": item_in.alimento_id}, {"_id": 0})
+                if alim:
+                    item_data.update(calcular_item(alim, item_in.quantidade_g))
+            itens.append(ItemSchema(**item_data))
+        refeicoes.append(RefSchema(
+            numero=ref_in.numero or ri,
+            nome=ref_in.nome,
+            horario=ref_in.horario,
+            itens=itens,
+            observacao=ref_in.observacao,
+        ))
+    return RecSchema(
+        paciente_id=pid,
+        nutricionista_id=nutricionista_id,
+        data=payload.data,
+        data_registro=iso(now_utc()),
+        refeicoes=refeicoes,
+        observacoes=payload.observacoes or "",
+        finalizado=payload.finalizado,
+    )
+
 @api.post("/patients/{pid}/recordatorios")
 async def create_recordatorio(pid: str, payload: RecordatorioIn, user=Depends(require_nutritionist)):
+    from recordatorio_calc import finalizar_recordatorio
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
         raise HTTPException(404, "Paciente não encontrado")
     rid = str(uuid.uuid4())
     now_str = iso(now_utc())
-    doc = {"id": rid, "paciente_id": pid, "nutricionista_id": user["id"],
-           "data": payload.data,
-           "refeicoes": [r.model_dump() for r in payload.refeicoes],
-           "observacoes": payload.observacoes or "",
-           "criado_em": now_str, "atualizado_em": now_str}
+    rec = await _build_recordatorio_model(payload, pid, user["id"])
+    rec = finalizar_recordatorio(rec)
+    doc = rec.model_dump()
+    doc["id"] = rid
+    doc["criado_em"] = now_str
+    doc["atualizado_em"] = now_str
     await db.recordatorios.insert_one(doc)
     return {k: v for k, v in doc.items() if k != "_id"}
 
 @api.put("/patients/{pid}/recordatorios/{rid}")
 async def update_recordatorio(pid: str, rid: str, payload: RecordatorioIn, user=Depends(require_nutritionist)):
+    from recordatorio_calc import finalizar_recordatorio
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
         raise HTTPException(404, "Paciente não encontrado")
-    await db.recordatorios.update_one({"id": rid, "paciente_id": pid}, {"$set": {
-        "data": payload.data,
-        "refeicoes": [r.model_dump() for r in payload.refeicoes],
-        "observacoes": payload.observacoes or "",
-        "atualizado_em": iso(now_utc()),
-    }})
-    updated = await db.recordatorios.find_one({"id": rid}, {"_id": 0})
-    if not updated:
+    existing = await db.recordatorios.find_one({"id": rid, "paciente_id": pid})
+    if not existing:
         raise HTTPException(404, "Recordatório não encontrado")
-    return updated
+    if existing.get("finalizado"):
+        raise HTTPException(409, "Recordatório finalizado não pode ser editado")
+    rec = await _build_recordatorio_model(payload, pid, user["id"])
+    rec = finalizar_recordatorio(rec)
+    upd = rec.model_dump()
+    upd["atualizado_em"] = iso(now_utc())
+    await db.recordatorios.update_one({"id": rid, "paciente_id": pid}, {"$set": upd})
+    return await db.recordatorios.find_one({"id": rid}, {"_id": 0})
 
 @api.delete("/patients/{pid}/recordatorios/{rid}")
 async def delete_recordatorio(pid: str, rid: str, user=Depends(require_nutritionist)):
@@ -2343,9 +2764,33 @@ class AlimentoCustomIn(BaseModel):
     medida_caseira: str = "100g"
     por_100g: dict
 
+_GRUPOS_ALIMENTARES = [
+    "Carnes e Proteínas",
+    "Cereais, Raízes, Tubérculos e Frutos",
+    "Feijão e Leguminosas",
+    "Fibras A",
+    "Fibras B",
+    "Frutas",
+    "Frutas Oleosas",
+    "Leite e Derivados",
+    "Livres",
+    "Oleaginosas e Sementes",
+    "Outros",
+    "Pães e Variedades",
+    "Sucos Naturais e Integrais",
+    "Vegetais A (livres para o consumo)",
+    "Vegetais B",
+    "Óleos e Gorduras",
+]
+
+@api.get("/alimentos/grupos")
+async def list_grupos(user=Depends(require_nutritionist)):
+    return _GRUPOS_ALIMENTARES
+
 @api.get("/alimentos")
 async def search_alimentos(
     q: str = "",
+    grupo: str = "",
     categoria: str = "",
     fonte: str = "",
     page: int = 1,
@@ -2355,17 +2800,62 @@ async def search_alimentos(
     filt: dict = {}
     if q:
         filt["nome"] = {"$regex": q, "$options": "i"}
+    if grupo:
+        filt["grupo"] = grupo
     if categoria:
         filt["categoria"] = {"$regex": categoria, "$options": "i"}
     if fonte == "CUSTOM":
         filt["nutricionista_id"] = user["id"]
-    elif fonte == "TACO":
-        filt["fonte"] = "TACO"
+    elif fonte in ("TACO", "IBGE", "TBCA", "Tucunduva"):
+        filt["fonte"] = fonte
+        filt["nutricionista_id"] = {"$exists": False}
     else:
-        filt["$or"] = [{"fonte": "TACO"}, {"nutricionista_id": user["id"]}]
+        # Todos os alimentos do banco (evonut + taco legacy) + custom do nutricionista
+        filt["$or"] = [
+            {"nutricionista_id": {"$exists": False}},
+            {"nutricionista_id": user["id"]},
+        ]
     skip = (page - 1) * limit
+    total = await db.alimentos.count_documents(filt)
     cursor = db.alimentos.find(filt, {"_id": 0}).skip(skip).limit(limit).sort("nome", 1)
-    return [a async for a in cursor]
+    items = []
+    async for a in cursor:
+        # Normaliza campos de display para ambos os formatos (evonut e legado TACO/CUSTOM)
+        if "nutrientes" in a:
+            n = a.pop("nutrientes") or {}
+            a["energia_kcal_100g"] = n.get("energia_kcal")
+            a["grupo_display"] = a.get("grupo")
+        else:
+            p = a.get("por_100g") or {}
+            a["energia_kcal_100g"] = p.get("energia_kcal")
+            a["grupo_display"] = a.get("grupo") or a.get("categoria")
+        items.append(a)
+    return {"total": total, "page": page, "limit": limit, "items": items}
+
+@api.get("/alimentos/{aid}")
+async def get_alimento(aid: str, user=Depends(require_nutritionist)):
+    doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Alimento não encontrado")
+    return doc
+
+class AlimentoCalcIn(BaseModel):
+    alimento_id: str
+    quantidade_g: float
+
+@api.post("/alimentos/calcular")
+async def calcular_porcao(payload: AlimentoCalcIn, user=Depends(require_nutritionist)):
+    doc = await db.alimentos.find_one({"id": payload.alimento_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Alimento não encontrado")
+    nutr = _nutrientes_por_porcao(doc, payload.quantidade_g)
+    return {
+        "alimento_id": payload.alimento_id,
+        "nome": doc.get("nome"),
+        "grupo": doc.get("grupo"),
+        "quantidade_g": payload.quantidade_g,
+        "nutrientes": nutr,
+    }
 
 @api.post("/alimentos", status_code=201)
 async def create_alimento(payload: AlimentoCustomIn, user=Depends(require_nutritionist)):
@@ -2388,8 +2878,8 @@ async def update_alimento(aid: str, payload: AlimentoCustomIn, user=Depends(requ
     existing = await db.alimentos.find_one({"id": aid})
     if not existing:
         raise HTTPException(404, "Alimento não encontrado")
-    if existing.get("fonte") == "TACO":
-        raise HTTPException(403, "Alimentos TACO não podem ser editados")
+    if not existing.get("nutricionista_id"):
+        raise HTTPException(403, "Alimentos do banco não podem ser editados")
     if existing.get("nutricionista_id") != user["id"]:
         raise HTTPException(403, "Sem permissão")
     upd = {**payload.model_dump(), "atualizado_em": iso(now_utc())}
@@ -2401,8 +2891,8 @@ async def delete_alimento(aid: str, user=Depends(require_nutritionist)):
     existing = await db.alimentos.find_one({"id": aid})
     if not existing:
         raise HTTPException(404, "Alimento não encontrado")
-    if existing.get("fonte") == "TACO":
-        raise HTTPException(403, "Alimentos TACO não podem ser excluídos")
+    if not existing.get("nutricionista_id"):
+        raise HTTPException(403, "Alimentos do banco não podem ser excluídos")
     if existing.get("nutricionista_id") != user["id"]:
         raise HTTPException(403, "Sem permissão")
     await db.alimentos.delete_one({"id": aid})
@@ -2411,12 +2901,43 @@ async def delete_alimento(aid: str, user=Depends(require_nutritionist)):
 # ── Plano Alimentar Manual ────────────────────────────────────────
 
 def _nutrientes_por_porcao(alimento: dict, quantidade_g: float) -> dict:
+    ref_g = alimento.get("quantidade_referencia_g", 100.0) or 100.0
+    f = quantidade_g / ref_g
+    # Formato EVONUT: campo "nutrientes" com nomes diferentes
+    if "nutrientes" in alimento:
+        n = alimento["nutrientes"]
+        return {
+            "energia_kcal":    round((n.get("energia_kcal") or 0) * f, 2),
+            "proteinas_g":     round((n.get("proteina_g") or 0) * f, 2),
+            "carboidratos_g":  round((n.get("carboidrato_g") or 0) * f, 2),
+            "lipidios_g":      round((n.get("lipideos_g") or 0) * f, 2),
+            "fibras_g":        round((n.get("fibra_g") or 0) * f, 2),
+            "sodio_mg":        round((n.get("sodio_mg") or 0) * f, 2),
+            "calcio_mg":       round((n.get("calcio_mg") or 0) * f, 2),
+            "ferro_mg":        round((n.get("ferro_mg") or 0) * f, 2),
+            "vitamina_c_mg":   round((n.get("vit_c_mg") or 0) * f, 2),
+            "colesterol_mg":   round((n.get("colesterol_mg") or 0) * f, 2),
+            "potassio_mg":     round((n.get("potassio_mg") or 0) * f, 2),
+            "magnesio_mg":     round((n.get("magnesio_mg") or 0) * f, 2),
+            "ag_saturados_g":  round((n.get("ag_saturados_g") or 0) * f, 2),
+            "ag_mono_g":       round((n.get("ag_monoinsat_g") or 0) * f, 2),
+            "ag_poli_g":       round((n.get("ag_poliinsat_g") or 0) * f, 2),
+            "ag_trans_g":      round((n.get("ag_trans_g") or 0) * f, 2),
+            "zinco_mg":        round((n.get("zinco_mg") or 0) * f, 2),
+            "selenio_mcg":     round((n.get("selenio_mcg") or 0) * f, 2),
+            "vitamina_a_mcg":  round((n.get("vitamina_a_mcg") or 0) * f, 2),
+            "vitamina_d_mcg":  round((n.get("vit_d_mcg") or 0) * f, 2),
+            "vitamina_e_mg":   round((n.get("vit_e_mg") or 0) * f, 2),
+            "vitamina_b12_mcg":round((n.get("vit_b12_mcg") or 0) * f, 2),
+            "folato_mcg":      round((n.get("folato_mcg") or 0) * f, 2),
+        }
+    # Formato legado TACO / CUSTOM: campo "por_100g"
     p = alimento.get("por_100g", {})
-    f = quantidade_g / 100.0
+    f2 = quantidade_g / 100.0
     keys = ["energia_kcal","proteinas_g","carboidratos_g","lipidios_g","fibras_g",
             "sodio_mg","calcio_mg","ferro_mg","vitamina_c_mg","colesterol_mg",
             "potassio_mg","magnesio_mg"]
-    return {k: round((p.get(k) or 0) * f, 2) for k in keys}
+    return {k: round((p.get(k) or 0) * f2, 2) for k in keys}
 
 class AlimentoPlanoItem(BaseModel):
     alimento_id: str
@@ -2912,6 +3433,8 @@ async def startup():
     await db.anamneses.create_index("paciente_id")
     await db.alimentos.create_index([("nome", 1)])
     await db.alimentos.create_index([("fonte", 1), ("categoria", 1)])
+    await db.alimentos.create_index("grupo")
+    await db.alimentos.create_index([("nome", "text")])
     await db.planos_manuais.create_index([("paciente_id", 1), ("criado_em", -1)])
     await db.exames_manuais.create_index([("paciente_id", 1), ("data_coleta", -1)])
     # seed alimentos TACO
