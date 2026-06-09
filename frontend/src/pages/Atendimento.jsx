@@ -82,7 +82,7 @@ REGRAS:
 DADOS_COLETADOS: {"nome": "", "objetivo": "", "idade": "", "peso": "", "altura": "", "experiencia_previa": "", "maior_dificuldade": "", "gordura_atual_faixa": "", "gordura_desejada_faixa": "", "plano_escolhido": ""}`;
 
 // ─── Chamada via backend proxy ────────────────────────────────────────────────
-const BACKEND = process.env.REACT_APP_BACKEND_URL || "http://localhost:8001";
+const BACKEND = process.env.REACT_APP_BACKEND_URL;
 
 async function callAI(apiMessages) {
   const res = await fetch(`${BACKEND}/api/public/atendimento/chat`, {
