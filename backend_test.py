@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 
 # Configuration
-BASE_URL = "https://smart-diet-system.preview.emergentagent.com/api"
+BASE_URL = "https://deploy-projeto-1.preview.emergentagent.com/api"
 ADMIN_EMAIL = "admin@rogeriocosta.com.br"
 ADMIN_PASSWORD = "rogerio2025"
 
