@@ -1,0 +1,551 @@
+[
+  {
+    "codigo": 1,
+    "base_raw": "Abacate, cru215",
+    "base_nome": "Abacate, cru",
+    "base_display": "Abacate, cru (Metade: 1) (215g)",
+    "base_medida_nome": "Metade",
+    "base_quantidade": 1.0,
+    "base_quantidade_g": 215.0,
+    "descricao": "Abacate, cru (Metade: 1) (215g)  │  Opção 2: Ovo de galinha (IBGE) (Gramas: 100)",
+    "opcoes": [
+      {
+        "nome": "Ovo de galinha (IBGE)",
+        "medida_nome": "Gramas",
+        "quantidade": 100.0
+      }
+    ]
+  },
+  {
+    "codigo": 2,
+    "base_raw": "Abacaxi e melão, suco natural, s/ açúcar100",
+    "base_nome": "Abacaxi e melão, suco natural, s/ açúcar",
+    "base_display": "Abacaxi e melão, suco natural, s/ açúcar (Gramas: 100)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 100.0,
+    "base_quantidade_g": 100.0,
+    "descricao": "Abacaxi e melão, suco natural, s/ açúcar (Gramas: 100)  │  Opção 2: Maracujá, refresco, c/ suco natural, s/ açúcar (Gramas: 484,56)",
+    "opcoes": [
+      {
+        "nome": "Maracujá, refresco, c/ suco natural, s/ açúcar",
+        "medida_nome": "Gramas",
+        "quantidade": 484.56
+      }
+    ]
+  },
+  {
+    "codigo": 3,
+    "base_raw": "Nhoque, batata, cozido150",
+    "base_nome": "Nhoque, batata, cozido",
+    "base_display": "Nhoque, batata, cozido (Gramas: 150)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 150.0,
+    "base_quantidade_g": 150.0,
+    "descricao": "Nhoque, batata, cozido (Gramas: 150)  │  Opção 2: Uva, suco concentrado, envasado (Gramas: 470,32)",
+    "opcoes": [
+      {
+        "nome": "Uva, suco concentrado, envasado",
+        "medida_nome": "Gramas",
+        "quantidade": 470.32
+      }
+    ]
+  },
+  {
+    "codigo": 4,
+    "base_raw": "Abacaxi e melão, suco natural, s/ açúcar24000",
+    "base_nome": "Abacaxi e melão, suco natural, s/ açúcar",
+    "base_display": "Abacaxi e melão, suco natural, s/ açúcar (Copo médio: 100) (24000g)",
+    "base_medida_nome": "Copo médio",
+    "base_quantidade": 100.0,
+    "base_quantidade_g": 24000.0,
+    "descricao": "Abacaxi e melão, suco natural, s/ açúcar (Copo médio: 100) (24000g)  │  Opção 2: Abacaxi, banana e cenoura, suco natural (néctar), c/ açúcar refinado (Copo médio: 200) (48000g)",
+    "opcoes": [
+      {
+        "nome": "Abacaxi, banana e cenoura, suco natural (néctar), c/ açúcar refinado",
+        "medida_nome": "Copo médio",
+        "quantidade": 200.0
+      }
+    ]
+  },
+  {
+    "codigo": 5,
+    "base_raw": "Abacaxi (IBGE)100",
+    "base_nome": "Abacaxi (IBGE)",
+    "base_display": "Abacaxi (IBGE) (Gramas: 100)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 100.0,
+    "base_quantidade_g": 100.0,
+    "descricao": "Abacaxi (IBGE) (Gramas: 100)  │  Opção 2: uva (Gramas: 69,57)",
+    "opcoes": [
+      {
+        "nome": "uva",
+        "medida_nome": "Gramas",
+        "quantidade": 69.57
+      }
+    ]
+  },
+  {
+    "codigo": 6,
+    "base_raw": "Banana frita150",
+    "base_nome": "Banana frita",
+    "base_display": null,
+    "base_medida_nome": null,
+    "base_quantidade": 150.0,
+    "base_quantidade_g": 150.0,
+    "descricao": null,
+    "opcoes": []
+  },
+  {
+    "codigo": 7,
+    "base_raw": "Bolo de tapioca100",
+    "base_nome": "Bolo de tapioca",
+    "base_display": null,
+    "base_medida_nome": null,
+    "base_quantidade": 100.0,
+    "base_quantidade_g": 100.0,
+    "descricao": null,
+    "opcoes": []
+  },
+  {
+    "codigo": 8,
+    "base_raw": "Arroz branco (cozido)250",
+    "base_nome": "Arroz branco (cozido)",
+    "base_display": "Arroz branco (cozido) (Colher de sopa: 10) (250g)",
+    "base_medida_nome": "Colher de sopa",
+    "base_quantidade": 10.0,
+    "base_quantidade_g": 250.0,
+    "descricao": "Arroz branco (cozido) (Colher de sopa: 10) (250g)  │  Opção 2: Abóbora (Gramas: 1522,25)  │  Opção 3: Bacalhau (refogado) (Gramas: 300)",
+    "opcoes": [
+      {
+        "nome": "Abóbora",
+        "medida_nome": "Gramas",
+        "quantidade": 1522.25
+      },
+      {
+        "nome": "Bacalhau (refogado)",
+        "medida_nome": "Gramas",
+        "quantidade": 300.0
+      }
+    ]
+  },
+  {
+    "codigo": 9,
+    "base_raw": "Asa de peru assado(a)300",
+    "base_nome": "Asa de peru assado(a)",
+    "base_display": "Asa de peru assado(a) (Gramas: 300)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 300.0,
+    "base_quantidade_g": 300.0,
+    "descricao": "Asa de peru assado(a) (Gramas: 300)  │  Opção 2: Abadejo, filé, congelado, grelhado (Gramas: 529,92)",
+    "opcoes": [
+      {
+        "nome": "Abadejo, filé, congelado, grelhado",
+        "medida_nome": "Gramas",
+        "quantidade": 529.92
+      }
+    ]
+  },
+  {
+    "codigo": 10,
+    "base_raw": "Abacate, polpa, in natura, Persea americana Mill90",
+    "base_nome": "Abacate, polpa, in natura, Persea americana Mill",
+    "base_display": null,
+    "base_medida_nome": null,
+    "base_quantidade": 90.0,
+    "base_quantidade_g": 90.0,
+    "descricao": null,
+    "opcoes": []
+  },
+  {
+    "codigo": 11,
+    "base_raw": "Cereja fresca50",
+    "base_nome": "Cereja fresca",
+    "base_display": "Cereja fresca (Gramas: 50)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 50.0,
+    "base_quantidade_g": 50.0,
+    "descricao": "Cereja fresca (Gramas: 50)  │  Opção 2: Acerola orgânica (Gramas: 124,82)",
+    "opcoes": [
+      {
+        "nome": "Acerola orgânica",
+        "medida_nome": "Gramas",
+        "quantidade": 124.82
+      }
+    ]
+  },
+  {
+    "codigo": 12,
+    "base_raw": "Coração de frango grelhado(a)/brasa/churrasco90",
+    "base_nome": "Coração de frango grelhado(a)/brasa/churrasco",
+    "base_display": "Coração de frango grelhado(a)/brasa/churrasco (Gramas: 90)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 90.0,
+    "base_quantidade_g": 90.0,
+    "descricao": "Coração de frango grelhado(a)/brasa/churrasco (Gramas: 90)  │  Opção 2: Coração de frango frito(a) (Gramas: 50)",
+    "opcoes": [
+      {
+        "nome": "Coração de frango frito(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 50.0
+      }
+    ]
+  },
+  {
+    "codigo": 13,
+    "base_raw": "Carne moida sopa95",
+    "base_nome": "Carne moida sopa",
+    "base_display": "Carne moida sopa (Gramas: 95)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 95.0,
+    "base_quantidade_g": 95.0,
+    "descricao": "Carne moida sopa (Gramas: 95)  │  Opção 2: Carne moída (refogada) (Gramas: 21,15)",
+    "opcoes": [
+      {
+        "nome": "Carne moída (refogada)",
+        "medida_nome": "Gramas",
+        "quantidade": 21.15
+      }
+    ]
+  },
+  {
+    "codigo": 14,
+    "base_raw": "Abacate (IBGE)120",
+    "base_nome": "Abacate (IBGE)",
+    "base_display": "Abacate (IBGE) (Gramas: 120)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 120.0,
+    "base_quantidade_g": 120.0,
+    "descricao": "Abacate (IBGE) (Gramas: 120)  │  Opção 2: Coco (Gramas: 40,68)",
+    "opcoes": [
+      {
+        "nome": "Coco",
+        "medida_nome": "Gramas",
+        "quantidade": 40.68
+      }
+    ]
+  },
+  {
+    "codigo": 15,
+    "base_raw": "Pão de forma tradicional - Wickbold®50",
+    "base_nome": "Pão de forma tradicional - Wickbold®",
+    "base_display": "Pão de forma tradicional - Wickbold® (Fatia: 2) (50g)",
+    "base_medida_nome": "Fatia",
+    "base_quantidade": 2.0,
+    "base_quantidade_g": 50.0,
+    "descricao": "Pão de forma tradicional - Wickbold® (Fatia: 2) (50g)  │  Opção 2: Pão francês (gramas: 50)  │  Opção 3: Tapioca de goma (gramas: 30)  │  Opção 4: Cuscuz de milho, c/ sal, cozido (gramas: 70)  │  Opção 5: rap10 (gramas: 50)",
+    "opcoes": [
+      {
+        "nome": "Pão francês",
+        "medida_nome": "gramas",
+        "quantidade": 50.0
+      },
+      {
+        "nome": "Tapioca de goma",
+        "medida_nome": "gramas",
+        "quantidade": 30.0
+      },
+      {
+        "nome": "Cuscuz de milho, c/ sal, cozido",
+        "medida_nome": "gramas",
+        "quantidade": 70.0
+      },
+      {
+        "nome": "rap10",
+        "medida_nome": "gramas",
+        "quantidade": 50.0
+      }
+    ]
+  },
+  {
+    "codigo": 16,
+    "base_raw": "Banana (ouro, prata, d´água, da terra, etc)75",
+    "base_nome": "Banana (ouro, prata, d´água, da terra, etc)",
+    "base_display": "Banana (ouro, prata, d´água, da terra, etc) (Unidade: 1) (75g)",
+    "base_medida_nome": "Unidade",
+    "base_quantidade": 1.0,
+    "base_quantidade_g": 75.0,
+    "descricao": "Banana (ouro, prata, d´água, da terra, etc) (Unidade: 1) (75g)  │  Opção 2: Mamão papaia (gramas: 150)  │  Opção 3: Melão (Tucunduva) (gramas: 240)  │  Opção 4: Maçã vermelha (gramas: 100)  │  Opção 5: Uva-rubi (gramas: 120)",
+    "opcoes": [
+      {
+        "nome": "Mamão papaia",
+        "medida_nome": "gramas",
+        "quantidade": 150.0
+      },
+      {
+        "nome": "Melão (Tucunduva)",
+        "medida_nome": "gramas",
+        "quantidade": 240.0
+      },
+      {
+        "nome": "Maçã vermelha",
+        "medida_nome": "gramas",
+        "quantidade": 100.0
+      },
+      {
+        "nome": "Uva-rubi",
+        "medida_nome": "gramas",
+        "quantidade": 120.0
+      }
+    ]
+  },
+  {
+    "codigo": 17,
+    "base_raw": "Granola (Tucunduva)30",
+    "base_nome": "Granola (Tucunduva)",
+    "base_display": "Granola (Tucunduva) (Gramas: 30)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 30.0,
+    "base_quantidade_g": 30.0,
+    "descricao": "Granola (Tucunduva) (Gramas: 30)  │  Opção 2: Aveia, flocos, crua (Gramas: 40)",
+    "opcoes": [
+      {
+        "nome": "Aveia, flocos, crua",
+        "medida_nome": "Gramas",
+        "quantidade": 40.0
+      }
+    ]
+  },
+  {
+    "codigo": 18,
+    "base_raw": "Pão integral - Wickbold®50",
+    "base_nome": "Pão integral - Wickbold®",
+    "base_display": "Pão integral - Wickbold® (Fatia: 2) (50g)",
+    "base_medida_nome": "Fatia",
+    "base_quantidade": 2.0,
+    "base_quantidade_g": 50.0,
+    "descricao": "Pão integral - Wickbold® (Fatia: 2) (50g)  │  Opção 2: Tapioca de goma (gramas: 30)  │  Opção 3: rap10 (gramas: 40)",
+    "opcoes": [
+      {
+        "nome": "Tapioca de goma",
+        "medida_nome": "gramas",
+        "quantidade": 30.0
+      },
+      {
+        "nome": "rap10",
+        "medida_nome": "gramas",
+        "quantidade": 40.0
+      }
+    ]
+  },
+  {
+    "codigo": 19,
+    "base_raw": "Iogurte natural desnatado -Nestlé®160",
+    "base_nome": "Iogurte natural desnatado -Nestlé®",
+    "base_display": "Iogurte natural desnatado -Nestlé® (Gramas: 160)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 160.0,
+    "base_quantidade_g": 160.0,
+    "descricao": "Iogurte natural desnatado -Nestlé® (Gramas: 160)  │  Opção 2: Iogurte pense zero batavo (batido) (Gramas: 220)  │  Opção 3: Leite longa vida desnatado -ltalac® (Gramas: 180)",
+    "opcoes": [
+      {
+        "nome": "Iogurte pense zero batavo (batido)",
+        "medida_nome": "Gramas",
+        "quantidade": 220.0
+      },
+      {
+        "nome": "Leite longa vida desnatado -ltalac®",
+        "medida_nome": "Gramas",
+        "quantidade": 180.0
+      }
+    ]
+  },
+  {
+    "codigo": 20,
+    "base_raw": "Arroz branco (cozido)100",
+    "base_nome": "Arroz branco (cozido)",
+    "base_display": "Arroz branco (cozido) (Gramas: 100)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 100.0,
+    "base_quantidade_g": 100.0,
+    "descricao": "Arroz branco (cozido) (Gramas: 100)  │  Opção 2: Batata doce cozido(a) (Gramas: 160)  │  Opção 3: Mandioquinha cozido(a) (Gramas: 160)  │  Opção 4: Batata-inglesa cozido(a) (Gramas: 140)  │  Opção 5: Mandioca cozido(a) (Gramas: 90)",
+    "opcoes": [
+      {
+        "nome": "Batata doce cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 160.0
+      },
+      {
+        "nome": "Mandioquinha cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 160.0
+      },
+      {
+        "nome": "Batata-inglesa cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 140.0
+      },
+      {
+        "nome": "Mandioca cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 90.0
+      }
+    ]
+  },
+  {
+    "codigo": 21,
+    "base_raw": "Ervilha em conserva50",
+    "base_nome": "Ervilha em conserva",
+    "base_display": "Ervilha em conserva (Gramas: 50)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 50.0,
+    "base_quantidade_g": 50.0,
+    "descricao": "Ervilha em conserva (Gramas: 50)  │  Opção 2: grão de bico (Gramas: 20)",
+    "opcoes": [
+      {
+        "nome": "grão de bico",
+        "medida_nome": "Gramas",
+        "quantidade": 20.0
+      }
+    ]
+  },
+  {
+    "codigo": 22,
+    "base_raw": "Filé de frango (grelhado)100",
+    "base_nome": "Filé de frango (grelhado)",
+    "base_display": "Filé de frango (grelhado) (Gramas: 100)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 100.0,
+    "base_quantidade_g": 100.0,
+    "descricao": "Filé de frango (grelhado) (Gramas: 100)  │  Opção 2: Patinho cozido(a) (Gramas: 100)  │  Opção 3: Filé de Tilápia (Gramas: 160)  │  Opção 4: Salmão (cozido) (Gramas: 100)",
+    "opcoes": [
+      {
+        "nome": "Patinho cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 100.0
+      },
+      {
+        "nome": "Filé de Tilápia",
+        "medida_nome": "Gramas",
+        "quantidade": 160.0
+      },
+      {
+        "nome": "Salmão (cozido)",
+        "medida_nome": "Gramas",
+        "quantidade": 100.0
+      }
+    ]
+  },
+  {
+    "codigo": 23,
+    "base_raw": "Batata-inglesa cozido(a)200",
+    "base_nome": "Batata-inglesa cozido(a)",
+    "base_display": "Batata-inglesa cozido(a) (Gramas: 200)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 200.0,
+    "base_quantidade_g": 200.0,
+    "descricao": "Batata-inglesa cozido(a) (Gramas: 200)  │  Opção 2: Arroz branco (cozido) (Gramas: 150)  │  Opção 3: Batata doce cozido(a) (Gramas: 230)  │  Opção 4: Mandioquinha cozido(a) (Gramas: 230)  │  Opção 5: Mandioca cozido(a) (Gramas: 140)",
+    "opcoes": [
+      {
+        "nome": "Arroz branco (cozido)",
+        "medida_nome": "Gramas",
+        "quantidade": 150.0
+      },
+      {
+        "nome": "Batata doce cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 230.0
+      },
+      {
+        "nome": "Mandioquinha cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 230.0
+      },
+      {
+        "nome": "Mandioca cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 140.0
+      }
+    ]
+  },
+  {
+    "codigo": 24,
+    "base_raw": "Iogurte pense zero batavo (batido)200",
+    "base_nome": "Iogurte pense zero batavo (batido)",
+    "base_display": "Iogurte pense zero batavo (batido) (Gramas: 200)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 200.0,
+    "base_quantidade_g": 200.0,
+    "descricao": "Iogurte pense zero batavo (batido) (Gramas: 200)  │  Opção 2: Leite de vaca desnatado (Gramas: 200)  │  Opção 3: Leite em pó desnatado (Gramas: 20)  │  Opção 4: Iogurte natural desnatado -Nestlé® (Gramas: 160)",
+    "opcoes": [
+      {
+        "nome": "Leite de vaca desnatado",
+        "medida_nome": "Gramas",
+        "quantidade": 200.0
+      },
+      {
+        "nome": "Leite em pó desnatado",
+        "medida_nome": "Gramas",
+        "quantidade": 20.0
+      },
+      {
+        "nome": "Iogurte natural desnatado -Nestlé®",
+        "medida_nome": "Gramas",
+        "quantidade": 160.0
+      }
+    ]
+  },
+  {
+    "codigo": 25,
+    "base_raw": "Batata-inglesa cozido(a)250",
+    "base_nome": "Batata-inglesa cozido(a)",
+    "base_display": "Batata-inglesa cozido(a) (Gramas: 250)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 250.0,
+    "base_quantidade_g": 250.0,
+    "descricao": "Batata-inglesa cozido(a) (Gramas: 250)  │  Opção 2: Batata doce cozido(a) (Gramas: 290)  │  Opção 3: Mandioquinha cozido(a) (Gramas: 290)  │  Opção 4: Arroz branco (cozido) (Gramas: 180)  │  Opção 5: Mandioca cozido(a) (Gramas: 180)",
+    "opcoes": [
+      {
+        "nome": "Batata doce cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 290.0
+      },
+      {
+        "nome": "Mandioquinha cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 290.0
+      },
+      {
+        "nome": "Arroz branco (cozido)",
+        "medida_nome": "Gramas",
+        "quantidade": 180.0
+      },
+      {
+        "nome": "Mandioca cozido(a)",
+        "medida_nome": "Gramas",
+        "quantidade": 180.0
+      }
+    ]
+  },
+  {
+    "codigo": 26,
+    "base_raw": "Queijo minas30",
+    "base_nome": "Queijo minas",
+    "base_display": "Queijo minas (Gramas: 30)",
+    "base_medida_nome": "Gramas",
+    "base_quantidade": 30.0,
+    "base_quantidade_g": 30.0,
+    "descricao": "Queijo minas (Gramas: 30)  │  Opção 2: Queijo muçarela (Gramas: 30)  │  Opção 3: Queijo cottage - Lacreme@ (Gramas: 80)  │  Opção 4: Requeijão light (Gramas: 30)  │  Opção 5: Creme de Ricota Ligth (Gramas: 50)",
+    "opcoes": [
+      {
+        "nome": "Queijo muçarela",
+        "medida_nome": "Gramas",
+        "quantidade": 30.0
+      },
+      {
+        "nome": "Queijo cottage - Lacreme@",
+        "medida_nome": "Gramas",
+        "quantidade": 80.0
+      },
+      {
+        "nome": "Requeijão light",
+        "medida_nome": "Gramas",
+        "quantidade": 30.0
+      },
+      {
+        "nome": "Creme de Ricota Ligth",
+        "medida_nome": "Gramas",
+        "quantidade": 50.0
+      }
+    ]
+  }
+]

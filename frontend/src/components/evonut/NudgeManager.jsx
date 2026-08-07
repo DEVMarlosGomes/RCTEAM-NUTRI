@@ -29,7 +29,13 @@ export default function NudgeManager({ patientId }) {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { reload(); }, [patientId]);
+  useEffect(() => {
+    setLoading(true);
+    api.get(`/patients/${patientId}/nudges`)
+      .then((r) => setNudges(r.data || []))
+      .catch((e) => toast.error(formatApiError(e.response?.data?.detail)))
+      .finally(() => setLoading(false));
+  }, [patientId]);
 
   const onCreate = async (e) => {
     e.preventDefault();

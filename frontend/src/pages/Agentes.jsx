@@ -47,7 +47,17 @@ export default function Agentes() {
     }
   };
 
-  useEffect(() => { reloadList(); }, []);
+  useEffect(() => {
+    let active = true;
+    api.get("/agents")
+      .then(({ data }) => {
+        if (!active) return;
+        setAgents(data);
+        setSelected((current) => current || data[0]?.code || null);
+      })
+      .catch((e) => toast.error(formatApiError(e.response?.data?.detail)));
+    return () => { active = false; };
+  }, []);
   useEffect(() => { reloadDetail(selected); }, [selected]);
 
   const onSavePrompt = async () => {

@@ -23,6 +23,10 @@ import Depoimentos from "@/pages/Depoimentos";
 import PatientLogin from "@/pages/PatientLogin";
 import Atendimento from "@/pages/Atendimento";
 import Checkout from "@/pages/Checkout";
+import CadastroAlimentos from "@/pages/CadastroAlimentos";
+import CadastroMedidas from "@/pages/CadastroMedidas";
+import RotulosNutricionais from "@/pages/RotulosNutricionais";
+import OrientacoesNutricionais from "@/pages/OrientacoesNutricionais";
 
 function Loader() {
   return (
@@ -75,6 +79,10 @@ function App() {
             <Route path="/agenda" element={<Protected role="nutritionist"><Agenda /></Protected>} />
             <Route path="/agentes" element={<Protected role="nutritionist"><Agentes /></Protected>} />
             <Route path="/consultorio" element={<Protected role="nutritionist"><Consultorio /></Protected>} />
+            <Route path="/cadastro-alimentos" element={<Protected role="nutritionist"><CadastroAlimentos /></Protected>} />
+            <Route path="/cadastro-medidas" element={<Protected role="nutritionist"><CadastroMedidas /></Protected>} />
+            <Route path="/rotulos-nutricionais" element={<Protected role="nutritionist"><RotulosNutricionais /></Protected>} />
+            <Route path="/orientacoes" element={<Protected role="nutritionist"><OrientacoesNutricionais /></Protected>} />
             <Route path="/configuracoes" element={<Protected role="nutritionist"><Configuracoes /></Protected>} />
             <Route path="/agente-config" element={<Protected role="nutritionist"><AgenteConfig /></Protected>} />
             <Route path="/depoimentos" element={<Protected role="nutritionist"><Depoimentos /></Protected>} />

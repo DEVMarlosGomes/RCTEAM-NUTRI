@@ -16,6 +16,7 @@ const TABS = [
   { k: "antropometria", l: "Antropometria", icon: Activity },
   { k: "gasto", l: "Gasto Energético", icon: Zap },
   { k: "exames", l: "Exames", icon: FlaskConical },
+  { k: "adequacao", l: "AnÃ¡lises", icon: Sparkles },
   { k: "plano", l: "Plano Alimentar", icon: Utensils },
   { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
   { k: "lembretes", l: "Lembretes", icon: BellRing },
@@ -27,7 +28,9 @@ export default function PacienteDetalhe() {
   const [d, setD] = useState(null);
   const [tab, setTab] = useState("anamnese");
   const reload = () => api.get(`/patients/${id}`).then((r) => setD(r.data));
-  useEffect(() => { reload(); }, [id]);
+  useEffect(() => {
+    api.get(`/patients/${id}`).then((r) => setD(r.data));
+  }, [id]);
 
   if (!d) return <NutriLayout><div className="text-gray-400">Carregando paciente...</div></NutriLayout>;
   const p = d.patient;
@@ -86,6 +89,7 @@ export default function PacienteDetalhe() {
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
       {tab === "gasto" && <GastoEnergetico d={d} />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
+      {tab === "adequacao" && <AdequacaoClinica d={d} />}
       {tab === "plano" && <PlanoAlimentar d={d} reload={reload} />}
       {tab === "recordatorio" && <Recordatorio d={d} reload={reload} />}
       {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
@@ -366,6 +370,109 @@ function IATab({ d, reload }) {
   );
 }
 
+function AdequacaoClinica({ d }) {
+  const pid = d.patient.id;
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    api.get(`/patients/${pid}/adequacao`)
+      .then((res) => { if (active) setData(res.data); })
+      .catch(() => { if (active) setData(null); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [pid]);
+
+  if (loading) return <div className="evo-card p-8 text-gray-400 text-sm">Carregando anÃ¡lises...</div>;
+
+  const plano = data?.plano;
+  const recordatorio = data?.recordatorio;
+  const comparativo = data?.comparativo || [];
+  const dri = data?.dri_relevantes || [];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="evo-card p-5">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">Plano base</div>
+          {plano ? (
+            <>
+              <div className="text-lg font-semibold mt-1">{plano.titulo || "Plano manual"}</div>
+              <div className="text-xs text-gray-500 mt-1">Meta kcal: {plano.meta_kcal || "â€”"} · Energia do plano: {plano.totais_dia?.energia_kcal || 0} kcal</div>
+            </>
+          ) : <div className="text-sm text-gray-500 mt-2">Nenhum plano manual encontrado.</div>}
+        </div>
+        <div className="evo-card p-5">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">RecordatÃ³rio base</div>
+          {recordatorio ? (
+            <>
+              <div className="text-lg font-semibold mt-1">{recordatorio.data || "â€”"}</div>
+              <div className="text-xs text-gray-500 mt-1">Energia do dia: {recordatorio.totais_dia?.energia_kcal || 0} kcal · {recordatorio.finalizado ? "Finalizado" : "Rascunho"}</div>
+            </>
+          ) : <div className="text-sm text-gray-500 mt-2">Nenhum recordatÃ³rio encontrado.</div>}
+        </div>
+      </div>
+
+      {plano && recordatorio ? (
+        <div className="grid xl:grid-cols-5 gap-4">
+          <div className="xl:col-span-3 evo-card p-5">
+            <h3 className="evo-h3 mb-4">AdequaÃ§Ã£o do recordatÃ³rio versus plano</h3>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {comparativo.map((item) => (
+                <div key={item.codigo} className="rounded-lg border border-white/[0.06] bg-evo-bg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500">{item.codigo.replaceAll("_", " ")}</div>
+                  <div className="flex items-end justify-between gap-2 mt-2">
+                    <div>
+                      <div className="text-xs text-gray-500">Plano</div>
+                      <div className="font-semibold">{item.plano}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">RecordatÃ³rio</div>
+                      <div className="font-semibold">{item.recordatorio}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-gray-500">AderÃªncia</div>
+                      <div className={`font-semibold ${item.delta > 0 ? "text-evo-coral" : item.delta < 0 ? "text-blue-400" : "text-evo-teal"}`}>{item.pct_vs_plano != null ? `${item.pct_vs_plano}%` : "â€”"}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="xl:col-span-2 evo-card p-5">
+            <h3 className="evo-h3 mb-4">DRIs relevantes</h3>
+            {dri.length === 0 ? (
+              <div className="text-sm text-gray-500">Sem adequaÃ§Ãµes calculadas no Ãºltimo recordatÃ³rio.</div>
+            ) : (
+              <div className="space-y-2">
+                {dri.map((item) => (
+                  <div key={item.nutriente} className="rounded-lg border border-white/[0.06] bg-evo-bg p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold">{item.label}</div>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${item.status === "baixo" ? BADGE.baixo : item.status === "alto" ? BADGE.alto : BADGE.normal}`}>
+                        {item.status}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-1">
+                      {item.valor_recordatorio} / {item.recomendacao || "â€”"} {item.tipo_dri ? `· ${item.tipo_dri}` : ""}
+                    </div>
+                    <div className="text-xs mt-1 text-white">{item.pct_adequacao != null ? `${item.pct_adequacao}% de adequaÃ§Ã£o` : "Sem referÃªncia"}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="evo-card p-8 text-gray-400 text-sm">Cadastre ao menos um plano manual e um recordatÃ³rio para liberar a leitura de adequaÃ§Ã£o.</div>
+      )}
+    </div>
+  );
+}
+
 const DOBRAS_FIELDS = {
   pollock7: ["subescapular","triceps","peitoral","axilar","suprailiaca","abdominal","coxa"],
   pollock3_M: ["peitoral","abdominal","coxa"],
@@ -385,11 +492,12 @@ function Antropometria({ d, reload }) {
     gestante: false, ig_semanas: "",
     nivel_atividade: 1.55, objetivo: d.patient.objetivo || "manutencao",
     protocolo_dobras: "pollock3", protocolo_tmb: "mifflin_st_jeor",
-    dobras: {}, perimetria: {},
+    dobras: {}, perimetria: {}, bioimpedancia: {},
   });
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }));
   const setD = (k, v) => setForm((s) => ({ ...s, dobras: { ...s.dobras, [k]: v } }));
   const setP = (k, v) => setForm((s) => ({ ...s, perimetria: { ...s.perimetria, [k]: v } }));
+  const setB = (k, v) => setForm((s) => ({ ...s, bioimpedancia: { ...s.bioimpedancia, [k]: v } }));
 
   const dobrasFields = useMemo(() => {
     if (form.protocolo_dobras === "pollock7") return DOBRAS_FIELDS.pollock7;
@@ -412,6 +520,7 @@ function Antropometria({ d, reload }) {
         protocolo_dobras: form.protocolo_dobras, protocolo_tmb: form.protocolo_tmb,
         dobras: Object.fromEntries(Object.entries(form.dobras).map(([k, v]) => [k, parseFloat(v) || 0])),
         perimetria: Object.fromEntries(Object.entries(form.perimetria).filter(([,v]) => v).map(([k, v]) => [k, parseFloat(v)])),
+        bioimpedancia: Object.fromEntries(Object.entries(form.bioimpedancia).filter(([,v]) => v !== "" && v != null).map(([k, v]) => [k, parseFloat(v)])),
       };
       const { data } = await api.post(`/patients/${d.patient.id}/evaluations-v2`, payload);
       toast.success(`Avaliação salva. IMC: ${data.composicao.imc} (${data.composicao.imc_classificacao})`);
@@ -481,6 +590,17 @@ function Antropometria({ d, reload }) {
             </div>
           </div>
 
+          <div className="mt-5">
+            <div className="evo-label">BioimpedÃ¢ncia (opcional)</div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <Inp l="% Gordura" v={form.bioimpedancia.pct_gordura || ""} onChange={(v) => setB("pct_gordura", v)} t="number" />
+              <Inp l="Massa Magra (kg)" v={form.bioimpedancia.massa_magra_kg || ""} onChange={(v) => setB("massa_magra_kg", v)} t="number" />
+              <Inp l="% Ãgua corporal" v={form.bioimpedancia.agua_corporal_pct || ""} onChange={(v) => setB("agua_corporal_pct", v)} t="number" />
+              <Inp l="Gordura Visceral" v={form.bioimpedancia.gordura_visceral || ""} onChange={(v) => setB("gordura_visceral", v)} t="number" />
+              <Inp l="% MÃºsculo Esq." v={form.bioimpedancia.musculo_esqueletico_pct || ""} onChange={(v) => setB("musculo_esqueletico_pct", v)} t="number" />
+            </div>
+          </div>
+
           <button data-testid="save-evaluation" onClick={save} disabled={saving || !form.peso || !form.altura} className="evo-btn-primary mt-6 w-full">
             {saving ? "Calculando..." : "Salvar avaliação"}
           </button>
@@ -504,6 +624,9 @@ function Antropometria({ d, reload }) {
               {comp.rcq != null && <Metric l="RCQ" v={comp.rcq} tag={comp.rcq_risco ? "Risco" : "Normal"} />}
               {comp.amb != null && <Metric l="AMB (cm²)" v={comp.amb} />}
               {comp.agb != null && <Metric l="AGB (cm²)" v={comp.agb} />}
+              {comp.bioimpedancia?.agua_corporal_pct != null && <Metric l="% Água" v={`${comp.bioimpedancia.agua_corporal_pct}%`} />}
+              {comp.bioimpedancia?.gordura_visceral != null && <Metric l="Gordura Visceral" v={comp.bioimpedancia.gordura_visceral} />}
+              {comp.bioimpedancia?.musculo_esqueletico_pct != null && <Metric l="% Músculo" v={`${comp.bioimpedancia.musculo_esqueletico_pct}%`} />}
               {comp.imc_gestacional_classificacao && (
                 <Metric l="IMC Gestacional" v={comp.imc_gestacional_classificacao} />
               )}
@@ -798,6 +921,185 @@ function FoodSearchModal({ refNome, onSelect, onClose }) {
   );
 }
 
+async function loadFoodOperationalData(alimentoId) {
+  const [measuresRes, equivalentsRes] = await Promise.allSettled([
+    api.get(`/alimentos/${alimentoId}/medidas`),
+    api.get(`/alimentos/${alimentoId}/equivalentes`),
+  ]);
+  const measures = measuresRes.status === "fulfilled" ? (measuresRes.value.data?.medidas || []) : [];
+  const equivalents = equivalentsRes.status === "fulfilled" ? (equivalentsRes.value.data?.equivalentes || []) : [];
+  return { measures, equivalents };
+}
+
+function dedupeMeasures(measures = [], fallbackMeasure = null, fallbackGrams = null) {
+  const raw = [{ nome: "Gramas", gramas: 1 }, ...measures];
+  if (fallbackMeasure && fallbackGrams) raw.push({ nome: fallbackMeasure, gramas: fallbackGrams });
+  const seen = new Set();
+  return raw.filter((item) => {
+    const key = String(item?.nome || "").trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function gramsForMeasure(measures = [], measureName = "Gramas", quantity = 0, fallback = 0) {
+  const qty = Number(quantity || 0);
+  if (!qty) return 0;
+  if (!measureName || String(measureName).toLowerCase() === "gramas") return qty;
+  const found = measures.find((item) => String(item.nome || "").toLowerCase() === String(measureName).toLowerCase());
+  if (!found) return fallback || qty;
+  return Number(((Number(found.gramas || 0)) * qty).toFixed(2));
+}
+
+function sanitizePlanoDraft(draft) {
+  return {
+    titulo: draft.titulo,
+    objetivo: draft.objetivo || null,
+    meta_kcal: draft.meta_kcal || null,
+    meta_proteina_g: draft.meta_proteina_g || null,
+    meta_carboidrato_g: draft.meta_carboidrato_g || null,
+    meta_lipidio_g: draft.meta_lipidio_g || null,
+    orientacao_ids: draft.orientacao_ids || [],
+    observacoes: draft.observacoes || "",
+    refeicoes: (draft.refeicoes || []).map((ref) => ({
+      nome: ref.nome,
+      horario: ref.horario || "",
+      meta_kcal: ref.meta_kcal || null,
+      meta_pct: ref.meta_pct || null,
+      alimentos: (ref.alimentos || []).map((item) => ({
+        alimento_id: item.alimento_id,
+        medida_nome: item.medida_nome || "Gramas",
+        quantidade: Number(item.quantidade || 0),
+        quantidade_g: Number(item.quantidade_g || 0),
+        substituivel: item.substituivel !== false,
+        observacao: item.observacao || "",
+      })),
+    })),
+  };
+}
+
+function sanitizeRecordatorioDraft(draft) {
+  return {
+    data: draft.data,
+    observacoes: draft.observacoes || "",
+    finalizado: !!draft.finalizado,
+    refeicoes: (draft.refeicoes || []).map((ref, index) => ({
+      numero: ref.numero || index + 1,
+      nome: ref.nome,
+      horario: ref.horario || "",
+      observacao: ref.observacao || "",
+      itens: (ref.itens || []).map((item, itemIndex) => ({
+        n: item.n || itemIndex + 1,
+        alimento_id: item.alimento_id || null,
+        alimento_nome: item.alimento_nome || "",
+        medida_nome: item.medida_nome || "Gramas",
+        quantidade: Number(item.quantidade || 0),
+        quantidade_g: Number(item.quantidade_g || 0),
+      })),
+    })),
+  };
+}
+
+function summarizeSnapshot(snapshot = {}) {
+  const refeicoes = snapshot.refeicoes || [];
+  const alimentos = refeicoes.reduce((acc, ref) => acc + (ref.alimentos || []).length, 0);
+  return {
+    titulo: snapshot.titulo || "Plano",
+    meta_kcal: snapshot.meta_kcal ?? null,
+    meta_proteina_g: snapshot.meta_proteina_g ?? null,
+    meta_carboidrato_g: snapshot.meta_carboidrato_g ?? null,
+    meta_lipidio_g: snapshot.meta_lipidio_g ?? null,
+    refeicoes: refeicoes.length,
+    alimentos,
+    orientacoes: (snapshot.orientacao_ids || []).length,
+    observacoes: snapshot.observacoes || "",
+  };
+}
+
+function compareSnapshots(current = {}, previous = {}) {
+  const labels = {
+    titulo: "Título",
+    meta_kcal: "Meta kcal",
+    meta_proteina_g: "Proteína",
+    meta_carboidrato_g: "Carboidratos",
+    meta_lipidio_g: "Lipídios",
+    refeicoes: "Refeições",
+    alimentos: "Alimentos",
+    orientacoes: "Orientações",
+    observacoes: "Observações",
+  };
+  const changes = [];
+  for (const key of Object.keys(labels)) {
+    const a = current[key] ?? "";
+    const b = previous[key] ?? "";
+    if (String(a) !== String(b)) {
+      changes.push({ field: labels[key], current: a || "—", previous: b || "—" });
+    }
+  }
+  return changes;
+}
+
+function summarizeFoodItem(item = {}) {
+  const nome = item.alimento_nome || item._nome || item.alimento_id || "Alimento";
+  return `${nome} · ${item.quantidade_g ?? 0}g${item.medida_nome ? ` · ${item.medida_nome}` : ""}`;
+}
+
+function compareMealSnapshots(currentSnapshot = {}, previousSnapshot = {}) {
+  const currentMeals = currentSnapshot.refeicoes || [];
+  const previousMeals = previousSnapshot.refeicoes || [];
+  const previousByMeal = new Map(previousMeals.map((meal) => [meal.nome || "", meal]));
+  const diffs = [];
+
+  for (const meal of currentMeals) {
+    const prevMeal = previousByMeal.get(meal.nome || "") || { alimentos: [] };
+    const currentFoods = meal.alimentos || [];
+    const prevFoods = prevMeal.alimentos || [];
+    const prevByFood = new Map(prevFoods.map((food) => [food.alimento_id || `${food.alimento_nome}-${food.medida_nome}`, food]));
+    const currentByFood = new Map(currentFoods.map((food) => [food.alimento_id || `${food.alimento_nome}-${food.medida_nome}`, food]));
+
+    const changes = [];
+    for (const food of currentFoods) {
+      const key = food.alimento_id || `${food.alimento_nome}-${food.medida_nome}`;
+      const prevFood = prevByFood.get(key);
+      if (!prevFood) {
+        changes.push({ type: "added", label: summarizeFoodItem(food) });
+        continue;
+      }
+      const gramsChanged = Number(food.quantidade_g || 0) !== Number(prevFood.quantidade_g || 0);
+      const measureChanged = String(food.medida_nome || "") !== String(prevFood.medida_nome || "");
+      if (gramsChanged || measureChanged) {
+        changes.push({
+          type: "changed",
+          label: food.alimento_nome || food._nome || food.alimento_id,
+          current: summarizeFoodItem(food),
+          previous: summarizeFoodItem(prevFood),
+        });
+      }
+    }
+    for (const food of prevFoods) {
+      const key = food.alimento_id || `${food.alimento_nome}-${food.medida_nome}`;
+      if (!currentByFood.has(key)) {
+        changes.push({ type: "removed", label: summarizeFoodItem(food) });
+      }
+    }
+    if (changes.length > 0) {
+      diffs.push({ meal: meal.nome || "Refeição", changes });
+    }
+  }
+
+  for (const meal of previousMeals) {
+    if (!currentMeals.find((current) => (current.nome || "") === (meal.nome || ""))) {
+      diffs.push({
+        meal: meal.nome || "Refeição",
+        changes: [{ type: "removed_meal", label: `Refeição removida com ${(meal.alimentos || []).length} alimento(s)` }],
+      });
+    }
+  }
+
+  return diffs;
+}
+
 function PlanoManual({ d }) {
   const pid = d.patient.id;
   const [planos, setPlanos] = useState([]);
@@ -806,6 +1108,9 @@ function PlanoManual({ d }) {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [addTo, setAddTo] = useState(null); // refeição index
+  const [eqOpen, setEqOpen] = useState(null);
+  const [orientacoesCatalog, setOrientacoesCatalog] = useState([]);
+  const [templates, setTemplates] = useState([]);
 
   const loadPlanos = async () => {
     try {
@@ -814,26 +1119,69 @@ function PlanoManual({ d }) {
       if (data.length && !sel) setSel(data[0]);
     } catch {}
   };
-  useEffect(() => { loadPlanos(); }, [pid]);
+  useEffect(() => {
+    let active = true;
+    api.get(`/patients/${pid}/planos-manuais`)
+      .then(({ data }) => {
+        if (!active) return;
+        setPlanos(data);
+        setSel((current) => current || data[0] || null);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [pid]);
+
+  useEffect(() => {
+    let active = true;
+    api.get("/orientacoes")
+      .then(({ data }) => {
+        if (!active) return;
+        setOrientacoesCatalog(data || []);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api.get("/plano-templates")
+      .then(({ data }) => {
+        if (!active) return;
+        setTemplates(data || []);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const newDraft = () => setDraft({
     titulo: "Plano Alimentar", objetivo: "", meta_kcal: "", meta_proteina_g: "", meta_carboidrato_g: "", meta_lipidio_g: "",
-    refeicoes: REFEICOES_PADRAO.map(n => ({ nome: n, horario: "", alimentos: [] })),
+    orientacao_ids: [],
+    refeicoes: REFEICOES_PADRAO.map(n => ({ nome: n, horario: "", meta_kcal: "", meta_pct: "", alimentos: [] })),
     observacoes: "",
   });
 
-  const addFood = (refIdx, alim) => {
+  const addFood = async (refIdx, alim) => {
+    const operational = await loadFoodOperationalData(alim.id);
     const qtd = parseFloat(alim.porcao_padrao_g) || parseFloat(alim.quantidade_referencia_g) || 100;
+    const measures = dedupeMeasures(operational.measures, alim.medida_caseira, qtd);
+    const defaultMeasure = measures.find((item) => item.nome !== "Gramas")?.nome || "Gramas";
+    const defaultQty = defaultMeasure === "Gramas"
+      ? qtd
+      : Math.max(1, Number((qtd / Number(measures.find((item) => item.nome === defaultMeasure)?.gramas || qtd)).toFixed(2)));
     setDraft(prev => {
       const refs = [...prev.refeicoes];
       refs[refIdx] = {
         ...refs[refIdx],
         alimentos: [...refs[refIdx].alimentos, {
           alimento_id: alim.id,
-          quantidade_g: qtd,
+          medida_nome: defaultMeasure,
+          quantidade: defaultMeasure === "Gramas" ? qtd : defaultQty,
+          quantidade_g: defaultMeasure === "Gramas" ? qtd : gramsForMeasure(measures, defaultMeasure, defaultQty, qtd),
           _nome: alim.nome,
           _kcal100g: alim.energia_kcal_100g ?? null,
           _grupo: alim.grupo_display ?? alim.grupo ?? alim.categoria ?? null,
+          _medidas: measures,
+          _equivalentes: operational.equivalents || [],
         }],
       };
       return { ...prev, refeicoes: refs };
@@ -853,16 +1201,60 @@ function PlanoManual({ d }) {
     setDraft(prev => {
       const refs = [...prev.refeicoes];
       const alims = [...refs[refIdx].alimentos];
-      alims[fIdx] = { ...alims[fIdx], quantidade_g: v };
+      const item = { ...alims[fIdx], quantidade: v };
+      item.quantidade_g = gramsForMeasure(item._medidas, item.medida_nome, v, item.quantidade_g);
+      alims[fIdx] = item;
       refs[refIdx] = { ...refs[refIdx], alimentos: alims };
       return { ...prev, refeicoes: refs };
     });
   };
 
+  const updateFoodMeasure = (refIdx, fIdx, medidaNome) => {
+    setDraft(prev => {
+      const refs = [...prev.refeicoes];
+      const alims = [...refs[refIdx].alimentos];
+      const item = { ...alims[fIdx], medida_nome: medidaNome };
+      const currentQty = Number(item.quantidade || item.quantidade_g || 0);
+      item.quantidade_g = gramsForMeasure(item._medidas, medidaNome, currentQty, item.quantidade_g);
+      alims[fIdx] = item;
+      refs[refIdx] = { ...refs[refIdx], alimentos: alims };
+      return { ...prev, refeicoes: refs };
+    });
+  };
+
+  const applyEquivalent = async (refIdx, fIdx, eq) => {
+    if (!eq?.alimento_id) {
+      toast.error("Equivalente sem mapeamento para alimento do banco.");
+      return;
+    }
+    const operational = await loadFoodOperationalData(eq.alimento_id);
+    const measures = dedupeMeasures(operational.measures, eq.medida_nome, eq.quantidade);
+    setDraft(prev => {
+      const refs = [...prev.refeicoes];
+      const alims = [...refs[refIdx].alimentos];
+      const grams = gramsForMeasure(measures, eq.medida_nome || "Gramas", Number(eq.quantidade || 0), Number(eq.quantidade || 0));
+      alims[fIdx] = {
+        ...alims[fIdx],
+        alimento_id: eq.alimento_id,
+        medida_nome: eq.medida_nome || "Gramas",
+        quantidade: Number(eq.quantidade || 0),
+        quantidade_g: grams,
+        _nome: eq.nome,
+        _kcal100g: eq.energia_kcal_100g ?? null,
+        _grupo: eq.grupo || null,
+        _medidas: measures,
+        _equivalentes: operational.equivalents || [],
+      };
+      refs[refIdx] = { ...refs[refIdx], alimentos: alims };
+      return { ...prev, refeicoes: refs };
+    });
+    setEqOpen(null);
+  };
+
   const save = async () => {
     setSaving(true);
     try {
-      const payload = { ...draft, meta_kcal: draft.meta_kcal || null, meta_proteina_g: draft.meta_proteina_g || null, meta_carboidrato_g: draft.meta_carboidrato_g || null, meta_lipidio_g: draft.meta_lipidio_g || null };
+      const payload = sanitizePlanoDraft(draft);
       let saved;
       if (editMode && sel?.id) {
         const { data } = await api.put(`/patients/${pid}/planos-manuais/${sel.id}`, payload);
@@ -887,6 +1279,40 @@ function PlanoManual({ d }) {
     setSel(null); await loadPlanos();
   };
 
+  const duplicatePlano = async (pmid) => {
+    try {
+      const { data } = await api.post(`/patients/${pid}/planos-manuais/${pmid}/duplicar`);
+      toast.success("Plano duplicado");
+      await loadPlanos();
+      setSel(data);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Erro ao duplicar plano");
+    }
+  };
+
+  const saveAsTemplate = async (pmid, titulo) => {
+    const nome = window.prompt("Nome do template", `${titulo || "Plano"} - template`);
+    if (!nome) return;
+    try {
+      const { data } = await api.post(`/patients/${pid}/planos-manuais/${pmid}/template`, { nome });
+      toast.success("Template salvo");
+      setTemplates((prev) => [data, ...prev.filter((item) => item.id !== data.id)]);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Erro ao salvar template");
+    }
+  };
+
+  const applyTemplate = async (templateId) => {
+    try {
+      const { data } = await api.post(`/patients/${pid}/plano-templates/${templateId}/aplicar`);
+      toast.success("Template aplicado ao paciente");
+      await loadPlanos();
+      setSel(data);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Erro ao aplicar template");
+    }
+  };
+
   const downloadPdf = async (pmid, nome) => {
     try {
       const r = await api.get(`/patients/${pid}/relatorios/plano-alimentar/${pmid}`, { responseType: "blob" });
@@ -894,6 +1320,51 @@ function PlanoManual({ d }) {
       const a = document.createElement("a"); a.href = url; a.download = `plano-${(nome||"").replace(/\s+/g,"-")}.pdf`;
       document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
     } catch { toast.error("Erro ao gerar PDF"); }
+  };
+
+  const hydrateDraftFromPlano = async (plano) => {
+    const cache = new Map();
+    const hydrateItem = async (item) => {
+      const key = item.alimento_id;
+      if (!cache.has(key)) cache.set(key, loadFoodOperationalData(key));
+      const operational = await cache.get(key);
+      const measures = dedupeMeasures(
+        operational.measures,
+        item.medida_nome,
+        item.quantidade && item.quantidade_g ? Number(item.quantidade_g) / Number(item.quantidade) : item.quantidade_g
+      );
+      return {
+        ...item,
+        quantidade: item.quantidade ?? item.quantidade_g,
+        medida_nome: item.medida_nome || "Gramas",
+        _nome: item.alimento_nome || item.alimento_id,
+        _kcal100g: item.quantidade_g ? Math.round((Number(item.nutrientes?.energia_kcal || 0) / Number(item.quantidade_g)) * 100) : null,
+        _grupo: item.grupo || null,
+        _medidas: measures,
+        _equivalentes: operational.equivalents || [],
+      };
+    };
+    const refs = [];
+    for (const ref of (plano.refeicoes || [])) {
+      const foods = [];
+      for (const item of (ref.alimentos || [])) foods.push(await hydrateItem(item));
+      refs.push({
+        ...ref,
+        meta_kcal: ref.meta_kcal || "",
+        meta_pct: ref.meta_pct || "",
+        alimentos: foods,
+      });
+    }
+    return {
+      ...plano,
+      refeicoes: refs,
+      meta_kcal: plano.meta_kcal || "",
+      meta_proteina_g: plano.meta_proteina_g || "",
+      meta_carboidrato_g: plano.meta_carboidrato_g || "",
+      meta_lipidio_g: plano.meta_lipidio_g || "",
+      orientacao_ids: plano.orientacao_ids || [],
+      observacoes: plano.observacoes || "",
+    };
   };
 
   // — EDIT MODE —
@@ -953,6 +1424,52 @@ function PlanoManual({ d }) {
             </div>
           </div>
 
+          <div className="evo-card p-4">
+            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Orientações vinculadas</p>
+                <p className="text-xs text-gray-500 mt-1">Selecione as orientações que devem acompanhar este plano.</p>
+              </div>
+              <a href="/orientacoes" className="evo-btn-secondary text-xs px-3 py-1.5">Abrir biblioteca</a>
+            </div>
+            {orientacoesCatalog.length === 0 ? (
+              <p className="text-sm text-gray-500">Nenhuma orientação cadastrada.</p>
+            ) : (
+              <div className="grid gap-2">
+                {orientacoesCatalog.map((item) => {
+                  const selected = (draft.orientacao_ids || []).includes(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setDraft((prev) => ({
+                        ...prev,
+                        orientacao_ids: selected
+                          ? (prev.orientacao_ids || []).filter((id) => id !== item.id)
+                          : [...(prev.orientacao_ids || []), item.id],
+                      }))}
+                      className={`w-full text-left rounded-xl border px-3 py-3 transition-all ${selected ? "border-[#0081FD]/40 bg-[#0081FD]/[0.08]" : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.14]"}`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-white truncate">{item.titulo}</div>
+                          <div className="text-[11px] text-gray-500 mt-1">
+                            {item.categoria || "Sem categoria"}
+                            {!!item.objetivos?.length && ` · ${item.objetivos.join(", ")}`}
+                          </div>
+                        </div>
+                        <span className={`text-[10px] uppercase tracking-widest font-bold ${selected ? "text-[#3DA0FF]" : "text-gray-600"}`}>
+                          {selected ? "Incluída" : "Selecionar"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-2 whitespace-pre-wrap line-clamp-2">{item.conteudo}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Refeições */}
           {draft.refeicoes.map((ref, ri) => {
             const kcalRef = ref.alimentos.reduce((s, a) => s + (a._kcal100g ? Math.round((a._kcal100g / 100) * a.quantidade_g) : 0), 0);
@@ -975,6 +1492,12 @@ function PlanoManual({ d }) {
                     value={ref.horario}
                     onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],horario:e.target.value}; return {...p,refeicoes:rs}; })}
                   />
+                  <input
+                    className="w-24 bg-white/[0.05] border border-white/[0.06] rounded-lg px-2 py-1 text-xs text-gray-400 focus:outline-none focus:border-[#0081FD]/30 text-center shrink-0"
+                    placeholder="Meta kcal"
+                    value={ref.meta_kcal || ""}
+                    onChange={e => setDraft(p => { const rs=[...p.refeicoes]; rs[ri]={...rs[ri],meta_kcal:e.target.value}; return {...p,refeicoes:rs}; })}
+                  />
                   {kcalRef > 0 && (
                     <span className="text-xs text-gray-500 shrink-0 tabular-nums hidden sm:block">{kcalRef}&nbsp;kcal</span>
                   )}
@@ -988,37 +1511,75 @@ function PlanoManual({ d }) {
                   {ref.alimentos.map((a, fi) => {
                     const kcalItem = a._kcal100g ? Math.round((a._kcal100g / 100) * a.quantidade_g) : null;
                     return (
-                      <div key={fi} className="flex items-center gap-2 py-2 px-2 rounded-xl hover:bg-white/[0.03] group/item transition-colors">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-gray-200 leading-tight truncate">{a._nome || a.alimento_id}</p>
-                          {a._grupo && <p className="text-[10px] text-gray-600 mt-0.5">{a._grupo}</p>}
+                      <React.Fragment key={fi}>
+                        <div className="flex items-center gap-2 py-2 px-2 rounded-xl hover:bg-white/[0.03] group/item transition-colors">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-gray-200 leading-tight truncate">{a._nome || a.alimento_id}</p>
+                            {a._grupo && <p className="text-[10px] text-gray-600 mt-0.5">{a._grupo}</p>}
+                          </div>
+                          {kcalItem != null && (
+                            <span className="text-[11px] text-gray-600 tabular-nums shrink-0 hidden sm:block">{kcalItem}&nbsp;kcal</span>
+                          )}
+                          <div className="flex items-center gap-2 shrink-0">
+                            <select
+                              value={a.medida_nome || "Gramas"}
+                              onChange={e => updateFoodMeasure(ri, fi, e.target.value)}
+                              className="bg-white/[0.05] border border-white/[0.08] rounded-lg px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-[#0081FD]/40"
+                            >
+                              {(a._medidas || [{ nome: "Gramas", gramas: 1 }]).map((m) => (
+                                <option key={m.nome} value={m.nome}>{m.nome}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => updateFoodQtd(ri, fi, Math.max(0, Number(a.quantidade || 0) - 1))}
+                              className="w-6 h-6 rounded-md bg-white/[0.05] hover:bg-white/[0.1] flex items-center justify-center text-gray-500 hover:text-white transition-colors"
+                            ><Minus className="w-3 h-3" /></button>
+                            <input
+                              type="number"
+                              value={a.quantidade ?? a.quantidade_g}
+                              onChange={e => updateFoodQtd(ri, fi, e.target.value)}
+                              className="w-14 bg-white/[0.05] border border-white/[0.08] rounded-lg px-1 py-1 text-center text-sm text-white focus:outline-none focus:border-[#0081FD]/40 tabular-nums"
+                            />
+                            <button
+                              onClick={() => updateFoodQtd(ri, fi, Number(a.quantidade || 0) + 1)}
+                              className="w-6 h-6 rounded-md bg-white/[0.05] hover:bg-white/[0.1] flex items-center justify-center text-gray-500 hover:text-white transition-colors"
+                            ><Plus className="w-3 h-3" /></button>
+                            <div className="text-[11px] text-gray-600 min-w-[56px] text-right">{a.quantidade_g}g</div>
+                          </div>
+                          {!!(a._equivalentes || []).length && (
+                            <button
+                              onClick={() => setEqOpen(eqOpen === `${ri}-${fi}` ? null : `${ri}-${fi}`)}
+                              className="text-[11px] text-[#3DA0FF] hover:text-white transition-colors shrink-0"
+                            >
+                              Eq.
+                            </button>
+                          )}
+                          <button
+                            onClick={() => removeFood(ri, fi)}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-700 hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/item:opacity-100 shrink-0"
+                          ><X className="w-3.5 h-3.5" /></button>
                         </div>
-                        {kcalItem != null && (
-                          <span className="text-[11px] text-gray-600 tabular-nums shrink-0 hidden sm:block">{kcalItem}&nbsp;kcal</span>
+                        {eqOpen === `${ri}-${fi}` && (a._equivalentes || []).length > 0 && (
+                          <div className="ml-2 mb-2 mr-2 rounded-lg border border-[#0081FD]/20 bg-[#0081FD]/[0.05] p-2">
+                            <div className="text-[10px] uppercase tracking-widest text-[#3DA0FF] font-bold mb-2">Equivalentes</div>
+                            <div className="space-y-1.5">
+                              {(a._equivalentes || []).map((eq, eqIdx) => (
+                                <button
+                                  key={`${eq.nome}-${eqIdx}`}
+                                  onClick={() => applyEquivalent(ri, fi, eq)}
+                                  className="w-full text-left rounded-md px-2 py-1.5 hover:bg-white/[0.05] transition-colors"
+                                >
+                                  <div className="text-xs text-white">{eq.nome}</div>
+                                  <div className="text-[10px] text-gray-500">
+                                    {(eq.medida_nome || "Gramas")} {eq.quantidade ? `· ${eq.quantidade}` : ""}
+                                    {eq.grupo ? ` · ${eq.grupo}` : ""}
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         )}
-                        {/* Quantity stepper */}
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => updateFoodQtd(ri, fi, Math.max(5, a.quantidade_g - 10))}
-                            className="w-6 h-6 rounded-md bg-white/[0.05] hover:bg-white/[0.1] flex items-center justify-center text-gray-500 hover:text-white transition-colors"
-                          ><Minus className="w-3 h-3" /></button>
-                          <input
-                            type="number"
-                            value={a.quantidade_g}
-                            onChange={e => updateFoodQtd(ri, fi, e.target.value)}
-                            className="w-14 bg-white/[0.05] border border-white/[0.08] rounded-lg px-1 py-1 text-center text-sm text-white focus:outline-none focus:border-[#0081FD]/40 tabular-nums"
-                          />
-                          <button
-                            onClick={() => updateFoodQtd(ri, fi, a.quantidade_g + 10)}
-                            className="w-6 h-6 rounded-md bg-white/[0.05] hover:bg-white/[0.1] flex items-center justify-center text-gray-500 hover:text-white transition-colors"
-                          ><Plus className="w-3 h-3" /></button>
-                          <span className="text-[11px] text-gray-600 w-3 ml-0.5">g</span>
-                        </div>
-                        <button
-                          onClick={() => removeFood(ri, fi)}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-700 hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/item:opacity-100 shrink-0"
-                        ><X className="w-3.5 h-3.5" /></button>
-                      </div>
+                      </React.Fragment>
                     );
                   })}
                 </div>
@@ -1064,6 +1625,26 @@ function PlanoManual({ d }) {
             </div>
           )}
         </div>
+        <div className="evo-card p-4">
+          <h3 className="text-sm font-bold text-white mb-3">Templates</h3>
+          {templates.length === 0 ? (
+            <p className="text-sm text-gray-600 text-center py-4">Nenhum template salvo.</p>
+          ) : (
+            <div className="space-y-2">
+              {templates.slice(0, 8).map((template) => (
+                <div key={template.id} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+                  <div className="font-bold text-sm truncate text-white">{template.nome}</div>
+                  <div className="text-[11px] text-gray-500 mt-1">
+                    {template.categoria || "Sem categoria"} · {(template.refeicoes || []).length} refeições
+                  </div>
+                  <button onClick={() => applyTemplate(template.id)} className="evo-btn-secondary text-xs px-3 py-1.5 mt-3 w-full">
+                    Aplicar neste paciente
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       <div className="lg:col-span-3">
         {!sel ? (
@@ -1073,9 +1654,11 @@ function PlanoManual({ d }) {
           </div>
         ) : (
           <PlanoDetail plano={sel}
-            onEdit={() => { setDraft({ ...sel, refeicoes: (sel.refeicoes||[]).map(r => ({...r, alimentos: (r.alimentos||[]).map(a => ({...a, _nome: a.alimento_nome||a.alimento_id}))})) }); setEditMode(true); }}
+            onEdit={async () => { setDraft(await hydrateDraftFromPlano(sel)); setEditMode(true); }}
             onDelete={() => deletePlano(sel.id)}
             onPdf={() => downloadPdf(sel.id, sel.titulo)}
+            onDuplicate={() => duplicatePlano(sel.id)}
+            onSaveTemplate={() => saveAsTemplate(sel.id, sel.titulo)}
           />
         )}
       </div>
@@ -1083,8 +1666,31 @@ function PlanoManual({ d }) {
   );
 }
 
-function PlanoDetail({ plano, onEdit, onDelete, onPdf }) {
+function PlanoDetail({ plano, onEdit, onDelete, onPdf, onDuplicate, onSaveTemplate }) {
   const t = plano.totais_dia || {};
+  const saldo = plano.saldos_dia || {};
+  const [history, setHistory] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const { data } = await api.get(`/patients/${plano.paciente_id}/planos-manuais/${plano.id}/historico`);
+      setHistory(data || []);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Erro ao carregar histórico");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const toggleHistory = async () => {
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    if (next && history.length === 0 && !historyLoading) await loadHistory();
+  };
+
   return (
     <div className="evo-card p-5 space-y-5">
       {/* Header */}
@@ -1092,13 +1698,92 @@ function PlanoDetail({ plano, onEdit, onDelete, onPdf }) {
         <div>
           <h3 className="font-bold text-base text-white">{plano.titulo}</h3>
           {plano.objetivo && <p className="text-xs text-gray-500 mt-0.5">{plano.objetivo}</p>}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {plano.versao != null && <span className="text-[11px] px-2 py-1 rounded-full border border-white/[0.08] text-gray-400">Versão {plano.versao}</span>}
+            {plano.origem_plano_id && <span className="text-[11px] px-2 py-1 rounded-full border border-[#0081FD]/20 text-[#3DA0FF]">Duplicado</span>}
+          </div>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={onPdf} className="evo-btn-secondary text-xs px-3 py-1.5"><Download className="w-3.5 h-3.5" /> PDF</button>
+          <button onClick={toggleHistory} className="evo-btn-secondary text-xs px-3 py-1.5">{historyOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />} Histórico</button>
+          <button onClick={onSaveTemplate} className="evo-btn-secondary text-xs px-3 py-1.5"><Save className="w-3.5 h-3.5" /> Salvar template</button>
+          <button onClick={onDuplicate} className="evo-btn-secondary text-xs px-3 py-1.5"><Plus className="w-3.5 h-3.5" /> Duplicar</button>
           <button onClick={onEdit} className="evo-btn-secondary text-xs px-3 py-1.5"><Edit2 className="w-3.5 h-3.5" /> Editar</button>
           <button onClick={onDelete} className="evo-btn-ghost text-xs text-red-400 hover:text-red-300 px-2"><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       </div>
+
+      {historyOpen && (
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold">Histórico do plano</div>
+            {historyLoading && <div className="text-xs text-gray-500">Carregando...</div>}
+          </div>
+          {!historyLoading && history.length === 0 && (
+            <p className="text-sm text-gray-500">Nenhum snapshot disponível.</p>
+          )}
+          {!historyLoading && history.length > 0 && (
+            <div className="space-y-3">
+              {history.map((row, idx) => {
+                const current = summarizeSnapshot(row.snapshot || {});
+                const previous = summarizeSnapshot(history[idx + 1]?.snapshot || {});
+                const changes = idx < history.length - 1 ? compareSnapshots(current, previous) : [];
+                const mealDiffs = idx < history.length - 1 ? compareMealSnapshots(row.snapshot || {}, history[idx + 1]?.snapshot || {}) : [];
+                return (
+                  <div key={row.id} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="text-sm font-semibold text-white">{current.titulo}</div>
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          {row.motivo || "snapshot"} · {row.criado_em ? new Date(row.criado_em).toLocaleString("pt-BR") : "—"}
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-gray-500">
+                        {current.refeicoes} refeições · {current.alimentos} alimentos · {current.orientacoes} orientações
+                      </div>
+                    </div>
+                    {changes.length > 0 ? (
+                      <div className="mt-3 grid gap-2">
+                        {changes.map((change, changeIdx) => (
+                          <div key={`${row.id}-${change.field}-${changeIdx}`} className="rounded-lg border border-white/[0.05] bg-black/10 px-3 py-2">
+                            <div className="text-[11px] uppercase tracking-wider text-gray-500">{change.field}</div>
+                            <div className="text-xs text-white mt-1">Atual: {change.current}</div>
+                            <div className="text-xs text-gray-500 mt-1">Anterior: {change.previous}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-500 mt-3">Snapshot base deste plano.</p>
+                    )}
+                    {mealDiffs.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        <div className="text-[11px] uppercase tracking-wider text-gray-500">Mudanças por refeição</div>
+                        {mealDiffs.map((mealDiff, mealIdx) => (
+                          <div key={`${row.id}-meal-${mealIdx}`} className="rounded-lg border border-white/[0.05] bg-black/10 px-3 py-2">
+                            <div className="text-xs font-semibold text-white">{mealDiff.meal}</div>
+                            <div className="mt-2 space-y-1.5">
+                              {mealDiff.changes.map((change, changeIdx) => (
+                                <div key={`${row.id}-meal-${mealIdx}-change-${changeIdx}`} className="text-xs">
+                                  <span className={`font-semibold ${change.type === "added" ? "text-emerald-400" : change.type === "removed" || change.type === "removed_meal" ? "text-red-400" : "text-amber-300"}`}>
+                                    {change.type === "added" ? "Incluído" : change.type === "removed" ? "Removido" : change.type === "removed_meal" ? "Refeição removida" : "Alterado"}
+                                  </span>
+                                  <span className="text-gray-300"> · {change.label}</span>
+                                  {change.current && <div className="text-gray-400 mt-1">Atual: {change.current}</div>}
+                                  {change.previous && <div className="text-gray-500 mt-1">Anterior: {change.previous}</div>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Macro summary */}
       {(t.energia_kcal || plano.meta_kcal) && (
@@ -1109,6 +1794,30 @@ function PlanoDetail({ plano, onEdit, onDelete, onPdf }) {
           <MacroPill label="Lipídios" value={t.lipidios_g ?? t.lipideos_g ?? "—"} unit="g" accent="orange" />
           <MacroPill label="Fibras" value={t.fibras_g ?? t.fibra_g ?? "—"} unit="g" accent="purple" />
           <MacroPill label="Sódio" value={t.sodio_mg ?? "—"} unit="mg" accent="slate" />
+        </div>
+      )}
+      {(saldo.energia_kcal != null || saldo.proteinas_g != null || saldo.carboidratos_g != null || saldo.lipidios_g != null) && (
+        <div className="grid sm:grid-cols-4 gap-2">
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-xs text-gray-400">Saldo kcal: <span className="text-white font-semibold">{saldo.energia_kcal ?? "—"}</span></div>
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-xs text-gray-400">Saldo PTN: <span className="text-white font-semibold">{saldo.proteinas_g ?? "—"}</span></div>
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-xs text-gray-400">Saldo CHO: <span className="text-white font-semibold">{saldo.carboidratos_g ?? "—"}</span></div>
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-xs text-gray-400">Saldo LIP: <span className="text-white font-semibold">{saldo.lipidios_g ?? "—"}</span></div>
+        </div>
+      )}
+
+      {!!plano.orientacoes?.length && (
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 space-y-3">
+          <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold">Orientações anexadas</div>
+          {plano.orientacoes.map((item) => (
+            <div key={item.id} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-sm font-semibold text-white">{item.titulo}</div>
+                <div className="text-[11px] text-gray-500">{item.categoria || "Sem categoria"}</div>
+              </div>
+              {!!item.objetivos?.length && <div className="text-[11px] text-gray-500 mt-1">Objetivos: {item.objetivos.join(", ")}</div>}
+              <p className="text-xs text-gray-400 mt-2 whitespace-pre-wrap">{item.conteudo}</p>
+            </div>
+          ))}
         </div>
       )}
 
@@ -1122,7 +1831,10 @@ function PlanoDetail({ plano, onEdit, onDelete, onPdf }) {
                 <span className="font-bold text-sm">{ref.nome}</span>
                 {ref.horario && <span className="text-xs text-gray-600">· {ref.horario}</span>}
               </div>
-              <span className="text-xs text-gray-600 tabular-nums">{ref.totais?.energia_kcal ?? 0} kcal</span>
+              <div className="text-right">
+                <span className="text-xs text-gray-600 tabular-nums block">{ref.totais?.energia_kcal ?? 0} kcal</span>
+                {ref.meta_kcal ? <span className="text-[10px] text-gray-500">meta {ref.meta_kcal} · saldo {ref.saldo_kcal ?? "—"}</span> : null}
+              </div>
             </div>
             {(ref.alimentos || []).length > 0 ? (
               <table className="w-full text-xs">
@@ -1139,7 +1851,14 @@ function PlanoDetail({ plano, onEdit, onDelete, onPdf }) {
                 <tbody>
                   {(ref.alimentos || []).map((a, ai) => (
                     <tr key={ai} className="border-b border-white/[0.02] hover:bg-white/[0.025] transition-colors">
-                      <td className="px-4 py-2.5 text-gray-200 max-w-[160px] sm:max-w-none truncate">{a.alimento_nome || a._nome || a.alimento_id}</td>
+                      <td className="px-4 py-2.5 text-gray-200 max-w-[160px] sm:max-w-none truncate">
+                        {a.alimento_nome || a._nome || a.alimento_id}
+                        {a.medida_nome && (
+                          <div className="text-[10px] text-gray-600 mt-0.5">
+                            {a.quantidade ?? "—"} {a.medida_nome}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-2.5 text-right text-gray-500 tabular-nums whitespace-nowrap">{a.quantidade_g}g</td>
                       <td className="px-3 py-2.5 text-right tabular-nums font-medium">{a.nutrientes?.energia_kcal != null ? Math.round(a.nutrientes.energia_kcal) : "—"}</td>
                       <td className="px-3 py-2.5 text-right text-gray-500 tabular-nums hidden sm:table-cell">{a.nutrientes?.proteinas_g ?? a.nutrientes?.proteina_g ?? "—"}</td>
@@ -1194,6 +1913,7 @@ function GastoEnergetico({ d }) {
   const p = d.patient;
   const lastEval = (d.evaluations || [])[0];
   const comp = lastEval?.composicao || {};
+  const bio = comp.bioimpedancia || {};
 
   const [form, setForm] = useState({
     protocolo: "mifflin_st_jeor",
@@ -1206,8 +1926,10 @@ function GastoEnergetico({ d }) {
     naf_manual: "",
     fi_codigo: "",
     fi_manual: "",
+    usar_mets: false,
   });
   const set = (k, v) => setForm(s => ({ ...s, [k]: v }));
+  const [atividadesMets, setAtividadesMets] = useState([{ nome: "Treino", met: "6", duracao_min: "60" }]);
 
   const [nafOpts, setNafOpts] = useState([]);
   const [fiOpts, setFiOpts] = useState([]);
@@ -1246,6 +1968,13 @@ function GastoEnergetico({ d }) {
         fi_manual: form.fi_manual ? parseFloat(form.fi_manual) : null,
         protocolo_tmb: form.protocolo,
         sexo_num: parseInt(form.sexo_num),
+        peso_kg: parseFloat(form.peso),
+        usar_mets: !!form.usar_mets,
+        atividades_mets: form.usar_mets
+          ? atividadesMets
+              .filter(a => a.nome && a.met && a.duracao_min)
+              .map(a => ({ nome: a.nome, met: parseFloat(a.met), duracao_min: parseInt(a.duracao_min) }))
+          : [],
       });
       setResult({ ...tmbRes.data, ...getRes.data });
     } catch (e) {
@@ -1297,6 +2026,10 @@ function GastoEnergetico({ d }) {
           </div>
 
           <div className="mt-4 space-y-3">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={!!form.usar_mets} onChange={(e) => set("usar_mets", e.target.checked)} className="w-4 h-4" />
+              Calcular GET por METs
+            </label>
             <div>
               <label className="evo-label">NAF — Nível de Atividade Física</label>
               <select className="evo-input" value={form.naf_codigo} onChange={e => set("naf_codigo", e.target.value)}>
@@ -1312,6 +2045,24 @@ function GastoEnergetico({ d }) {
               </select>
             </div>
             <Inp l="FI manual (sobrescreve a tabela)" v={form.fi_manual} onChange={v => set("fi_manual", v)} t="number" />
+            {form.usar_mets && (
+              <div className="rounded-lg border border-white/[0.06] bg-evo-bg p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Atividades por MET</div>
+                  <button onClick={() => setAtividadesMets(prev => [...prev, { nome: "", met: "", duracao_min: "" }])} className="text-xs text-evo-purple">Adicionar</button>
+                </div>
+                {atividadesMets.map((atividade, idx) => (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-end">
+                    <div className="col-span-5"><Inp l="Atividade" v={atividade.nome} onChange={v => setAtividadesMets(prev => prev.map((a, i) => i === idx ? { ...a, nome: v } : a))} /></div>
+                    <div className="col-span-3"><Inp l="MET" v={atividade.met} onChange={v => setAtividadesMets(prev => prev.map((a, i) => i === idx ? { ...a, met: v } : a))} t="number" /></div>
+                    <div className="col-span-3"><Inp l="Min" v={atividade.duracao_min} onChange={v => setAtividadesMets(prev => prev.map((a, i) => i === idx ? { ...a, duracao_min: v } : a))} t="number" /></div>
+                    <div className="col-span-1">
+                      <button onClick={() => setAtividadesMets(prev => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))} className="w-9 h-10 rounded-lg border border-white/[0.08] text-gray-400 hover:text-red-400">×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <button onClick={calcular} disabled={loading || !form.peso || !form.altura_cm} className="evo-btn-primary w-full mt-4">
@@ -1347,6 +2098,8 @@ function GastoEnergetico({ d }) {
               <Metric l="GET" v={`${result.get} kcal`} />
               <Metric l="NAF" v={result.naf} />
               <Metric l="FI" v={result.fi} />
+              {bio.agua_corporal_pct != null && <Metric l="% Água" v={`${bio.agua_corporal_pct}%`} />}
+              {bio.gordura_visceral != null && <Metric l="Gordura Visceral" v={bio.gordura_visceral} />}
             </div>
             <div className="mt-4 p-3 rounded-lg bg-evo-purple/10 border border-evo-purple/20 text-sm">
               <div className="text-evo-purple font-semibold text-xs uppercase tracking-wider mb-1">VET estimado</div>
@@ -1376,41 +2129,70 @@ function Recordatorio({ d, reload }) {
   const [open, setOpen] = useState(null);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "" });
+  const [pickMealIndex, setPickMealIndex] = useState(null);
+  const [draft, setDraft] = useState({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "", finalizado: false });
 
   const addRefeicao = () => setDraft(s => ({
     ...s,
-    refeicoes: [...s.refeicoes, { nome: `Refeição ${s.refeicoes.length + 1}`, horario: "", alimentos: [], observacao: "" }]
+    refeicoes: [...s.refeicoes, { numero: s.refeicoes.length + 1, nome: `Refeição ${s.refeicoes.length + 1}`, horario: "", itens: [], observacao: "" }]
   }));
   const removeRefeicao = (i) => setDraft(s => ({ ...s, refeicoes: s.refeicoes.filter((_, idx) => idx !== i) }));
   const setRef = (i, k, v) => setDraft(s => {
     const r = [...s.refeicoes]; r[i] = { ...r[i], [k]: v }; return { ...s, refeicoes: r };
   });
-  const addAlimento = (ri) => setDraft(s => {
-    const r = [...s.refeicoes];
-    r[ri] = { ...r[ri], alimentos: [...(r[ri].alimentos || []), { nome: "", quantidade: "", horario: "" }] };
-    return { ...s, refeicoes: r };
-  });
+  const addAlimento = async (ri, alim) => {
+    const operational = await loadFoodOperationalData(alim.id);
+    const qtd = parseFloat(alim.porcao_padrao_g) || parseFloat(alim.quantidade_referencia_g) || 100;
+    const measures = dedupeMeasures(operational.measures, alim.medida_caseira, qtd);
+    const defaultMeasure = measures.find((item) => item.nome !== "Gramas")?.nome || "Gramas";
+    const defaultQty = defaultMeasure === "Gramas"
+      ? qtd
+      : Math.max(1, Number((qtd / Number(measures.find((item) => item.nome === defaultMeasure)?.gramas || qtd)).toFixed(2)));
+    setDraft(s => {
+      const r = [...s.refeicoes];
+      const itens = [...(r[ri].itens || [])];
+      itens.push({
+        n: itens.length + 1,
+        alimento_id: alim.id,
+        alimento_nome: alim.nome,
+        medida_nome: defaultMeasure,
+        quantidade: defaultMeasure === "Gramas" ? qtd : defaultQty,
+        quantidade_g: defaultMeasure === "Gramas" ? qtd : gramsForMeasure(measures, defaultMeasure, defaultQty, qtd),
+        _grupo: alim.grupo_display ?? alim.grupo ?? alim.categoria ?? null,
+        _kcal100g: alim.energia_kcal_100g ?? null,
+        _medidas: measures,
+      });
+      r[ri] = { ...r[ri], itens };
+      return { ...s, refeicoes: r };
+    });
+  };
   const setAlim = (ri, ai, k, v) => setDraft(s => {
     const r = [...s.refeicoes];
-    const alims = [...(r[ri].alimentos || [])];
-    alims[ai] = { ...alims[ai], [k]: v };
-    r[ri] = { ...r[ri], alimentos: alims };
+    const itens = [...(r[ri].itens || [])];
+    const next = { ...itens[ai], [k]: v };
+    if (k === "quantidade") next.quantidade_g = gramsForMeasure(next._medidas, next.medida_nome, v, next.quantidade_g);
+    if (k === "medida_nome") next.quantidade_g = gramsForMeasure(next._medidas, v, next.quantidade, next.quantidade_g);
+    if (k === "quantidade_g") next.quantidade = v;
+    itens[ai] = next;
+    r[ri] = { ...r[ri], itens };
     return { ...s, refeicoes: r };
   });
   const removeAlim = (ri, ai) => setDraft(s => {
     const r = [...s.refeicoes];
-    r[ri] = { ...r[ri], alimentos: r[ri].alimentos.filter((_, i) => i !== ai) };
+    r[ri] = { ...r[ri], itens: (r[ri].itens || []).filter((_, i) => i !== ai).map((item, idx) => ({ ...item, n: idx + 1 })) };
     return { ...s, refeicoes: r };
   });
 
   const save = async () => {
     setSaving(true);
     try {
-      const { data } = await api.post(`/patients/${d.patient.id}/recordatorios`, draft);
+      const { data } = await api.post(`/patients/${d.patient.id}/recordatorios`, sanitizeRecordatorioDraft(draft));
       setRecs(s => [data, ...s]);
+      setOpen(data);
       setCreating(false);
-      setDraft({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "" });
+      setPickMealIndex(null);
+      setDraft({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "", finalizado: false });
+      reload?.();
       toast.success("Recordatório salvo!");
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
@@ -1429,6 +2211,16 @@ function Recordatorio({ d, reload }) {
 
   return (
     <div className="grid lg:grid-cols-5 gap-5">
+      {pickMealIndex !== null && (
+        <FoodSearchModal
+          refNome={draft.refeicoes[pickMealIndex]?.nome ?? "Refeição"}
+          onSelect={(food) => {
+            addAlimento(pickMealIndex, food);
+            setPickMealIndex(null);
+          }}
+          onClose={() => setPickMealIndex(null)}
+        />
+      )}
       <div className="lg:col-span-2 space-y-4">
         <div className="evo-card p-4">
           <div className="flex items-center justify-between mb-3">
@@ -1463,21 +2255,58 @@ function Recordatorio({ d, reload }) {
                   <input className="evo-input w-24 text-sm" type="time" value={ref.horario} onChange={e => setRef(ri,"horario",e.target.value)} />
                   <button onClick={() => removeRefeicao(ri)} className="text-evo-coral"><X className="w-4 h-4" /></button>
                 </div>
-                {(ref.alimentos || []).map((a, ai) => (
-                  <div key={ai} className="flex gap-1 items-center">
-                    <input className="evo-input flex-1 text-xs" value={a.nome} onChange={e => setAlim(ri,ai,"nome",e.target.value)} placeholder="Alimento" />
-                    <input className="evo-input w-24 text-xs" value={a.quantidade} onChange={e => setAlim(ri,ai,"quantidade",e.target.value)} placeholder="Qtd." />
-                    <button onClick={() => removeAlim(ri, ai)} className="text-gray-500 hover:text-evo-coral"><X className="w-3 h-3" /></button>
+                {(ref.itens || []).map((a, ai) => (
+                  <div key={ai} className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm text-white truncate">{a.alimento_nome}</div>
+                        <div className="text-[11px] text-gray-500">
+                          {a._grupo || "—"}
+                          {a.medida_nome ? ` · ${a.medida_nome}` : ""}
+                        </div>
+                      </div>
+                      <button onClick={() => removeAlim(ri, ai)} className="text-gray-500 hover:text-evo-coral"><X className="w-3 h-3" /></button>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        className="evo-input w-20 text-xs"
+                        type="number"
+                        min="0"
+                        value={a.quantidade}
+                        onChange={e => setAlim(ri, ai, "quantidade", e.target.value === "" ? "" : Math.max(0, Number(e.target.value)))}
+                        placeholder="Qtd"
+                      />
+                      <select
+                        value={a.medida_nome || "Gramas"}
+                        onChange={e => setAlim(ri, ai, "medida_nome", e.target.value)}
+                        className="bg-white/[0.05] border border-white/[0.08] rounded-lg px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-[#0081FD]/40"
+                      >
+                        {(a._medidas || [{ nome: "Gramas", gramas: 1 }]).map((m) => (
+                          <option key={m.nome} value={m.nome}>{m.nome}</option>
+                        ))}
+                      </select>
+                      <span className="text-xs text-gray-500">{a.quantidade_g}g</span>
+                      {a._kcal100g != null && (
+                        <span className="text-[11px] text-gray-600 ml-auto">
+                          {Math.round((Number(a._kcal100g) / 100) * (Number(a.quantidade_g) || 0))} kcal
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))}
-                <button onClick={() => addAlimento(ri)} className="text-xs text-evo-teal flex items-center gap-1">
-                  <Plus className="w-3 h-3" /> Alimento
+                <button onClick={() => setPickMealIndex(ri)} className="text-xs text-evo-teal flex items-center gap-1">
+                  <Plus className="w-3 h-3" /> Selecionar alimento da base
                 </button>
+                {(ref.itens || []).length > 0 && <div className="text-[11px] text-gray-500">{(ref.itens || []).length} item(ns) na refeição</div>}
               </div>
             ))}
             <button onClick={addRefeicao} className="text-sm text-evo-purple flex items-center gap-1 w-full justify-center p-2 rounded-lg border border-dashed border-evo-purple/30 hover:border-evo-purple/60 transition-colors">
               <Plus className="w-4 h-4" /> Adicionar refeição
             </button>
+            <label className="flex items-center gap-2 text-sm cursor-pointer text-gray-300">
+              <input type="checkbox" checked={draft.finalizado} onChange={(e) => setDraft(s => ({ ...s, finalizado: e.target.checked }))} className="w-4 h-4" />
+              Finalizar ao salvar
+            </label>
             <div>
               <label className="evo-label">Observações gerais</label>
               <textarea className="evo-input h-20 resize-none" value={draft.observacoes} onChange={e => setDraft(s => ({...s, observacoes: e.target.value}))} placeholder="Observações..." />
@@ -1498,29 +2327,51 @@ function Recordatorio({ d, reload }) {
         ) : (
           <div className="evo-card p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="evo-h3">Recordatório — {open.data}</h3>
+              <div>
+                <h3 className="evo-h3">Recordatório — {open.data}</h3>
+                <div className="text-[11px] text-gray-500 mt-1">
+                  {(open.refeicoes || []).length} refeições
+                  {open.finalizado ? " · finalizado" : " · rascunho"}
+                </div>
+              </div>
               <button onClick={() => remove(open.id)} className="evo-btn-ghost text-evo-coral text-xs">
                 <Trash2 className="w-3 h-3" /> Remover
               </button>
             </div>
+            {open.totais_dia && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <MacroPill label="Energia" value={Math.round(open.totais_dia.energia_kcal || 0)} unit="kcal" accent="blue" />
+                <MacroPill label="Proteína" value={open.totais_dia.proteina_g || 0} unit="g" accent="green" />
+                <MacroPill label="Carbo" value={open.totais_dia.carboidrato_g || 0} unit="g" accent="amber" />
+                <MacroPill label="Lipídios" value={open.totais_dia.lipideos_g || 0} unit="g" accent="orange" />
+                <MacroPill label="Fibras" value={open.totais_dia.fibra_g || 0} unit="g" accent="purple" />
+              </div>
+            )}
             {(open.refeicoes || []).map((ref, i) => (
               <div key={i} className="p-4 rounded-lg bg-evo-bg border border-white/[0.06]">
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-semibold text-sm">{ref.nome}</span>
-                  {ref.horario && <span className="text-xs text-gray-400">{ref.horario}</span>}
+                  <div className="text-right">
+                    {ref.horario && <div className="text-xs text-gray-400">{ref.horario}</div>}
+                    <div className="text-[11px] text-gray-600">{Math.round(ref.total_energia_kcal || 0)} kcal</div>
+                  </div>
                 </div>
-                {(ref.alimentos || []).length === 0 ? (
+                {(ref.itens || []).length === 0 ? (
                   <div className="text-xs text-gray-500">Sem alimentos registrados.</div>
                 ) : (
                   <table className="w-full text-xs">
                     <thead><tr className="text-gray-500">
-                      <th className="text-left pb-1">Alimento</th><th className="text-left pb-1">Quantidade</th>
+                      <th className="text-left pb-1">Alimento</th><th className="text-right pb-1">Qtd</th><th className="text-right pb-1">kcal</th>
                     </tr></thead>
                     <tbody>
-                      {ref.alimentos.map((a, ai) => (
+                      {ref.itens.map((a, ai) => (
                         <tr key={ai} className="border-t border-white/[0.04]">
-                          <td className="py-1">{a.nome}</td>
-                          <td className="py-1 text-gray-400">{a.quantidade}</td>
+                          <td className="py-1">
+                            {a.alimento_nome}
+                            <div className="text-[10px] text-gray-600">{a.quantidade ?? "—"} {a.medida_nome || "Gramas"}</div>
+                          </td>
+                          <td className="py-1 text-gray-400 text-right">{a.quantidade_g} g</td>
+                          <td className="py-1 text-gray-400 text-right">{Math.round(a.energia_kcal || 0)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1787,12 +2638,26 @@ function ExamesPDF({ d, reload }) {
 
 const BADGE = { normal: "bg-evo-teal/15 text-evo-teal border-evo-teal/30", baixo: "bg-blue-500/15 text-blue-400 border-blue-500/30", alto: "bg-evo-coral/15 text-evo-coral border-evo-coral/30", sem_referencia: "bg-white/5 text-gray-400 border-white/10" };
 const BADGE_LABEL = { normal: "Normal", baixo: "Abaixo", alto: "Elevado", sem_referencia: "—" };
+const TREND_LABEL = { subiu: "Subiu", caiu: "Caiu", estavel: "Estável" };
+
+function examReferenceText(ref) {
+  if (!ref) return "—";
+  return [ref.ref_m_min != null && `≥${ref.ref_m_min}`, ref.ref_m_max != null && `≤${ref.ref_m_max}`].filter(Boolean).join(" — ") || "—";
+}
+
+function examDeltaText(marker) {
+  if (marker?.delta_abs == null) return "Sem comparação";
+  const sign = marker.delta_abs > 0 ? "+" : "";
+  const pct = marker.delta_pct != null ? ` (${sign}${marker.delta_pct}%)` : "";
+  return `${sign}${marker.delta_abs}${pct}`;
+}
 
 function ExamesManuais({ d }) {
   const pid = d.patient.id;
   const [lotes, setLotes] = useState([]);
   const [grupos, setGrupos] = useState([]);
   const [catalog, setCatalog] = useState([]);
+  const [longitudinal, setLongitudinal] = useState({ resumo: {}, grupos: [], marcadores: [], timeline: [] });
   const [showForm, setShowForm] = useState(false);
   const [grupoFiltro, setGrupoFiltro] = useState("");
   const [dataColeta, setDataColeta] = useState(new Date().toISOString().split("T")[0]);
@@ -1800,18 +2665,42 @@ function ExamesManuais({ d }) {
   const [itens, setItens] = useState([]);
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(null);
+  const [markerOpen, setMarkerOpen] = useState(null);
 
   const load = async () => {
     try {
-      const [{ data: ls }, { data: gs }, { data: cat }] = await Promise.all([
+      const [{ data: ls }, { data: gs }, { data: cat }, { data: long }] = await Promise.all([
         api.get(`/patients/${pid}/exames-manuais`),
         api.get("/referencias/exames-grupos"),
         api.get("/referencias/exames-catalog"),
+        api.get(`/patients/${pid}/exames-manuais/longitudinal`),
       ]);
-      setLotes(ls); setGrupos(gs); setCatalog(cat);
+      setLotes(ls);
+      setGrupos(gs);
+      setCatalog(cat);
+      setLongitudinal(long || { resumo: {}, grupos: [], marcadores: [], timeline: [] });
+      setMarkerOpen((current) => current || long?.marcadores?.[0] || null);
     } catch {}
   };
-  useEffect(() => { load(); }, [pid]);
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      api.get(`/patients/${pid}/exames-manuais`),
+      api.get("/referencias/exames-grupos"),
+      api.get("/referencias/exames-catalog"),
+      api.get(`/patients/${pid}/exames-manuais/longitudinal`),
+    ])
+      .then(([{ data: ls }, { data: gs }, { data: cat }, { data: long }]) => {
+        if (!active) return;
+        setLotes(ls);
+        setGrupos(gs);
+        setCatalog(cat);
+        setLongitudinal(long || { resumo: {}, grupos: [], marcadores: [], timeline: [] });
+        setMarkerOpen((current) => current || long?.marcadores?.[0] || null);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [pid]);
 
   const filteredCat = grupoFiltro ? catalog.filter(e => e.grupo === grupoFiltro) : catalog;
 
@@ -1859,6 +2748,11 @@ function ExamesManuais({ d }) {
       document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
     } catch { toast.error("Erro ao gerar PDF"); }
   };
+
+  const resumo = longitudinal?.resumo || {};
+  const markerDetail = markerOpen
+    ? (longitudinal?.marcadores || []).find((item) => item.codigo === markerOpen.codigo) || markerOpen
+    : null;
 
   return (
     <div className="grid lg:grid-cols-5 gap-5">
@@ -1931,40 +2825,159 @@ function ExamesManuais({ d }) {
             )}
             <button onClick={submitExames} disabled={saving} className="evo-btn-primary w-full">{saving ? "Salvando..." : "Salvar Exames"}</button>
           </div>
-        ) : !open ? (
-          <div className="evo-card p-12 text-center text-gray-500 text-sm"><FlaskConical className="w-7 h-7 mx-auto mb-3 text-gray-600" />Selecione um registro ou registre novos exames.</div>
         ) : (
-          <div className="evo-card p-5 space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <h3 className="evo-h3">{open.data_coleta}</h3>
-                <div className="text-xs text-gray-500">{open.laboratorio || "Laboratório não informado"}</div>
-              </div>
-              <button onClick={() => deleteLote(open.id)} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3.5 h-3.5" /> Excluir</button>
-            </div>
-            {Object.entries(
-              (open.exames||[]).reduce((acc, e) => { (acc[e.grupo] = acc[e.grupo] || []).push(e); return acc; }, {})
-            ).map(([grupo, exs]) => (
-              <div key={grupo}>
-                <div className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">{grupo}</div>
-                <div className="grid sm:grid-cols-2 gap-2">
-                  {exs.map((e, i) => (
-                    <div key={i} className="p-3 rounded-lg bg-evo-bg border border-white/[0.04]">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-semibold">{e.nome}</div>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${BADGE[e.classificacao]||BADGE.sem_referencia}`}>{BADGE_LABEL[e.classificacao]||"—"}</span>
-                      </div>
-                      <div className="text-sm mt-1"><span className="font-bold text-white">{e.valor}</span> <span className="text-gray-400">{e.unidade}</span></div>
-                      {e.referencia && (
-                        <div className="text-[10px] text-gray-500 mt-1">
-                          Ref: {[e.referencia.ref_m_min != null && `≥${e.referencia.ref_m_min}`, e.referencia.ref_m_max != null && `≤${e.referencia.ref_m_max}`].filter(Boolean).join(" — ") || "—"}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+          <div className="space-y-4">
+            {lotes.length > 0 && (
+              <>
+                <div className="grid sm:grid-cols-4 gap-3">
+                  <div className="evo-card p-4">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500">Coletas</div>
+                    <div className="font-display text-2xl mt-1">{resumo.total_coletas || 0}</div>
+                  </div>
+                  <div className="evo-card p-4">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500">Marcadores</div>
+                    <div className="font-display text-2xl mt-1">{resumo.total_marcadores || 0}</div>
+                  </div>
+                  <div className="evo-card p-4">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500">Alterados na última</div>
+                    <div className="font-display text-2xl mt-1">{resumo.marcadores_alterados_ultima_coleta || 0}</div>
+                  </div>
+                  <div className="evo-card p-4">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500">Grupos com alteração</div>
+                    <div className="font-display text-2xl mt-1">{resumo.grupos_com_alteracao || 0}</div>
+                  </div>
                 </div>
+
+                <div className="grid xl:grid-cols-5 gap-4">
+                  <div className="xl:col-span-2 evo-card p-4 space-y-3">
+                    <div>
+                      <h3 className="evo-h3">Leitura por grupo</h3>
+                      <p className="text-xs text-gray-500 mt-1">Resumo clínico acumulado das coletas manuais.</p>
+                    </div>
+                    <div className="space-y-2">
+                      {(longitudinal.grupos || []).map((grupo) => (
+                        <div key={grupo.grupo} className="rounded-lg border border-white/[0.06] bg-evo-bg p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-semibold">{grupo.grupo}</div>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${grupo.alterados ? BADGE.alto : BADGE.normal}`}>
+                              {grupo.alterados ? `${grupo.alterados} alterado(s)` : "Sem alteração"}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-gray-500 mt-1">
+                            {grupo.total_exames} medições · última coleta {grupo.ultima_data || "—"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="xl:col-span-3 evo-card p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <h3 className="evo-h3">Comparativo longitudinal</h3>
+                        <p className="text-xs text-gray-500 mt-1">Variação entre as duas coletas mais recentes de cada marcador.</p>
+                      </div>
+                      {resumo.ultima_data_coleta && <div className="text-[11px] text-gray-500">Última coleta: {resumo.ultima_data_coleta}</div>}
+                    </div>
+                    <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+                      {(longitudinal.marcadores || []).map((marker) => (
+                        <button
+                          key={marker.codigo}
+                          onClick={() => setMarkerOpen(marker)}
+                          className={`w-full text-left rounded-lg border p-3 transition-all ${markerDetail?.codigo === marker.codigo ? "border-evo-purple/40 bg-evo-purple/10" : "border-white/[0.06] bg-evo-bg hover:border-white/20"}`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold">{marker.nome}</div>
+                              <div className="text-[11px] text-gray-500">{marker.grupo}</div>
+                            </div>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${BADGE[marker.ultima_classificacao] || BADGE.sem_referencia}`}>
+                              {BADGE_LABEL[marker.ultima_classificacao] || "—"}
+                            </span>
+                          </div>
+                          <div className="grid sm:grid-cols-3 gap-2 mt-3 text-xs">
+                            <div>
+                              <div className="text-gray-500">Atual</div>
+                              <div className="font-semibold text-white">{marker.ultima_coleta?.valor ?? "—"} {marker.unidade}</div>
+                            </div>
+                            <div>
+                              <div className="text-gray-500">Anterior</div>
+                              <div className="font-semibold text-white">{marker.coleta_anterior?.valor ?? "—"} {marker.unidade}</div>
+                            </div>
+                            <div>
+                              <div className="text-gray-500">{TREND_LABEL[marker.trend] || "Variação"}</div>
+                              <div className="font-semibold text-white">{examDeltaText(marker)}</div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    {markerDetail && (
+                      <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold">{markerDetail.nome}</div>
+                            <div className="text-[11px] text-gray-500">{markerDetail.grupo} · {markerDetail.unidade}</div>
+                          </div>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${BADGE[markerDetail.ultima_classificacao] || BADGE.sem_referencia}`}>
+                            {BADGE_LABEL[markerDetail.ultima_classificacao] || "—"}
+                          </span>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {(markerDetail.coletas || []).slice().reverse().map((coleta, idx) => (
+                            <div key={`${markerDetail.codigo}-${idx}`} className="flex items-center justify-between gap-3 text-sm border-b border-white/[0.05] pb-2 last:border-b-0 last:pb-0">
+                              <div>
+                                <div className="font-medium">{coleta.data_coleta}</div>
+                                <div className="text-[11px] text-gray-500">{coleta.laboratorio || "Laboratório não informado"}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-semibold text-white">{coleta.valor} {markerDetail.unidade}</div>
+                                <div className={`text-[11px] ${coleta.classificacao === "normal" ? "text-evo-teal" : coleta.classificacao === "baixo" ? "text-blue-400" : "text-evo-coral"}`}>
+                                  {BADGE_LABEL[coleta.classificacao] || "—"}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {!open ? (
+              <div className="evo-card p-12 text-center text-gray-500 text-sm"><FlaskConical className="w-7 h-7 mx-auto mb-3 text-gray-600" />Selecione um registro ou registre novos exames.</div>
+            ) : (
+              <div className="evo-card p-5 space-y-4">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <h3 className="evo-h3">{open.data_coleta}</h3>
+                    <div className="text-xs text-gray-500">{open.laboratorio || "Laboratório não informado"}</div>
+                  </div>
+                  <button onClick={() => deleteLote(open.id)} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3.5 h-3.5" /> Excluir</button>
+                </div>
+                {Object.entries(
+                  (open.exames||[]).reduce((acc, e) => { (acc[e.grupo] = acc[e.grupo] || []).push(e); return acc; }, {})
+                ).map(([grupo, exs]) => (
+                  <div key={grupo}>
+                    <div className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">{grupo}</div>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      {exs.map((e, i) => (
+                        <div key={i} className="p-3 rounded-lg bg-evo-bg border border-white/[0.04]">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-semibold">{e.nome}</div>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase ${BADGE[e.classificacao]||BADGE.sem_referencia}`}>{BADGE_LABEL[e.classificacao]||"—"}</span>
+                          </div>
+                          <div className="text-sm mt-1"><span className="font-bold text-white">{e.valor}</span> <span className="text-gray-400">{e.unidade}</span></div>
+                          <div className="text-[10px] text-gray-500 mt-1">Ref: {examReferenceText(e.referencia)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         )}
       </div>
