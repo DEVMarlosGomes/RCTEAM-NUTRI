@@ -48,6 +48,21 @@ O arquivo [render.yaml](render.yaml) já define o serviço, comando correto, dir
 
 O Render gera `JWT_SECRET` automaticamente. `DB_NAME`, `ADMIN_NAME` e a versão do Python já estão definidos.
 
+> **Importante:** como o serviço usa `backend` em **Root Directory**, todos os comandos já são executados dentro dessa pasta. Portanto, não use `cd backend` nos comandos de build ou inicialização.
+
+Se o serviço foi criado manualmente, confirme em **Render > Service > Settings > Build & Deploy**:
+
+| Configuração | Valor |
+|---|---|
+| Root Directory | `backend` |
+| Build Command | `pip install --upgrade pip && pip install -r requirements.txt` |
+| Start Command | `uvicorn server:app --host 0.0.0.0 --port $PORT` |
+| Health Check Path | `/health` |
+
+Depois de salvar, execute **Manual Deploy > Clear build cache & deploy**. Se o serviço estiver vinculado a um Blueprint, sincronize novamente o Blueprint para aplicar o `render.yaml` atualizado.
+
+O arquivo `backend/.python-version` também fixa o runtime em Python 3.12.8. Se os logs mostrarem pacotes `cp314`, confira se o serviço está usando a branch correta e se **Root Directory** está realmente definido como `backend`.
+
 6. Clique em **Apply** e acompanhe os logs.
 7. Quando concluir, copie a URL, por exemplo:
 
@@ -63,6 +78,16 @@ https://rcteam-nutri-api.onrender.com/docs
 ```
 
 O primeiro endereço deve retornar `{"status":"ok"}`.
+
+### Erro `cd: backend: No such file or directory`
+
+Esse erro significa que **Root Directory** já está definido como `backend`, mas o **Start Command** ainda contém `cd backend &&`. Remova somente esse prefixo e deixe:
+
+```bash
+uvicorn server:app --host 0.0.0.0 --port $PORT
+```
+
+Não altere `REACT_APP_BACKEND_URL` até o backend concluir o deploy e gerar a URL pública do Render.
 
 ### Gemini opcional
 
