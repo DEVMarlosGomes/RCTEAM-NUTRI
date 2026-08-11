@@ -28,7 +28,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from llm_chat import LlmChat, UserMessage
 import json
 import io
 import pdfplumber
@@ -80,7 +80,7 @@ def public_lead_view(p: dict) -> dict:
 
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
-EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '').strip()
 GEMINI_KEY = os.environ.get('GEMINI_KEY', '').strip()
 
 # ---------- Helpers ----------
@@ -153,8 +153,8 @@ async def require_patient(user=Depends(get_current_user)) -> dict:
     return user
 
 def set_auth_cookie(response: Response, token: str):
-    frontend_url = (os.environ.get("FRONTEND_URL") or "").lower()
-    is_local_frontend = any(host in frontend_url for host in ("localhost", "127.0.0.1"))
+    frontend_urls = (os.environ.get("FRONTEND_URLS") or os.environ.get("FRONTEND_URL") or "").lower()
+    is_local_frontend = any(host in frontend_urls for host in ("localhost", "127.0.0.1"))
     response.set_cookie(
         key="access_token", value=token,
         httponly=True,
@@ -189,6 +189,28 @@ class LeadOut(BaseModel):
     patient_id: str
     name: str
 
+class PatientCreateIn(BaseModel):
+    nome: str = Field(min_length=2)
+    telefone: str = ""
+    email: Optional[EmailStr] = None
+    data_nascimento: Optional[str] = None
+    sexo: Optional[str] = None
+    objetivo: Optional[str] = None
+    peso: Optional[float] = None
+    altura: Optional[float] = None
+    status_funil: str = "LEAD_INICIADO"
+
+class PatientUpdateIn(BaseModel):
+    nome: Optional[str] = Field(default=None, min_length=2)
+    telefone: Optional[str] = None
+    email: Optional[EmailStr] = None
+    data_nascimento: Optional[str] = None
+    sexo: Optional[str] = None
+    objetivo: Optional[str] = None
+    peso: Optional[float] = None
+    altura: Optional[float] = None
+    status_funil: Optional[str] = None
+
 class AnamnesisIn(BaseModel):
     token: str
     respostas: dict
@@ -205,6 +227,21 @@ class ScheduleIn(BaseModel):
     date: str   # ISO date
     time: str   # "HH:MM"
     type: str = "Inicial"
+
+class ConsultationCreateIn(BaseModel):
+    paciente_id: str
+    date: str
+    time: str
+    tipo: str = "Inicial"
+    status: str = "AGENDADA"
+    observacoes: str = ""
+
+class ConsultationUpdateIn(BaseModel):
+    date: Optional[str] = None
+    time: Optional[str] = None
+    tipo: Optional[str] = None
+    status: Optional[str] = None
+    observacoes: Optional[str] = None
 
 class EvaluationIn(BaseModel):
     peso: float
@@ -598,7 +635,7 @@ async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
     raise ValueError(f"Gemini indisponível após {len(_GEMINI_RETRY_DELAYS)+1} tentativas: {last_err[:120]}")
 
 async def _ai_chat(session_id: str, system_prompt: str, user_text: str) -> str:
-    """Wrapper que usa Gemini quando disponível, senão Anthropic via emergentintegrations."""
+    """Usa Gemini quando disponível e Anthropic como alternativa."""
     if GEMINI_KEY:
         return await _gemini_chat(
             [{"role": "user", "content": user_text}],
@@ -606,7 +643,7 @@ async def _ai_chat(session_id: str, system_prompt: str, user_text: str) -> str:
             GEMINI_KEY,
         )
     chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
+        api_key=ANTHROPIC_API_KEY,
         session_id=session_id,
         system_message=system_prompt,
     ).with_model("anthropic", "claude-sonnet-4-6")
@@ -617,7 +654,7 @@ async def ai_exam_analysis(raw_text: str) -> dict:
     Returns: {markers: [{nome, valor, unidade, referencia, status}], resumo, conduta_sugerida}
     """
     chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
+        api_key=ANTHROPIC_API_KEY,
         session_id=f"exame-{uuid.uuid4()}",
         system_message=(
             "Você é um especialista em interpretação de exames laboratoriais. "
@@ -856,13 +893,13 @@ async def atendimento_chat(payload: AtendimentoMsgIn):
         if gemini_key:
             reply = await _gemini_chat(msgs, ATENDIMENTO_SYSTEM_PROMPT, gemini_key)
         else:
-            # Fallback: Anthropic via emergentintegrations
+            # Alternativa direta pela API da Anthropic
             convo = "\n\n".join(
                 f"{str(m.get('role','user')).upper()}: {str(m.get('content',''))}"
                 for m in msgs
             )
             chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
+                api_key=ANTHROPIC_API_KEY,
                 session_id=f"atend-{sid}-{uuid.uuid4().hex[:8]}",
                 system_message=ATENDIMENTO_SYSTEM_PROMPT,
             ).with_model("anthropic", "claude-sonnet-4-6")
@@ -1141,6 +1178,24 @@ async def schedule(payload: ScheduleIn):
     return {"ok": True, "consultation_id": cid, "data_hora": dt_str}
 
 # ---------- Authenticated CRM ----------
+PATIENT_STATUSES = {
+    "LEAD_INICIADO", "ANAMNESE_COMPLETA", "CONSULTA_AGENDADA",
+    "CONSULTA_REALIZADA", "PLANO_ENTREGUE", "EM_ACOMPANHAMENTO",
+}
+
+def _validate_patient_status(value: Optional[str]) -> Optional[str]:
+    if value is not None and value not in PATIENT_STATUSES:
+        raise HTTPException(400, f"Status inválido. Use um de: {sorted(PATIENT_STATUSES)}")
+    return value
+
+def _consultation_datetime(date_value: str, time_value: str) -> str:
+    try:
+        y, m, dd = [int(x) for x in date_value.split("-")]
+        hh, mm = [int(x) for x in time_value.split(":")]
+        return datetime(y, m, dd, hh, mm, tzinfo=TZ_BR).isoformat()
+    except Exception:
+        raise HTTPException(400, "Data ou horário inválidos")
+
 @api.get("/dashboard")
 async def dashboard(user=Depends(get_current_user)):
     nid = user["id"]
@@ -1176,6 +1231,72 @@ async def list_patients(user=Depends(get_current_user)):
         {"nutricionista_id": user["id"]}, {"_id": 0, "lead_token": 0}
     ).sort("created_at", -1).to_list(500)
     return rows
+
+@api.post("/patients", status_code=201)
+async def create_patient(payload: PatientCreateIn, user=Depends(require_nutritionist)):
+    email = str(payload.email).lower() if payload.email else None
+    if email and await db.patients.find_one({"nutricionista_id": user["id"], "email": email}):
+        raise HTTPException(409, "Já existe um paciente com este e-mail")
+    _validate_patient_status(payload.status_funil)
+    now_str = iso(now_utc())
+    doc = {
+        "id": str(uuid.uuid4()),
+        "nutricionista_id": user["id"],
+        "lead_token": secrets.token_urlsafe(16),
+        **payload.model_dump(),
+        "email": email,
+        "created_at": now_str,
+        "updated_at": now_str,
+    }
+    await db.patients.insert_one(doc)
+    return {k: v for k, v in doc.items() if k not in ("_id", "lead_token")}
+
+@api.patch("/patients/{pid}")
+async def update_patient(pid: str, payload: PatientUpdateIn, user=Depends(require_nutritionist)):
+    patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not patient:
+        raise HTTPException(404, "Paciente não encontrado")
+    updates = payload.model_dump(exclude_unset=True)
+    _validate_patient_status(updates.get("status_funil"))
+    if updates.get("email"):
+        updates["email"] = str(updates["email"]).lower()
+        duplicate = await db.patients.find_one({
+            "nutricionista_id": user["id"], "email": updates["email"], "id": {"$ne": pid}
+        })
+        if duplicate:
+            raise HTTPException(409, "Já existe outro paciente com este e-mail")
+    updates["updated_at"] = iso(now_utc())
+    await db.patients.update_one({"id": pid}, {"$set": updates})
+    return await db.patients.find_one({"id": pid}, {"_id": 0, "lead_token": 0})
+
+@api.delete("/patients/{pid}")
+async def delete_patient(pid: str, user=Depends(require_nutritionist)):
+    patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not patient:
+        raise HTTPException(404, "Paciente não encontrado")
+    patient_filters = {
+        "anamneses": {"paciente_id": pid},
+        "consultations": {"paciente_id": pid},
+        "evaluations": {"paciente_id": pid},
+        "meal_plans": {"paciente_id": pid},
+        "ai_analyses": {"paciente_id": pid},
+        "exams": {"paciente_id": pid},
+        "recordatorios": {"paciente_id": pid},
+        "patient_nudges": {"patient_id": pid},
+        "patient_messages": {"patient_id": pid},
+        "consultorio_messages": {"patient_id": pid},
+        "planos_manuais": {"paciente_id": pid},
+        "planos_manuais_historico": {"paciente_id": pid},
+        "exames_manuais": {"paciente_id": pid},
+    }
+    deleted = {}
+    for collection_name, query in patient_filters.items():
+        result = await db[collection_name].delete_many(query)
+        deleted[collection_name] = result.deleted_count
+    if patient.get("user_id"):
+        await db.users.delete_one({"id": patient["user_id"], "role": "patient"})
+    await db.patients.delete_one({"id": pid})
+    return {"ok": True, "deleted_related": deleted}
 
 @api.get("/patients/{pid}")
 async def get_patient(pid: str, user=Depends(get_current_user)):
@@ -1280,6 +1401,62 @@ async def agenda(user=Depends(get_current_user)):
     for r in rows:
         r["paciente_nome"] = name_by.get(r["paciente_id"], "—")
     return rows
+
+@api.post("/agenda", status_code=201)
+async def create_consultation(payload: ConsultationCreateIn, user=Depends(require_nutritionist)):
+    patient = await db.patients.find_one({"id": payload.paciente_id, "nutricionista_id": user["id"]})
+    if not patient:
+        raise HTTPException(404, "Paciente não encontrado")
+    data_hora = _consultation_datetime(payload.date, payload.time)
+    if await db.consultations.find_one({
+        "nutricionista_id": user["id"], "data_hora": data_hora, "status": {"$ne": "CANCELADA"}
+    }):
+        raise HTTPException(409, "Já existe uma consulta neste horário")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "paciente_id": payload.paciente_id,
+        "nutricionista_id": user["id"],
+        "data_hora": data_hora,
+        "tipo": payload.tipo,
+        "status": payload.status,
+        "observacoes": payload.observacoes,
+        "created_at": iso(now_utc()),
+    }
+    await db.consultations.insert_one(doc)
+    if payload.status == "AGENDADA":
+        await db.patients.update_one({"id": payload.paciente_id}, {"$set": {"status_funil": "CONSULTA_AGENDADA"}})
+    return {**{k: v for k, v in doc.items() if k != "_id"}, "paciente_nome": patient.get("nome")}
+
+@api.patch("/agenda/{cid}")
+async def update_consultation(cid: str, payload: ConsultationUpdateIn, user=Depends(require_nutritionist)):
+    consultation = await db.consultations.find_one({"id": cid, "nutricionista_id": user["id"]})
+    if not consultation:
+        raise HTTPException(404, "Consulta não encontrada")
+    updates = payload.model_dump(exclude_unset=True)
+    date_value = updates.pop("date", None)
+    time_value = updates.pop("time", None)
+    if date_value is not None or time_value is not None:
+        current_date, current_time = consultation["data_hora"].split("T", 1)
+        data_hora = _consultation_datetime(date_value or current_date, time_value or current_time[:5])
+        conflict = await db.consultations.find_one({
+            "id": {"$ne": cid}, "nutricionista_id": user["id"],
+            "data_hora": data_hora, "status": {"$ne": "CANCELADA"},
+        })
+        if conflict:
+            raise HTTPException(409, "Já existe uma consulta neste horário")
+        updates["data_hora"] = data_hora
+    updates["updated_at"] = iso(now_utc())
+    await db.consultations.update_one({"id": cid}, {"$set": updates})
+    updated = await db.consultations.find_one({"id": cid}, {"_id": 0})
+    patient = await db.patients.find_one({"id": consultation["paciente_id"]}, {"_id": 0, "nome": 1})
+    return {**updated, "paciente_nome": (patient or {}).get("nome", "—")}
+
+@api.delete("/agenda/{cid}")
+async def delete_consultation(cid: str, user=Depends(require_nutritionist)):
+    result = await db.consultations.delete_one({"id": cid, "nutricionista_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Consulta não encontrada")
+    return {"ok": True}
 
 # ---------- Lab Exams ----------
 @api.post("/patients/{pid}/exams")
@@ -2601,6 +2778,20 @@ async def patch_anamnese_secao(pid: str, secao: str, payload: AnamnseSecaoIn, us
     updated = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
     return updated or {}
 
+@api.delete("/patients/{pid}/anamnese/{secao}")
+async def clear_anamnese_secao(pid: str, secao: str, user=Depends(require_nutritionist)):
+    if secao not in SECOES_ANAMNESE:
+        raise HTTPException(400, f"Seção inválida. Válidas: {list(SECOES_ANAMNESE)}")
+    patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not patient:
+        raise HTTPException(404, "Paciente não encontrado")
+    fields = {field: "" for field in SECOES_ANAMNESE[secao]}
+    fields["atualizado_em"] = iso(now_utc())
+    result = await db.anamneses.update_one({"paciente_id": pid}, {"$set": fields})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Anamnese não encontrada")
+    return {"ok": True}
+
 @api.post("/patients/{pid}/anamnese/observacoes/{tipo}")
 async def add_observacao_anamnese(pid: str, tipo: str, payload: ObsAddIn, user=Depends(require_nutritionist)):
     tipos_validos = ["dados_iniciais","habitos_vida","patologias","avaliacao_clinica","alimentacao","atividade_fisica","mulheres"]
@@ -2642,6 +2833,34 @@ async def add_evaluation_v2(pid: str, payload: EvaluationV2In, user=Depends(requ
         "peso": payload.peso, "altura": payload.altura, "ultima_avaliacao": iso(now_utc()),
     }})
     return {"ok": True, "evaluation_id": eid, "composicao": comp}
+
+@api.put("/patients/{pid}/evaluations/{eid}")
+async def update_evaluation(pid: str, eid: str, payload: EvaluationV2In, user=Depends(require_nutritionist)):
+    patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not patient:
+        raise HTTPException(404, "Paciente não encontrado")
+    existing = await db.evaluations.find_one({"id": eid, "paciente_id": pid})
+    if not existing:
+        raise HTTPException(404, "Avaliação não encontrada")
+    data = payload.model_dump()
+    composition = calc_bodycomp_v2(data)
+    updates = {**data, "composicao": composition, "updated_at": iso(now_utc())}
+    await db.evaluations.update_one({"id": eid, "paciente_id": pid}, {"$set": updates})
+    await db.patients.update_one({"id": pid}, {"$set": {"peso": payload.peso, "altura": payload.altura, "ultima_avaliacao": iso(now_utc())}})
+    return {"ok": True, "evaluation_id": eid, "composicao": composition}
+
+@api.delete("/patients/{pid}/evaluations/{eid}")
+async def delete_evaluation(pid: str, eid: str, user=Depends(require_nutritionist)):
+    patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not patient:
+        raise HTTPException(404, "Paciente não encontrado")
+    result = await db.evaluations.delete_one({"id": eid, "paciente_id": pid})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Avaliação não encontrada")
+    latest = await db.evaluations.find_one({"paciente_id": pid}, sort=[("created_at", -1)])
+    if latest:
+        await db.patients.update_one({"id": pid}, {"$set": {"peso": latest.get("peso"), "altura": latest.get("altura"), "ultima_avaliacao": latest.get("created_at")}})
+    return {"ok": True}
 
 # ── Recordatório endpoints ───────────────────────────────────────
 
@@ -3940,6 +4159,29 @@ async def create_exame_manual(pid: str, payload: ExamesManualIn, user=Depends(re
     await db.exames_manuais.insert_one(doc)
     return {k: v for k, v in doc.items() if k != "_id"}
 
+@api.put("/patients/{pid}/exames-manuais/{emid}")
+async def update_exame_manual(pid: str, emid: str, payload: ExamesManualIn, user=Depends(require_nutritionist)):
+    patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not patient:
+        raise HTTPException(404, "Paciente não encontrado")
+    existing = await db.exames_manuais.find_one({"id": emid, "paciente_id": pid})
+    if not existing:
+        raise HTTPException(404, "Registro de exames não encontrado")
+    catalog_flat = {item["codigo"]: item for items in _EXAMES_CATALOG.values() for item in items}
+    exams = []
+    for exam in payload.exames:
+        reference = catalog_flat.get(exam.codigo, {})
+        classification = _classif_exame(exam.valor, reference, patient.get("sexo", "M")) if reference else "sem_referencia"
+        exams.append({**exam.model_dump(), "classificacao": classification, "referencia": reference})
+    updates = {
+        "data_coleta": payload.data_coleta,
+        "laboratorio": payload.laboratorio,
+        "exames": exams,
+        "atualizado_em": iso(now_utc()),
+    }
+    await db.exames_manuais.update_one({"id": emid, "paciente_id": pid}, {"$set": updates})
+    return await db.exames_manuais.find_one({"id": emid}, {"_id": 0})
+
 @api.get("/patients/{pid}/exames-manuais")
 async def list_exames_manuais(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
@@ -4436,11 +4678,22 @@ async def shutdown():
     client.close()
 
 # ---------- CORS ----------
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 app.include_router(api)
+_frontend_urls = [
+    url.strip().rstrip("/")
+    for url in (os.environ.get("FRONTEND_URLS") or os.environ.get("FRONTEND_URL") or "http://localhost:3000").split(",")
+    if url.strip()
+]
+if "http://localhost:3000" not in _frontend_urls:
+    _frontend_urls.append("http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.environ.get("FRONTEND_URL", "http://localhost:3000"), "http://localhost:3000"],
-    allow_origin_regex=r"https://.*\.emergent(agent)?\.(host|com)$",
+    allow_origins=_frontend_urls,
+    allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

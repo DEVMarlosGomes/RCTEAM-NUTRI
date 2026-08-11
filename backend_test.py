@@ -5,13 +5,14 @@ Tests: Photo upload endpoint and Anamnesis field remap
 """
 
 import requests
+import os
 import json
 import base64
 import uuid
 from datetime import datetime
 
 # Configuration
-BASE_URL = "https://deploy-projeto-1.preview.emergentagent.com/api"
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8001").rstrip("/") + "/api"
 ADMIN_EMAIL = "admin@rogeriocosta.com.br"
 ADMIN_PASSWORD = "rogerio2025"
 

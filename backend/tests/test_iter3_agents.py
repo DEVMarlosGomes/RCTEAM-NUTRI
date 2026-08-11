@@ -1,7 +1,7 @@
 """Iteration 3 — Agents (Área do Nutricionista), Consultório (Agente 2),
 Área do Paciente (Agente 3), patient signup & permissions.
 
-The 3 agents are seeded on startup. AI (Claude via emergentintegrations) is real
+The 3 agents are seeded on startup. AI uses the Anthropic SDK directly.
 and slow — chat tests only assert non-5xx + presence of `reply`.
 """
 import io
@@ -12,7 +12,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://deploy-projeto-1.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "admin@rogeriocosta.com.br"

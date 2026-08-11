@@ -7,7 +7,7 @@
 Sistema clínico premium ponta-a-ponta para o treinador e nutricionista: do lead ao plano alimentar, com IA embarcada e UX dark com identidade Rogério Costa.
 
 ## Stack
-- Backend: FastAPI + Mongo + JWT cookie auth + Claude Sonnet 4.5 via emergentintegrations + WeasyPrint (PDF) + pdfplumber (OCR exames).
+- Backend: FastAPI + Mongo + JWT cookie auth + Claude Sonnet via SDK oficial da Anthropic + WeasyPrint (PDF) + pdfplumber (OCR exames).
 - Frontend: React 19 + Tailwind v3 + shadcn/ui + lucide-react + sonner + Orbitron/Rajdhani Google Fonts.
 - Hosting: Kubernetes + supervisor.
 

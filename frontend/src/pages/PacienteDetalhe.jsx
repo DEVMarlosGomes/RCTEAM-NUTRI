@@ -213,6 +213,18 @@ function Anamnese({ d, reload }) {
     }
   };
 
+  const clearSection = async (section) => {
+    if (!window.confirm("Limpar todos os campos desta seção da anamnese?")) return;
+    try {
+      await api.delete(`/patients/${d.patient.id}/anamnese/${section}`);
+      const { data } = await api.get(`/patients/${d.patient.id}/anamnese-v2`);
+      setAnam(data);
+      setEditSec(null);
+      toast.success("Seção limpa.");
+      reload?.();
+    } catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
+  };
+
   const old = d.anamneses?.[0];
 
   return (
@@ -302,6 +314,11 @@ function Anamnese({ d, reload }) {
                       </div>
                     ))}
                   </div>
+                )}
+                {filled > 0 && !isEdit && (
+                  <button onClick={() => clearSection(sec.key)} className="evo-btn-ghost text-evo-coral text-xs">
+                    <Trash2 className="w-3 h-3" /> Limpar seção
+                  </button>
                 )}
               </div>
             )}
@@ -486,6 +503,7 @@ const PERIM_FIELDS = [
 ];
 
 function Antropometria({ d, reload }) {
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
     peso: d.patient.peso || "", altura: d.patient.altura || "",
     idade: 30, sexo: d.patient.sexo || "F", sexo_num: d.patient.sexo === "M" ? 1 : 2,
@@ -522,8 +540,11 @@ function Antropometria({ d, reload }) {
         perimetria: Object.fromEntries(Object.entries(form.perimetria).filter(([,v]) => v).map(([k, v]) => [k, parseFloat(v)])),
         bioimpedancia: Object.fromEntries(Object.entries(form.bioimpedancia).filter(([,v]) => v !== "" && v != null).map(([k, v]) => [k, parseFloat(v)])),
       };
-      const { data } = await api.post(`/patients/${d.patient.id}/evaluations-v2`, payload);
-      toast.success(`Avaliação salva. IMC: ${data.composicao.imc} (${data.composicao.imc_classificacao})`);
+      const { data } = editingId
+        ? await api.put(`/patients/${d.patient.id}/evaluations/${editingId}`, payload)
+        : await api.post(`/patients/${d.patient.id}/evaluations-v2`, payload);
+      toast.success(`${editingId ? "Avaliação atualizada" : "Avaliação salva"}. IMC: ${data.composicao.imc} (${data.composicao.imc_classificacao})`);
+      setEditingId(null);
       reload();
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
@@ -539,11 +560,36 @@ function Antropometria({ d, reload }) {
     massa_magra: e.composicao?.massa_magra,
   }));
 
+  const editEvaluation = (evaluation) => {
+    setEditingId(evaluation.id);
+    setForm({
+      peso: evaluation.peso ?? "", altura: evaluation.altura ?? "", idade: evaluation.idade ?? 30,
+      sexo: evaluation.sexo || "F", sexo_num: evaluation.sexo === "M" ? 1 : 2,
+      gestante: Boolean(evaluation.gestante), ig_semanas: evaluation.ig_semanas ?? "",
+      nivel_atividade: evaluation.nivel_atividade ?? 1.55, objetivo: evaluation.objetivo || "manutencao",
+      protocolo_dobras: evaluation.protocolo_dobras || "pollock3", protocolo_tmb: evaluation.protocolo_tmb || "mifflin_st_jeor",
+      dobras: evaluation.dobras || {}, perimetria: evaluation.perimetria || {}, bioimpedancia: evaluation.bioimpedancia || {},
+    });
+  };
+
+  const deleteEvaluation = async (evaluation) => {
+    if (!window.confirm("Excluir esta avaliação antropométrica?")) return;
+    try {
+      await api.delete(`/patients/${d.patient.id}/evaluations/${evaluation.id}`);
+      toast.success("Avaliação excluída.");
+      if (editingId === evaluation.id) setEditingId(null);
+      reload();
+    } catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
+  };
+
   return (
     <div className="grid lg:grid-cols-5 gap-5">
       <div className="lg:col-span-3 space-y-4">
         <div className="evo-card p-5">
-          <h3 className="evo-h3 mb-4">Nova avaliação</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="evo-h3">{editingId ? "Editar avaliação" : "Nova avaliação"}</h3>
+            {editingId && <button onClick={() => setEditingId(null)} className="evo-btn-ghost text-xs"><X className="w-3 h-3" /> Cancelar edição</button>}
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <Inp l="Peso (kg)" v={form.peso} onChange={(v) => set("peso", v)} t="number" tid="anth-peso" />
             <Inp l="Altura (cm)" v={form.altura} onChange={(v) => set("altura", v)} t="number" tid="anth-altura" />
@@ -602,7 +648,7 @@ function Antropometria({ d, reload }) {
           </div>
 
           <button data-testid="save-evaluation" onClick={save} disabled={saving || !form.peso || !form.altura} className="evo-btn-primary mt-6 w-full">
-            {saving ? "Calculando..." : "Salvar avaliação"}
+            {saving ? "Calculando..." : editingId ? "Atualizar avaliação" : "Salvar avaliação"}
           </button>
         </div>
       </div>
@@ -1645,6 +1691,18 @@ function PlanoManual({ d }) {
             </div>
           )}
         </div>
+        <div className="evo-card p-5">
+          <h3 className="evo-h3 mb-3">Histórico</h3>
+          <div className="space-y-2">
+            {evaluations.map((evaluation) => (
+              <div key={evaluation.id} className="flex items-center gap-2 p-3 rounded-lg bg-evo-bg border border-white/[0.05]">
+                <div className="flex-1"><div className="text-sm font-semibold">{evaluation.created_at?.split("T")[0] || "Sem data"}</div><div className="text-xs text-gray-500">{evaluation.peso} kg · IMC {evaluation.composicao?.imc ?? "—"}</div></div>
+                <button onClick={() => editEvaluation(evaluation)} className="evo-btn-ghost p-2" title="Editar"><Edit2 className="w-4 h-4" /></button>
+                <button onClick={() => deleteEvaluation(evaluation)} className="evo-btn-ghost p-2 text-evo-coral" title="Excluir"><Trash2 className="w-4 h-4" /></button>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="lg:col-span-3">
         {!sel ? (
@@ -2128,6 +2186,7 @@ function Recordatorio({ d, reload }) {
   const [recs, setRecs] = useState(d.recordatorios || []);
   const [open, setOpen] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [pickMealIndex, setPickMealIndex] = useState(null);
   const [draft, setDraft] = useState({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "", finalizado: false });
@@ -2186,17 +2245,33 @@ function Recordatorio({ d, reload }) {
   const save = async () => {
     setSaving(true);
     try {
-      const { data } = await api.post(`/patients/${d.patient.id}/recordatorios`, sanitizeRecordatorioDraft(draft));
-      setRecs(s => [data, ...s]);
+      const { data } = editingId
+        ? await api.put(`/patients/${d.patient.id}/recordatorios/${editingId}`, sanitizeRecordatorioDraft(draft))
+        : await api.post(`/patients/${d.patient.id}/recordatorios`, sanitizeRecordatorioDraft(draft));
+      setRecs(s => editingId ? s.map((record) => record.id === editingId ? data : record) : [data, ...s]);
       setOpen(data);
       setCreating(false);
+      setEditingId(null);
       setPickMealIndex(null);
       setDraft({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "", finalizado: false });
       reload?.();
-      toast.success("Recordatório salvo!");
+      toast.success(editingId ? "Recordatório atualizado!" : "Recordatório salvo!");
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
     } finally { setSaving(false); }
+  };
+
+  const startNew = () => {
+    setEditingId(null);
+    setDraft({ data: new Date().toISOString().split("T")[0], refeicoes: [], observacoes: "", finalizado: false });
+    setCreating(true);
+  };
+
+  const startEdit = (record) => {
+    if (record.finalizado) { toast.error("Recordatórios finalizados não podem ser editados."); return; }
+    setEditingId(record.id);
+    setDraft({ data: record.data, refeicoes: record.refeicoes || [], observacoes: record.observacoes || "", finalizado: false });
+    setCreating(true);
   };
 
   const remove = async (rid) => {
@@ -2225,7 +2300,7 @@ function Recordatorio({ d, reload }) {
         <div className="evo-card p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="evo-h3">Recordatórios</h3>
-            <button onClick={() => setCreating(c => !c)} className="evo-btn-primary text-xs">
+            <button onClick={startNew} className="evo-btn-primary text-xs">
               <Plus className="w-3 h-3" /> Novo
             </button>
           </div>
@@ -2246,7 +2321,7 @@ function Recordatorio({ d, reload }) {
 
         {creating && (
           <div className="evo-card p-4 space-y-3">
-            <h3 className="evo-h3">Novo recordatório</h3>
+            <div className="flex items-center justify-between"><h3 className="evo-h3">{editingId ? "Editar recordatório" : "Novo recordatório"}</h3><button onClick={() => { setCreating(false); setEditingId(null); }} className="evo-btn-ghost p-1"><X className="w-4 h-4" /></button></div>
             <Inp l="Data" v={draft.data} onChange={v => setDraft(s => ({...s, data: v}))} t="date" />
             {draft.refeicoes.map((ref, ri) => (
               <div key={ri} className="p-3 rounded-lg bg-evo-bg border border-white/[0.06] space-y-2">
@@ -2312,7 +2387,7 @@ function Recordatorio({ d, reload }) {
               <textarea className="evo-input h-20 resize-none" value={draft.observacoes} onChange={e => setDraft(s => ({...s, observacoes: e.target.value}))} placeholder="Observações..." />
             </div>
             <button onClick={save} disabled={saving} className="evo-btn-primary w-full">
-              <Save className="w-4 h-4" /> {saving ? "Salvando..." : "Salvar recordatório"}
+              <Save className="w-4 h-4" /> {saving ? "Salvando..." : editingId ? "Atualizar recordatório" : "Salvar recordatório"}
             </button>
           </div>
         )}
@@ -2334,9 +2409,10 @@ function Recordatorio({ d, reload }) {
                   {open.finalizado ? " · finalizado" : " · rascunho"}
                 </div>
               </div>
-              <button onClick={() => remove(open.id)} className="evo-btn-ghost text-evo-coral text-xs">
-                <Trash2 className="w-3 h-3" /> Remover
-              </button>
+              <div className="flex gap-2">
+                {!open.finalizado && <button onClick={() => startEdit(open)} className="evo-btn-ghost text-xs"><Edit2 className="w-3 h-3" /> Editar</button>}
+                <button onClick={() => remove(open.id)} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3 h-3" /> Remover</button>
+              </div>
             </div>
             {open.totais_dia && (
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
@@ -2659,6 +2735,7 @@ function ExamesManuais({ d }) {
   const [catalog, setCatalog] = useState([]);
   const [longitudinal, setLongitudinal] = useState({ resumo: {}, grupos: [], marcadores: [], timeline: [] });
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [grupoFiltro, setGrupoFiltro] = useState("");
   const [dataColeta, setDataColeta] = useState(new Date().toISOString().split("T")[0]);
   const [laboratorio, setLaboratorio] = useState("");
@@ -2721,13 +2798,15 @@ function ExamesManuais({ d }) {
     if (!valid.length) { toast.error("Preencha ao menos um valor"); return; }
     setSaving(true);
     try {
-      await api.post(`/patients/${pid}/exames-manuais`, {
+      const payload = {
         data_coleta: dataColeta,
         laboratorio: laboratorio || null,
         exames: valid.map(i => ({ ...i, valor: parseFloat(i.valor) })),
-      });
-      toast.success("Exames registrados!");
-      setShowForm(false); setItens([]);
+      };
+      if (editingId) await api.put(`/patients/${pid}/exames-manuais/${editingId}`, payload);
+      else await api.post(`/patients/${pid}/exames-manuais`, payload);
+      toast.success(editingId ? "Exames atualizados!" : "Exames registrados!");
+      setShowForm(false); setItens([]); setEditingId(null);
       await load();
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "Erro ao salvar"); }
     finally { setSaving(false); }
@@ -2738,6 +2817,16 @@ function ExamesManuais({ d }) {
     await api.delete(`/patients/${pid}/exames-manuais/${emid}`);
     toast.success("Excluído"); await load();
     if (open?.id === emid) setOpen(null);
+  };
+
+  const startNewExam = () => {
+    setEditingId(null); setDataColeta(new Date().toISOString().split("T")[0]); setLaboratorio(""); setItens([]); setShowForm(true);
+  };
+
+  const startEditExam = (batch) => {
+    setEditingId(batch.id); setDataColeta(batch.data_coleta); setLaboratorio(batch.laboratorio || "");
+    setItens((batch.exames || []).map(({ codigo, nome, unidade, grupo, valor }) => ({ codigo, nome, unidade, grupo, valor })));
+    setShowForm(true);
   };
 
   const downloadPdf = async () => {
@@ -2758,7 +2847,7 @@ function ExamesManuais({ d }) {
     <div className="grid lg:grid-cols-5 gap-5">
       <div className="lg:col-span-2 space-y-4">
         <div className="evo-card p-4 space-y-2">
-          <button onClick={() => setShowForm(s => !s)} className="evo-btn-primary w-full"><Plus className="w-4 h-4" /> {showForm ? "Cancelar" : "Registrar exames"}</button>
+          <button onClick={() => showForm ? (setShowForm(false), setEditingId(null)) : startNewExam()} className="evo-btn-primary w-full"><Plus className="w-4 h-4" /> {showForm ? "Cancelar" : "Registrar exames"}</button>
           {lotes.length > 0 && <button onClick={downloadPdf} className="evo-btn-secondary w-full"><Download className="w-4 h-4" /> PDF completo</button>}
         </div>
         <div className="evo-card p-4">
@@ -2784,7 +2873,7 @@ function ExamesManuais({ d }) {
       <div className="lg:col-span-3">
         {showForm ? (
           <div className="evo-card p-5 space-y-4">
-            <h3 className="evo-h3">Novo Registro de Exames</h3>
+            <h3 className="evo-h3">{editingId ? "Editar Registro de Exames" : "Novo Registro de Exames"}</h3>
             <div className="grid sm:grid-cols-2 gap-3">
               <div><label className="evo-label">Data da coleta</label><input type="date" className="evo-input" value={dataColeta} onChange={e => setDataColeta(e.target.value)} /></div>
               <div><label className="evo-label">Laboratório</label><input className="evo-input" value={laboratorio} onChange={e => setLaboratorio(e.target.value)} placeholder="Opcional" /></div>
@@ -2823,7 +2912,7 @@ function ExamesManuais({ d }) {
                 </div>
               </div>
             )}
-            <button onClick={submitExames} disabled={saving} className="evo-btn-primary w-full">{saving ? "Salvando..." : "Salvar Exames"}</button>
+            <button onClick={submitExames} disabled={saving} className="evo-btn-primary w-full">{saving ? "Salvando..." : editingId ? "Atualizar Exames" : "Salvar Exames"}</button>
           </div>
         ) : (
           <div className="space-y-4">
@@ -2955,7 +3044,7 @@ function ExamesManuais({ d }) {
                     <h3 className="evo-h3">{open.data_coleta}</h3>
                     <div className="text-xs text-gray-500">{open.laboratorio || "Laboratório não informado"}</div>
                   </div>
-                  <button onClick={() => deleteLote(open.id)} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3.5 h-3.5" /> Excluir</button>
+                  <div className="flex gap-2"><button onClick={() => startEditExam(open)} className="evo-btn-ghost text-xs"><Edit2 className="w-3.5 h-3.5" /> Editar</button><button onClick={() => deleteLote(open.id)} className="evo-btn-ghost text-evo-coral text-xs"><Trash2 className="w-3.5 h-3.5" /> Excluir</button></div>
                 </div>
                 {Object.entries(
                   (open.exames||[]).reduce((acc, e) => { (acc[e.grupo] = acc[e.grupo] || []).push(e); return acc; }, {})

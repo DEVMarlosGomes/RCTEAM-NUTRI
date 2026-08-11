@@ -1,7 +1,8 @@
 import React, { useDeferredValue, useEffect, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Database, Download, Ruler, Search } from "lucide-react";
+import { Database, Download, Pencil, Plus, Ruler, Search, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 
 function normalizeText(value) {
   return String(value || "")
@@ -10,12 +11,28 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
+function MeasureModal({ food, onClose, onSaved }) {
+  const [form, setForm] = useState({ nome: food?.nome || "", categoria: food?.categoria || "Outros", medida_caseira: food?.medida_caseira || "", porcao_padrao_g: food?.porcao_padrao_g || 100 });
+  const [saving, setSaving] = useState(false);
+  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const save = async (event) => {
+    event.preventDefault(); setSaving(true);
+    const payload = { ...form, porcao_padrao_g: Number(form.porcao_padrao_g), por_100g: food?.por_100g || {} };
+    try { if (food) await api.put(`/alimentos/${food.id}`, payload); else await api.post("/alimentos", payload); toast.success(food ? "Medida atualizada." : "Medida adicionada."); onSaved(); }
+    catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+  return <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"><form onSubmit={save} className="rc-card p-6 w-full max-w-2xl"><div className="flex justify-between items-center mb-5"><div><div className="text-xs uppercase tracking-widest text-rc-blue font-semibold">Medida caseira</div><h2 className="rc-h3 mt-1">{food ? "Editar medida" : "Nova medida"}</h2></div><button type="button" onClick={onClose} className="rc-btn-secondary p-2"><X className="w-4 h-4" /></button></div><div className="grid md:grid-cols-2 gap-4"><label className="md:col-span-2"><span className="rc-label">Alimento *</span><input required className="rc-input" value={form.nome} onChange={(e) => set("nome", e.target.value)} /></label><label><span className="rc-label">Categoria</span><input className="rc-input" value={form.categoria} onChange={(e) => set("categoria", e.target.value)} /></label><label><span className="rc-label">Medida *</span><input required className="rc-input" value={form.medida_caseira} onChange={(e) => set("medida_caseira", e.target.value)} placeholder="Ex.: 1 colher de sopa" /></label><label><span className="rc-label">Equivalência em gramas *</span><input required min="0.1" step="0.1" type="number" className="rc-input" value={form.porcao_padrao_g} onChange={(e) => set("porcao_padrao_g", e.target.value)} /></label></div><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={onClose} className="rc-btn-secondary">Cancelar</button><button disabled={saving} className="rc-btn-primary">{saving ? "Salvando..." : "Salvar medida"}</button></div></form></div>;
+}
+
 export default function CadastroMedidas() {
   const [rows, setRows] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [total, setTotal] = useState(0);
+  const [modal, setModal] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -36,6 +53,7 @@ export default function CadastroMedidas() {
             grupo: item.grupo_display || item.categoria || "",
             medida_caseira: item.medida_caseira || "Porcao padrao",
             gramas: item.porcao_padrao_g || item.quantidade_referencia_g || "",
+            food: item,
           }));
         setRows(items);
         setTotal(data.total || 0);
@@ -53,7 +71,13 @@ export default function CadastroMedidas() {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [query]);
+  }, [query, refreshKey]);
+
+  const remove = async (row) => {
+    if (!window.confirm(`Excluir a medida e o alimento customizado “${row.nome}”?`)) return;
+    try { await api.delete(`/alimentos/${row.id}`); toast.success("Medida excluída."); setRefreshKey((value) => value + 1); }
+    catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
+  };
 
   const deferredQuery = useDeferredValue(query);
   const filteredRows = rows.filter((row) => {
@@ -66,6 +90,7 @@ export default function CadastroMedidas() {
 
   return (
     <NutriLayout>
+      {modal && <MeasureModal food={modal === "new" ? null : modal} onClose={() => setModal(null)} onSaved={() => { setModal(null); setRefreshKey((value) => value + 1); }} />}
       <div className="space-y-6">
         <section className="rc-card p-6 relative overflow-hidden">
           <div className="absolute inset-y-0 right-0 w-1/3 bg-[radial-gradient(circle_at_top_right,rgba(0,129,253,0.28),transparent_60%)] pointer-events-none" />
@@ -77,10 +102,7 @@ export default function CadastroMedidas() {
                 Medidas operacionais ligadas a base alimentar real. Cada alimento exposto aqui ja pode ser usado no consultorio e na prescricao.
               </p>
             </div>
-            <div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-medidas">
-              <Download className="w-4 h-4" />
-              Fonte: API
-            </div>
+            <div className="flex gap-2"><div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-medidas"><Download className="w-4 h-4" />Fonte: API</div><button onClick={() => setModal("new")} className="rc-btn-primary"><Plus className="w-4 h-4" /> Nova medida</button></div>
           </div>
         </section>
 
@@ -135,12 +157,13 @@ export default function CadastroMedidas() {
                     <th className="px-4 py-3 font-semibold">Grupo</th>
                     <th className="px-4 py-3 font-semibold">Medida caseira</th>
                     <th className="px-4 py-3 font-semibold">Gramas</th>
+                    <th className="px-4 py-3 font-semibold text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-4 py-8 text-sm text-gray-500 text-center">
+                      <td colSpan={5} className="px-4 py-8 text-sm text-gray-500 text-center">
                         Nenhuma medida encontrada.
                       </td>
                     </tr>
@@ -155,6 +178,7 @@ export default function CadastroMedidas() {
                       <td className="px-4 py-3 text-sm text-gray-300">{row.grupo || "-"}</td>
                       <td className="px-4 py-3 text-sm text-gray-300">{row.medida_caseira}</td>
                       <td className="px-4 py-3 text-sm text-gray-300">{row.gramas || "-"}</td>
+                      <td className="px-4 py-3"><div className="flex justify-end gap-1">{row.food?.fonte === "CUSTOM" ? <><button onClick={() => setModal(row.food)} className="rc-btn-secondary p-2" title="Editar"><Pencil className="w-4 h-4" /></button><button onClick={() => remove(row)} className="rc-btn-secondary p-2 text-red-400" title="Excluir"><Trash2 className="w-4 h-4" /></button></> : <span className="text-[10px] uppercase text-gray-600">Base protegida</span>}</div></td>
                     </tr>
                   ))}
                 </tbody>

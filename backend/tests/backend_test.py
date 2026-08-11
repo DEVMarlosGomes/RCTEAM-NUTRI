@@ -5,7 +5,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://deploy-projeto-1.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'http://127.0.0.1:8001').rstrip('/')
 ADMIN_EMAIL = "admin@rogeriocosta.com.br"
 ADMIN_PASSWORD = "rogerio2025"
 

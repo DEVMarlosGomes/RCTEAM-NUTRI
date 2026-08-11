@@ -1,7 +1,8 @@
 import React, { useDeferredValue, useEffect, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Database, Download, Search, Sparkles } from "lucide-react";
+import { Database, Download, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 
 const spotlightFields = [
   { key: "energia_kcal_100g", label: "Energia (kcal)" },
@@ -19,12 +20,43 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
+const nutrientFields = ["energia_kcal", "proteinas_g", "carboidratos_g", "lipidios_g", "fibras_g", "sodio_mg", "calcio_mg", "ferro_mg", "potassio_mg", "magnesio_mg"];
+
+function FoodModal({ food, onClose, onSaved }) {
+  const source = food?.por_100g || {};
+  const [form, setForm] = useState({
+    nome: food?.nome || "", categoria: food?.categoria || "Outros",
+    porcao_padrao_g: food?.porcao_padrao_g || 100, medida_caseira: food?.medida_caseira || "100 g",
+    por_100g: Object.fromEntries(nutrientFields.map((key) => [key, source[key] ?? food?.[key] ?? ""])),
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const setNutrient = (key, value) => setForm((current) => ({ ...current, por_100g: { ...current.por_100g, [key]: value } }));
+  const save = async (event) => {
+    event.preventDefault(); setSaving(true);
+    const payload = { ...form, porcao_padrao_g: Number(form.porcao_padrao_g), por_100g: Object.fromEntries(Object.entries(form.por_100g).map(([key, value]) => [key, Number(value || 0)])) };
+    try {
+      if (food) await api.put(`/alimentos/${food.id}`, payload); else await api.post("/alimentos", payload);
+      toast.success(food ? "Alimento atualizado." : "Alimento adicionado."); onSaved();
+    } catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+  return <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"><form onSubmit={save} className="rc-card p-6 w-full max-w-4xl max-h-[92vh] overflow-y-auto">
+    <div className="flex justify-between items-center mb-5"><div><div className="text-xs uppercase tracking-widest text-rc-blue font-semibold">Base customizada</div><h2 className="rc-h3 mt-1">{food ? "Editar alimento" : "Novo alimento"}</h2></div><button type="button" onClick={onClose} className="rc-btn-secondary p-2"><X className="w-4 h-4" /></button></div>
+    <div className="grid md:grid-cols-2 gap-4"><label><span className="rc-label">Nome *</span><input required className="rc-input" value={form.nome} onChange={(e) => set("nome", e.target.value)} /></label><label><span className="rc-label">Categoria</span><input className="rc-input" value={form.categoria} onChange={(e) => set("categoria", e.target.value)} /></label><label><span className="rc-label">Porção padrão (g)</span><input min="0.1" step="0.1" type="number" className="rc-input" value={form.porcao_padrao_g} onChange={(e) => set("porcao_padrao_g", e.target.value)} /></label><label><span className="rc-label">Medida caseira</span><input className="rc-input" value={form.medida_caseira} onChange={(e) => set("medida_caseira", e.target.value)} /></label></div>
+    <div className="mt-5"><div className="rc-label mb-2">Composição por 100 g</div><div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">{nutrientFields.map((key) => <label key={key}><span className="text-xs text-gray-400">{key.replaceAll("_", " ")}</span><input min="0" step="0.01" type="number" className="rc-input" value={form.por_100g[key]} onChange={(e) => setNutrient(key, e.target.value)} /></label>)}</div></div>
+    <div className="flex justify-end gap-3 mt-6"><button type="button" onClick={onClose} className="rc-btn-secondary">Cancelar</button><button disabled={saving} className="rc-btn-primary">{saving ? "Salvando..." : "Salvar alimento"}</button></div>
+  </form></div>;
+}
+
 export default function CadastroAlimentos() {
   const [foods, setFoods] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [total, setTotal] = useState(0);
+  const [modal, setModal] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -53,13 +85,20 @@ export default function CadastroAlimentos() {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [query]);
+  }, [query, refreshKey]);
+
+  const remove = async (food) => {
+    if (!window.confirm(`Excluir o alimento customizado “${food.nome}”?`)) return;
+    try { await api.delete(`/alimentos/${food.id}`); toast.success("Alimento excluído."); setRefreshKey((value) => value + 1); }
+    catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
+  };
 
   const deferredQuery = useDeferredValue(query);
   const filteredFoods = foods.filter((food) => normalizeText(food.nome).includes(normalizeText(deferredQuery)));
 
   return (
     <NutriLayout>
+      {modal && <FoodModal food={modal === "new" ? null : modal} onClose={() => setModal(null)} onSaved={() => { setModal(null); setRefreshKey((value) => value + 1); }} />}
       <div className="space-y-6">
         <section className="rc-card p-6 relative overflow-hidden">
           <div className="absolute inset-y-0 right-0 w-1/3 bg-[radial-gradient(circle_at_top_right,rgba(0,129,253,0.28),transparent_60%)] pointer-events-none" />
@@ -71,10 +110,7 @@ export default function CadastroAlimentos() {
                 Base alimentar real do sistema, combinando banco padrao e alimentos customizados do nutricionista.
               </p>
             </div>
-            <div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-alimentos">
-              <Download className="w-4 h-4" />
-              Fonte: API
-            </div>
+            <div className="flex gap-2"><div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-alimentos"><Download className="w-4 h-4" />Fonte: API</div><button onClick={() => setModal("new")} className="rc-btn-primary"><Plus className="w-4 h-4" /> Novo alimento</button></div>
           </div>
         </section>
 
@@ -126,12 +162,13 @@ export default function CadastroAlimentos() {
                     {spotlightFields.map((field) => (
                       <th key={field.key} className="px-4 py-3 font-semibold">{field.label}</th>
                     ))}
+                    <th className="px-4 py-3 font-semibold text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredFoods.length === 0 && (
                     <tr>
-                      <td colSpan={spotlightFields.length + 1} className="px-4 py-8 text-sm text-gray-500 text-center">
+                      <td colSpan={spotlightFields.length + 2} className="px-4 py-8 text-sm text-gray-500 text-center">
                         Nenhum alimento encontrado.
                       </td>
                     </tr>
@@ -155,6 +192,7 @@ export default function CadastroAlimentos() {
                           {food[field.key] ?? food.por_100g?.[field.key] ?? "-"}
                         </td>
                       ))}
+                      <td className="px-4 py-3"><div className="flex justify-end gap-1">{food.fonte === "CUSTOM" ? <><button onClick={() => setModal(food)} className="rc-btn-secondary p-2" title="Editar"><Pencil className="w-4 h-4" /></button><button onClick={() => remove(food)} className="rc-btn-secondary p-2 text-red-400" title="Excluir"><Trash2 className="w-4 h-4" /></button></> : <span className="text-[10px] uppercase text-gray-600">Base protegida</span>}</div></td>
                     </tr>
                   ))}
                 </tbody>

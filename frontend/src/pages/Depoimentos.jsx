@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Star, Trash2, Upload, Plus, ToggleLeft, ToggleRight, Loader2, Quote } from "lucide-react";
+import { Star, Trash2, Upload, Plus, ToggleLeft, ToggleRight, Loader2, Quote, Pencil, X } from "lucide-react";
 import { toast } from "sonner";
 
 const EMPTY_FORM = { name: "", stars: 5, phrase: "", quote: "", active: true, order: 0 };
@@ -11,6 +11,7 @@ export default function Depoimentos() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [uploadingId, setUploadingId] = useState(null);
   const fileRefs = useRef({});
 
@@ -37,9 +38,11 @@ export default function Depoimentos() {
     }
     setSaving(true);
     try {
-      await api.post("/testimonials", form);
-      toast.success("Depoimento criado!");
+      if (editingId) await api.patch(`/testimonials/${editingId}`, form);
+      else await api.post("/testimonials", form);
+      toast.success(editingId ? "Depoimento atualizado!" : "Depoimento criado!");
       setForm(EMPTY_FORM);
+      setEditingId(null);
       reload();
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
@@ -47,6 +50,13 @@ export default function Depoimentos() {
       setSaving(false);
     }
   };
+
+  const startEdit = (testimonial) => {
+    setEditingId(testimonial.id);
+    setForm({ name: testimonial.name, stars: testimonial.stars, phrase: testimonial.phrase || "", quote: testimonial.quote || "", active: testimonial.active, order: testimonial.order || 0 });
+  };
+
+  const cancelEdit = () => { setEditingId(null); setForm(EMPTY_FORM); };
 
   const handleDelete = async (id) => {
     if (!window.confirm("Remover este depoimento da landing page?")) return;
@@ -161,6 +171,7 @@ export default function Depoimentos() {
                         {t.phrase && <p className="text-xs font-bold text-rc-blue mt-0.5">{t.phrase}</p>}
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
+                        <button onClick={() => startEdit(t)} className="text-gray-400 hover:text-white transition-colors p-1" title="Editar"><Pencil className="w-4 h-4" /></button>
                         <button onClick={() => handleToggle(t)} className="text-gray-400 hover:text-white transition-colors p-1" title={t.active ? "Desativar" : "Ativar"}>
                           {t.active ? <ToggleRight className="w-5 h-5 text-rc-blue" /> : <ToggleLeft className="w-5 h-5" />}
                         </button>
@@ -188,8 +199,9 @@ export default function Depoimentos() {
           <aside>
             <form onSubmit={handleCreate} className="rc-card p-5 space-y-4 sticky top-6">
               <div className="flex items-center gap-2 mb-1">
-                <Plus className="w-4 h-4 text-rc-blue" />
-                <h2 className="font-bold uppercase tracking-wider text-xs text-gray-300">Novo depoimento</h2>
+                {editingId ? <Pencil className="w-4 h-4 text-rc-blue" /> : <Plus className="w-4 h-4 text-rc-blue" />}
+                <h2 className="font-bold uppercase tracking-wider text-xs text-gray-300">{editingId ? "Editar depoimento" : "Novo depoimento"}</h2>
+                {editingId && <button type="button" onClick={cancelEdit} className="ml-auto text-gray-500 hover:text-white"><X className="w-4 h-4" /></button>}
               </div>
 
               <div>
@@ -244,7 +256,7 @@ export default function Depoimentos() {
 
               <button type="submit" disabled={saving} className="rc-btn-primary w-full">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                Criar depoimento
+                {editingId ? "Salvar alterações" : "Criar depoimento"}
               </button>
 
               <p className="text-[10px] text-gray-600 leading-relaxed">
