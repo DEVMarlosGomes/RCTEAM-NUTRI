@@ -15,6 +15,7 @@ export function formatApiError(detail) {
     return detail
       .map((e) => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e)))
       .join(" | ");
+  if (detail?.message) return detail.message;
   if (detail?.msg) return detail.msg;
   return String(detail);
 }

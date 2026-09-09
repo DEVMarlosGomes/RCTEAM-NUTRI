@@ -9,6 +9,10 @@ import {
 import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing, Zap, ClipboardList, Plus, ChevronDown, ChevronRight, Save, X, Scale, Edit2, Search, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import NudgeManager from "@/components/evonut/NudgeManager";
+import Antropometria from "@/components/evonut/Antropometria";
+import GastoEnergetico from "@/components/evonut/GastoEnergetico";
+import PrescricaoDietetica from "@/components/evonut/PrescricaoDietetica";
+import AnalisesDieteticas from "@/components/evonut/AnalisesDieteticas";
 
 const TABS = [
   { k: "anamnese", l: "Anamnese", icon: FileText },
@@ -16,8 +20,8 @@ const TABS = [
   { k: "antropometria", l: "Antropometria", icon: Activity },
   { k: "gasto", l: "Gasto Energético", icon: Zap },
   { k: "exames", l: "Exames", icon: FlaskConical },
-  { k: "adequacao", l: "AnÃ¡lises", icon: Sparkles },
-  { k: "plano", l: "Plano Alimentar", icon: Utensils },
+  { k: "adequacao", l: "Análises", icon: Sparkles },
+  { k: "plano", l: "Prescrição Dietética", icon: Utensils },
   { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
   { k: "lembretes", l: "Lembretes", icon: BellRing },
   { k: "comparativo", l: "Comparativo", icon: Sparkles },
@@ -89,8 +93,8 @@ export default function PacienteDetalhe() {
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
       {tab === "gasto" && <GastoEnergetico d={d} />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
-      {tab === "adequacao" && <AdequacaoClinica d={d} />}
-      {tab === "plano" && <PlanoAlimentar d={d} reload={reload} />}
+      {tab === "adequacao" && <AnalisesDieteticas d={d} />}
+      {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} />}
       {tab === "recordatorio" && <Recordatorio d={d} reload={reload} />}
       {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
       {tab === "comparativo" && <Comparativo id={d.patient.id} />}
@@ -387,7 +391,7 @@ function IATab({ d, reload }) {
   );
 }
 
-function AdequacaoClinica({ d }) {
+function AdequacaoClinicaLegado({ d }) {
   const pid = d.patient.id;
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -502,7 +506,7 @@ const PERIM_FIELDS = [
   ["torax","Tórax"],["pescoco","Pescoço"],
 ];
 
-function Antropometria({ d, reload }) {
+export function AntropometriaLegado({ d, reload }) {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
     peso: d.patient.peso || "", altura: d.patient.altura || "",
@@ -732,7 +736,7 @@ function Metric({ l, v, tag }) {
   );
 }
 
-function PlanoAlimentar({ d, reload }) {
+function PlanoAlimentarLegado({ d, reload }) {
   const [subTab, setSubTab] = useState("manual");
   return (
     <div className="space-y-4">
@@ -1967,7 +1971,7 @@ const PROTOCOLOS_TMB = [
   ["tinsley_mlg","Tinsley (por MLG)"],
 ];
 
-function GastoEnergetico({ d }) {
+function GastoEnergeticoLegado({ d }) {
   const p = d.patient;
   const lastEval = (d.evaluations || [])[0];
   const comp = lastEval?.composicao || {};
@@ -2743,6 +2747,8 @@ function ExamesManuais({ d }) {
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(null);
   const [markerOpen, setMarkerOpen] = useState(null);
+  const [houseAnalysis, setHouseAnalysis] = useState(null);
+  const [analyzingHouse, setAnalyzingHouse] = useState(false);
 
   const load = async () => {
     try {
@@ -2838,6 +2844,21 @@ function ExamesManuais({ d }) {
     } catch { toast.error("Erro ao gerar PDF"); }
   };
 
+  const runDrHouse = async () => {
+    setAnalyzingHouse(true);
+    try {
+      const { data } = await api.post(`/patients/${pid}/exames-manuais/drhouse-analysis`, {
+        lote_id: open?.id || null,
+      });
+      setHouseAnalysis(data);
+      toast.success("Dr. House analisou os exames");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Erro no Dr. House");
+    } finally {
+      setAnalyzingHouse(false);
+    }
+  };
+
   const resumo = longitudinal?.resumo || {};
   const markerDetail = markerOpen
     ? (longitudinal?.marcadores || []).find((item) => item.codigo === markerOpen.codigo) || markerOpen
@@ -2849,6 +2870,12 @@ function ExamesManuais({ d }) {
         <div className="evo-card p-4 space-y-2">
           <button onClick={() => showForm ? (setShowForm(false), setEditingId(null)) : startNewExam()} className="evo-btn-primary w-full"><Plus className="w-4 h-4" /> {showForm ? "Cancelar" : "Registrar exames"}</button>
           {lotes.length > 0 && <button onClick={downloadPdf} className="evo-btn-secondary w-full"><Download className="w-4 h-4" /> PDF completo</button>}
+          {lotes.length > 0 && (
+            <button onClick={runDrHouse} disabled={analyzingHouse} className="evo-btn-secondary w-full">
+              {analyzingHouse ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+              Dr. House
+            </button>
+          )}
         </div>
         <div className="evo-card p-4">
           <h3 className="evo-h3 mb-3">Histórico</h3>
@@ -2918,6 +2945,19 @@ function ExamesManuais({ d }) {
           <div className="space-y-4">
             {lotes.length > 0 && (
               <>
+                {houseAnalysis?.content && (
+                  <div className="evo-card p-5 border-cyan-300/20">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <div className="text-[10px] uppercase tracking-widest text-cyan-300 font-semibold">Dr. House</div>
+                        <h3 className="evo-h3 mt-1">Analise laboratorial integrada</h3>
+                      </div>
+                      <div className="text-[11px] text-gray-500">{new Date(houseAnalysis.created_at).toLocaleString("pt-BR")}</div>
+                    </div>
+                    <div className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{houseAnalysis.content}</div>
+                  </div>
+                )}
+
                 <div className="grid sm:grid-cols-4 gap-3">
                   <div className="evo-card p-4">
                     <div className="text-[10px] uppercase tracking-wider text-gray-500">Coletas</div>

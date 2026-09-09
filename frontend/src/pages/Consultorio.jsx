@@ -1,8 +1,25 @@
 import React, { useEffect, useRef, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Stethoscope, Send, Loader2, User, MessageCircle } from "lucide-react";
+import {
+  Stethoscope,
+  Send,
+  Loader2,
+  User,
+  MessageCircle,
+  ClipboardList,
+  AlertTriangle,
+  FlaskConical,
+  FileCheck2,
+} from "lucide-react";
 import { toast } from "sonner";
+
+const AGENT2_ACTIONS = [
+  { key: "clinical_summary", label: "Resumo", icon: ClipboardList },
+  { key: "risk_points", label: "Atencao", icon: AlertTriangle },
+  { key: "exam_review", label: "Exames", icon: FlaskConical },
+  { key: "conduct_draft", label: "Conduta", icon: FileCheck2 },
+];
 
 export default function Consultorio() {
   const [patients, setPatients] = useState([]);
@@ -22,7 +39,10 @@ export default function Consultorio() {
   }, []);
 
   useEffect(() => {
-    if (!selectedId) { setMessages([]); return; }
+    if (!selectedId) {
+      setMessages([]);
+      return;
+    }
     setLoadingHistory(true);
     api
       .get(`/consultorio/chat/${selectedId}`)
@@ -39,18 +59,24 @@ export default function Consultorio() {
     (p.nome || "").toLowerCase().includes(search.toLowerCase())
   );
 
-  const send = async () => {
-    if (!input.trim() || !selectedId || sending) return;
-    const text = input;
+  const send = async (action = null) => {
+    if ((!input.trim() && !action) || !selectedId || sending) return;
+    const text = input.trim();
+    const actionMeta = AGENT2_ACTIONS.find((item) => item.key === action);
+    const displayedText = actionMeta ? `${actionMeta.label}${text ? `: ${text}` : ""}` : text;
     setInput("");
     setMessages((m) => [
       ...m,
-      { role: "user", content: text },
+      { role: "user", content: displayedText },
       { role: "assistant", content: "...", typing: true },
     ]);
     setSending(true);
     try {
-      const { data } = await api.post("/consultorio/chat", { patient_id: selectedId, message: text });
+      const { data } = await api.post("/consultorio/chat", {
+        patient_id: selectedId,
+        message: text,
+        action,
+      });
       setMessages((m) => {
         const next = m.filter((x) => !x.typing);
         return [...next, { role: "assistant", content: data.reply }];
@@ -74,16 +100,15 @@ export default function Consultorio() {
               <Stethoscope className="w-5 h-5 text-cyan-300" />
             </div>
             <div>
-              <h1 className="rc-h2">Consultório</h1>
+              <h1 className="rc-h2">Consultorio</h1>
               <p className="text-sm text-gray-400 mt-1">
-                Apoio do <strong className="text-rc-blue">Agente 2</strong> durante a consulta. Selecione o paciente para começar.
+                Apoio do <strong className="text-rc-blue">Agente 2</strong> durante a consulta. Selecione o paciente para comecar.
               </p>
             </div>
           </div>
         </header>
 
         <div className="grid lg:grid-cols-[320px_1fr] gap-6">
-          {/* Patient picker */}
           <aside className="rc-card p-3 flex flex-col" style={{ maxHeight: "calc(100vh - 200px)" }} data-testid="consultorio-patient-list">
             <input
               data-testid="consultorio-search"
@@ -111,7 +136,7 @@ export default function Consultorio() {
                   >
                     <div className="flex items-center gap-2">
                       <User className="w-3.5 h-3.5 text-rc-blue" />
-                      <span className="font-medium truncate">{p.nome || "—"}</span>
+                      <span className="font-medium truncate">{p.nome || "-"}</span>
                     </div>
                     {p.email && <div className="text-[11px] text-gray-500 truncate mt-0.5 pl-5">{p.email}</div>}
                   </button>
@@ -120,28 +145,48 @@ export default function Consultorio() {
             </div>
           </aside>
 
-          {/* Chat */}
           <section className="rc-card flex flex-col" style={{ minHeight: "calc(100vh - 200px)" }} data-testid="consultorio-chat">
             {!selectedId ? (
               <div className="flex-1 flex flex-col items-center justify-center text-gray-500 p-10">
                 <MessageCircle className="w-10 h-10 mb-3 opacity-40" />
-                <p className="text-sm">Escolha um paciente à esquerda para iniciar a conversa com o Agente 2.</p>
+                <p className="text-sm">Escolha um paciente a esquerda para iniciar a conversa com o Agente 2.</p>
               </div>
             ) : (
               <>
-                <header className="px-5 py-3 border-b border-white/5 flex items-center justify-between">
+                <header className="px-5 py-3 border-b border-white/5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-xs uppercase tracking-widest text-gray-500 font-bold">Paciente em atendimento</div>
                     <div className="font-bold text-base mt-0.5">{selected?.nome}</div>
                   </div>
-                  <div className="text-[10px] uppercase tracking-widest text-cyan-300 font-bold">Agente 2 · Consultório</div>
+                  <div className="flex flex-col items-start gap-2 sm:items-end">
+                    <div className="text-[10px] uppercase tracking-widest text-cyan-300 font-bold">Agente 2 - Consultorio</div>
+                    <div className="flex flex-wrap gap-1.5 sm:justify-end">
+                      {AGENT2_ACTIONS.map(({ key, label, icon: Icon }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => send(key)}
+                          disabled={sending}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-300/5 px-2.5 text-[11px] font-bold text-cyan-100 hover:border-cyan-300/45 hover:bg-cyan-300/10 disabled:opacity-50"
+                          title={`Agente 2: ${label}`}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </header>
 
-                <div className="flex-1 overflow-y-auto p-5 space-y-3" style={{ maxHeight: "calc(100vh - 360px)" }}>
-                  {loadingHistory && <div className="text-center text-gray-500 text-xs"><Loader2 className="w-4 h-4 animate-spin inline" /> carregando histórico…</div>}
+                <div className="flex-1 overflow-y-auto p-5 space-y-3" style={{ maxHeight: "calc(100vh - 390px)" }}>
+                  {loadingHistory && (
+                    <div className="text-center text-gray-500 text-xs">
+                      <Loader2 className="w-4 h-4 animate-spin inline" /> carregando historico...
+                    </div>
+                  )}
                   {!loadingHistory && messages.length === 0 && (
                     <p className="text-sm text-gray-500 text-center pt-12">
-                      Pergunte algo sobre o paciente — exames, alimentação, orientações…
+                      Pergunte algo sobre o paciente, exames, alimentacao ou orientacoes.
                     </p>
                   )}
                   {messages.map((m, i) => (
@@ -164,7 +209,7 @@ export default function Consultorio() {
                   <input
                     data-testid="consult-chat-input"
                     className="rc-input"
-                    placeholder="Pergunte ao Agente 2…"
+                    placeholder="Pergunte ao Agente 2..."
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && send()}
@@ -172,7 +217,7 @@ export default function Consultorio() {
                   />
                   <button
                     data-testid="consult-chat-send"
-                    onClick={send}
+                    onClick={() => send()}
                     disabled={sending || !input.trim()}
                     className="rc-btn-primary"
                   >

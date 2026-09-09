@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Bot, Upload, FileText, Trash2, Save, Plus, Loader2, FileType2 } from "lucide-react";
+import { Bot, CheckCircle2, Upload, FileText, Trash2, Save, Plus, Loader2, FileType2, Ban, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 const AGENT_TINTS = {
   agent1: { label: "Triagem · SAC", color: "from-rc-blue/20 to-rc-blue/5" },
   agent2: { label: "Consultório", color: "from-cyan-400/15 to-cyan-400/5" },
   agent3: { label: "Suporte Paciente", color: "from-emerald-400/15 to-emerald-400/5" },
+  donato: { label: "DONATO", color: "from-amber-400/20 to-rc-blue/10" },
+  drhouse: { label: "DR. HOUSE", color: "from-red-400/20 to-cyan-400/5" },
 };
 
 export default function Agentes() {
@@ -21,6 +23,8 @@ export default function Agentes() {
   const [textTitle, setTextTitle] = useState("");
   const [textBody, setTextBody] = useState("");
   const [addingText, setAddingText] = useState(false);
+  const [syncingDonato, setSyncingDonato] = useState(false);
+  const [syncingDrHouse, setSyncingDrHouse] = useState(false);
   const fileRef = useRef(null);
 
   const reloadList = async () => {
@@ -130,6 +134,45 @@ export default function Agentes() {
     }
   };
 
+  const onSetDonatoDocStatus = async (id, action) => {
+    try {
+      await api.post(`/agents/donato/knowledge/documents/${id}/${action}`);
+      toast.success(action === "approve" ? "Documento aprovado" : "Documento desativado");
+      reloadDetail(selected);
+      reloadList();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    }
+  };
+
+  const onSyncDonatoKnowledge = async () => {
+    setSyncingDonato(true);
+    try {
+      const { data } = await api.post("/agents/donato/knowledge/sync");
+      toast.success(`Base DONATO sincronizada: ${data.synced || 0}/${data.total || 0}`);
+      reloadDetail(selected);
+      reloadList();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally {
+      setSyncingDonato(false);
+    }
+  };
+
+  const onSyncDrHouseKnowledge = async () => {
+    setSyncingDrHouse(true);
+    try {
+      const { data } = await api.post("/agents/drhouse/knowledge/sync");
+      toast.success(`Base Dr. House sincronizada: ${data.total || 0} documentos`);
+      reloadDetail(selected);
+      reloadList();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally {
+      setSyncingDrHouse(false);
+    }
+  };
+
   const usagePct = useMemo(() => {
     if (!detail) return 0;
     return Math.min(100, Math.round((detail.prompt_chars / detail.prompt_max_chars) * 100));
@@ -146,7 +189,7 @@ export default function Agentes() {
             <div>
               <h1 className="rc-h2">Agentes IA</h1>
               <p className="text-sm text-gray-400 mt-1">
-                Treine seus 3 agentes com documentos (PDF, JSON ou texto). Tudo é injetado no system prompt.
+                Treine seus agentes com documentos (PDF, DOCX, JSON ou texto). Tudo é injetado no system prompt quando aplicável.
               </p>
             </div>
           </div>
@@ -233,7 +276,7 @@ export default function Agentes() {
                       ref={fileRef}
                       data-testid="agent-file-input"
                       type="file"
-                      accept=".pdf,.json,.txt,.md,application/pdf,application/json,text/plain"
+                      accept=".pdf,.docx,.json,.txt,.md,application/pdf,application/json,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                       onChange={(e) => onUploadFile(e.target.files?.[0])}
                       disabled={uploading}
                       className="text-sm text-gray-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:text-xs file:font-bold file:bg-rc-blue file:text-black hover:file:bg-rc-blue/80 file:cursor-pointer cursor-pointer"
@@ -284,6 +327,32 @@ export default function Agentes() {
                   <h3 className="font-bold uppercase tracking-wider text-xs text-gray-300 mb-3 flex items-center gap-2">
                     <FileText className="w-4 h-4" /> Documentos ({detail.documents.length})
                   </h3>
+                  {selected === "donato" && (
+                    <div className="mb-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={onSyncDonatoKnowledge}
+                        disabled={syncingDonato}
+                        className="rc-btn-secondary"
+                      >
+                        {syncingDonato ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        Sincronizar base
+                      </button>
+                    </div>
+                  )}
+                  {selected === "drhouse" && (
+                    <div className="mb-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={onSyncDrHouseKnowledge}
+                        disabled={syncingDrHouse}
+                        className="rc-btn-secondary"
+                      >
+                        {syncingDrHouse ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        Sincronizar base Dr. House
+                      </button>
+                    </div>
+                  )}
                   {detail.documents.length === 0 ? (
                     <p className="text-sm text-gray-500">Nenhum documento de treinamento ainda.</p>
                   ) : (
@@ -297,10 +366,35 @@ export default function Agentes() {
                           <FileType2 className="w-4 h-4 text-rc-blue flex-shrink-0" />
                           <div className="flex-1 min-w-0">
                             <div className="text-sm truncate font-medium">{d.title}</div>
+                            {selected === "donato" && (
+                              <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                                Status: <span className="text-gray-300">{d.status || "draft"}</span>
+                              </div>
+                            )}
                             <div className="text-[11px] text-gray-500">
                               {d.chars.toLocaleString()} chars · {d.content_type || "—"} · {new Date(d.created_at).toLocaleDateString("pt-BR")}
                             </div>
                           </div>
+                          {selected === "donato" && d.status !== "approved" && (
+                            <button
+                              data-testid={`approve-doc-${d.id}`}
+                              onClick={() => onSetDonatoDocStatus(d.id, "approve")}
+                              className="text-gray-500 hover:text-emerald-400 transition-colors p-1.5"
+                              title="Aprovar para base de conhecimento"
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {selected === "donato" && d.status !== "inactive" && (
+                            <button
+                              data-testid={`deactivate-doc-${d.id}`}
+                              onClick={() => onSetDonatoDocStatus(d.id, "deactivate")}
+                              className="text-gray-500 hover:text-yellow-400 transition-colors p-1.5"
+                              title="Desativar documento"
+                            >
+                              <Ban className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             data-testid={`delete-doc-${d.id}`}
                             onClick={() => onDeleteDoc(d.id)}

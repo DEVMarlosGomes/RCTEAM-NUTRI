@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
-import { LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope, Settings, Quote, Database, Ruler, FileText, BookOpenText } from "lucide-react";
+import { LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope, Settings, Quote, Database, Ruler, FileText, BookOpenText, PackagePlus } from "lucide-react";
 import Brand from "./Brand";
 import RCLogo from "./RCLogo";
 
@@ -12,6 +12,7 @@ const links = [
   { to: "/consultorio", label: "Consultório", icon: Stethoscope, testid: "nav-consultorio" },
   { to: "/agentes", label: "Agentes", icon: Bot, testid: "nav-agentes" },
   { to: "/cadastro-alimentos", label: "Alimentos", icon: Database, testid: "nav-cadastro-alimentos" },
+  { to: "/cadastro-insumos", label: "Insumos", icon: PackagePlus, testid: "nav-cadastro-insumos" },
   { to: "/cadastro-medidas", label: "Medidas", icon: Ruler, testid: "nav-cadastro-medidas" },
   { to: "/rotulos-nutricionais", label: "Rotulos", icon: FileText, testid: "nav-rotulos-nutricionais" },
   { to: "/orientacoes", label: "Orientacoes", icon: BookOpenText, testid: "nav-orientacoes" },

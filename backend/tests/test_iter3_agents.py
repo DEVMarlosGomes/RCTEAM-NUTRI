@@ -61,9 +61,9 @@ class TestAgents:
         r = nutri_session.get(f"{API}/agents", timeout=15)
         assert r.status_code == 200
         agents = r.json()
-        assert isinstance(agents, list) and len(agents) == 3
+        assert isinstance(agents, list) and len(agents) >= 5
         codes = sorted(a["code"] for a in agents)
-        assert codes == ["agent1", "agent2", "agent3"]
+        assert {"agent1", "agent2", "agent3", "donato", "drhouse"}.issubset(set(codes))
         for a in agents:
             assert "documents_count" in a
             assert "base_prompt" in a

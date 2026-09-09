@@ -1,4 +1,4 @@
-from dotenv import load_dotenv
+﻿from dotenv import load_dotenv
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent
@@ -11,6 +11,9 @@ import logging
 import uuid
 import csv
 import html
+import hashlib
+import zipfile
+import xml.etree.ElementTree as ET
 from difflib import SequenceMatcher
 import bcrypt
 import jwt
@@ -28,6 +31,12 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
+from ai.donato.agent import generate_donato_plan_with_openai
+from ai.donato.knowledge_sync import sync_approved_documents
+from ai.donato.manifest import DONATO_KNOWLEDGE_MANIFEST
+from ai.donato.openai_client import DonatoProviderUnavailable
+from ai.donato.settings import get_donato_settings
+from ai.drhouse.knowledge_sync import sync_drhouse_documents
 from llm_chat import LlmChat, UserMessage
 import json
 import io
@@ -45,13 +54,13 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-app = FastAPI(title="Rogério Costa — Sistema Nutricional API")
+app = FastAPI(title="RogÃ©rio Costa â€” Sistema Nutricional API")
 api = APIRouter(prefix="/api")
 
 # Brazil timezone for slot generation & business logic
 TZ_BR = ZoneInfo("America/Sao_Paulo")
 
-# Login lockout (in-memory; resets on restart — acceptable for MVP)
+# Login lockout (in-memory; resets on restart â€” acceptable for MVP)
 LOCKOUT_MAX_ATTEMPTS = 5
 LOCKOUT_WINDOW_MIN = 15
 _login_attempts: dict = {}  # email -> {"count": int, "first": datetime, "locked_until": datetime|None}
@@ -116,17 +125,17 @@ async def get_current_user(request: Request) -> dict:
         if auth.startswith("Bearer "):
             token = auth[7:]
     if not token:
-        raise HTTPException(401, "Não autenticado")
+        raise HTTPException(401, "NÃ£o autenticado")
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
         user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
         if not user:
-            raise HTTPException(401, "Usuário não encontrado")
+            raise HTTPException(401, "UsuÃ¡rio nÃ£o encontrado")
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expirado")
     except jwt.InvalidTokenError:
-        raise HTTPException(401, "Token inválido")
+        raise HTTPException(401, "Token invÃ¡lido")
 
 async def maybe_get_current_user(request: Request) -> Optional[dict]:
     token = request.cookies.get("access_token")
@@ -259,8 +268,13 @@ class MealPlanRequest(BaseModel):
     restricoes: Optional[str] = None
 
 # ---------- Agents / Patient ----------
-AGENT_CODES = ("agent1", "agent2", "agent3")
+AGENT_CODES = ("agent1", "agent2", "agent3", "donato", "drhouse")
 AGENT_PROMPT_MAX_CHARS = 50_000  # cap full system prompt length
+DONATO_SETTINGS = get_donato_settings()
+DONATO_SCHEMA_VERSION = DONATO_SETTINGS.schema_version
+DONATO_ENABLED = DONATO_SETTINGS.enabled
+DONATO_REQUIRE_HUMAN_APPROVAL = DONATO_SETTINGS.require_human_approval
+DONATO_STRICT_SOURCE_GATE = DONATO_SETTINGS.strict_source_gate
 
 class AgentPromptUpdate(BaseModel):
     base_prompt: str
@@ -268,6 +282,14 @@ class AgentPromptUpdate(BaseModel):
 class AgentDocCreate(BaseModel):
     title: str
     content: str  # plain text (already extracted)
+
+class DonatoDraftIn(BaseModel):
+    objetivo: Optional[str] = None
+    numero_refeicoes: int = Field(default=6, ge=3, le=10)
+    observacoes: Optional[str] = None
+
+class DonatoDraftPatch(BaseModel):
+    draft: dict
 
 class PatientSignupIn(BaseModel):
     token: str
@@ -285,6 +307,7 @@ class ConsultorioChatIn(BaseModel):
     patient_id: str
     message: str
     session_id: Optional[str] = None
+    action: Optional[str] = None
 
 class NudgeIn(BaseModel):
     label: str
@@ -325,7 +348,7 @@ def calc_tmb_harris(peso, altura, idade, sexo):
     return round(447.593 + 9.247*peso + 3.098*altura - 4.330*idade, 1)
 
 def pct_gordura_pollock7(dobras, sexo, idade):
-    # Pollock 7: subescapular, tríceps, peitoral, axilar média, suprailíaca, abdominal, coxa
+    # Pollock 7: subescapular, trÃ­ceps, peitoral, axilar mÃ©dia, suprailÃ­aca, abdominal, coxa
     keys = ["subescapular", "triceps", "peitoral", "axilar", "suprailiaca", "abdominal", "coxa"]
     s = sum(float(dobras.get(k, 0)) for k in keys)
     if sexo.upper().startswith("M"):
@@ -349,7 +372,7 @@ def pct_gordura_pollock3(dobras, sexo, idade):
     return round((4.95/d - 4.5)*100, 2)
 
 def pct_gordura_faulkner(dobras):
-    # Faulkner: tríceps + subescapular + suprailíaca + abdominal
+    # Faulkner: trÃ­ceps + subescapular + suprailÃ­aca + abdominal
     keys = ["triceps", "subescapular", "suprailiaca", "abdominal"]
     s = sum(float(dobras.get(k, 0)) for k in keys)
     return round(s * 0.153 + 5.783, 2)
@@ -407,47 +430,89 @@ def calc_macros(get_kcal, objetivo, peso, massa_magra=None):
 # ---------- Agents (training) ----------
 AGENT_DEFAULTS = {
     "agent1": {
-        "name": "Agente 1 — SAC / Pré-consulta",
+        "name": "Agente 1 â€” SAC / PrÃ©-consulta",
         "description": (
-            "Atende o lead na pré-consulta, conduz a triagem e direciona para o agendamento. "
-            "Substitui o assistente público da pré-consulta."
+            "Atende o lead na prÃ©-consulta, conduz a triagem e direciona para o agendamento. "
+            "Substitui o assistente pÃºblico da prÃ©-consulta."
         ),
         "base_prompt": (
-            "Você é o assistente do nutricionista Rogério Costa que conversa com o paciente "
-            "para aprofundar a anamnese de forma natural e empática. Faça UMA pergunta por vez, "
-            "curta e clara. Foque nos pontos críticos detectados (sono, treino, alimentação, estresse, "
-            "medicamentos). Após 6 a 8 perguntas, finalize com a frase exata: 'ANAMNESE_FINALIZADA' "
+            "VocÃª Ã© o assistente do nutricionista RogÃ©rio Costa que conversa com o paciente "
+            "para aprofundar a anamnese de forma natural e empÃ¡tica. FaÃ§a UMA pergunta por vez, "
+            "curta e clara. Foque nos pontos crÃ­ticos detectados (sono, treino, alimentaÃ§Ã£o, estresse, "
+            "medicamentos). ApÃ³s 6 a 8 perguntas, finalize com a frase exata: 'ANAMNESE_FINALIZADA' "
             "e um resumo gentil ao paciente."
         ),
     },
     "agent2": {
-        "name": "Agente 2 — Consultório (apoio ao nutricionista)",
+        "name": "Agente 2 â€” ConsultÃ³rio (apoio ao nutricionista)",
         "description": (
             "Ferramenta interna do nutricionista durante a consulta. Analisa exames e dados do paciente "
-            "com base nos materiais científicos enviados."
+            "com base nos materiais cientÃ­ficos enviados."
         ),
         "base_prompt": (
-            "Você é o assistente clínico interno do nutricionista Rogério Costa. "
-            "Responda em Português (BR), tom técnico, objetivo e direto. "
-            "Analise os exames laboratoriais, anamnese e avaliação física do paciente do contexto. "
-            "Use o conteúdo científico fornecido nos documentos de treinamento como referência. "
-            "Sempre cite o raciocínio clínico e nunca invente referências. "
-            "Quando faltar dado, peça ao nutricionista explicitamente."
+            "VocÃª Ã© o assistente clÃ­nico interno do nutricionista RogÃ©rio Costa. "
+            "Responda em PortuguÃªs (BR), tom tÃ©cnico, objetivo e direto. "
+            "Analise os exames laboratoriais, anamnese e avaliaÃ§Ã£o fÃ­sica do paciente do contexto. "
+            "Use o conteÃºdo cientÃ­fico fornecido nos documentos de treinamento como referÃªncia. "
+            "Sempre cite o raciocÃ­nio clÃ­nico e nunca invente referÃªncias. "
+            "Quando faltar dado, peÃ§a ao nutricionista explicitamente."
         ),
     },
     "agent3": {
-        "name": "Agente 3 — Suporte ao Paciente",
+        "name": "Agente 3 â€” Suporte ao Paciente",
         "description": (
-            "Atende o paciente após a consulta. Responde dúvidas sobre dieta, treino e rotina, "
+            "Atende o paciente apÃ³s a consulta. Responde dÃºvidas sobre dieta, treino e rotina, "
             "treinado com os materiais que o nutricionista enviar."
         ),
         "base_prompt": (
-            "Você é o assistente pessoal do paciente, treinado pelo nutricionista Rogério Costa. "
-            "Responda em Português (BR), tom acolhedor e claro. "
-            "Use SOMENTE as informações do plano alimentar do paciente (anexado no contexto) e dos "
-            "materiais de treinamento fornecidos. Nunca contrarie a prescrição do nutricionista. "
-            "Se a pergunta sair do escopo nutrição/treino/rotina, oriente o paciente a falar com o nutricionista."
+            "VocÃª Ã© o assistente pessoal do paciente, treinado pelo nutricionista RogÃ©rio Costa. "
+            "Responda em PortuguÃªs (BR), tom acolhedor e claro. "
+            "Use SOMENTE as informaÃ§Ãµes do plano alimentar do paciente (anexado no contexto) e dos "
+            "materiais de treinamento fornecidos. Nunca contrarie a prescriÃ§Ã£o do nutricionista. "
+            "Se a pergunta sair do escopo nutriÃ§Ã£o/treino/rotina, oriente o paciente a falar com o nutricionista."
         ),
+    },
+    "donato": {
+        "name": "Dr. Donatto AI",
+        "description": (
+            "Agente DONATO para rascunhos estruturados de prescriÃ§Ã£o dietÃ©tica, protocolos, "
+            "base de conhecimento e motor nutricional com aprovaÃ§Ã£o humana obrigatÃ³ria."
+        ),
+        "base_prompt": (
+            "VocÃª Ã© o Dr. Donatto AI, assistente interno do nutricionista para gerar rascunhos "
+            "estruturados de plano alimentar. Responda em PortuguÃªs (BR). Gere apenas rascunhos "
+            "para revisÃ£o do nutricionista, nunca publique automaticamente ao paciente. Use dados "
+            "ausentes como null, preserve rastreabilidade, respeite alergias/intolerÃ¢ncias e mantenha "
+            "alimentos calculÃ¡veis vinculados Ã  base EVONUT."
+        ),
+        "provider": "openai",
+        "knowledge_mode": "vector_store",
+        "schema_version": DONATO_SCHEMA_VERSION,
+        "requires_human_approval": True,
+        "active": True,
+    },
+    "drhouse": {
+        "name": "Dr. House AI",
+        "description": (
+            "Agente especialista em interpretaÃ§Ã£o integrada de exames laboratoriais aplicados "
+            "Ã  nutriÃ§Ã£o clÃ­nica, com base em biomarcadores e raciocÃ­nio funcional."
+        ),
+        "base_prompt": (
+            "VocÃª Ã© o Dr. House AI, especialista interno em interpretaÃ§Ã£o de exames laboratoriais "
+            "aplicados Ã  nutriÃ§Ã£o clÃ­nica. Atua como suporte tÃ©cnico para nutricionistas, correlacionando "
+            "biomarcadores, padrÃµes metabÃ³licos, nutricionais, hormonais e inflamatÃ³rios. "
+            "Use prioritariamente a base interna do Dr. House enviada pelo nutricionista. "
+            "Nunca realize diagnÃ³stico mÃ©dico, nunca prescreva medicamentos, nunca defina doses de "
+            "suplementos e nunca afirme doenÃ§as como fato. Use linguagem probabilÃ­stica: pode estar "
+            "associado a, pode indicar, Ã© compatÃ­vel com, sugere possÃ­vel, merece investigaÃ§Ã£o complementar. "
+            "Sempre correlacione marcadores entre si, informe limitaÃ§Ãµes por dados ausentes e destaque "
+            "implicaÃ§Ãµes nutricionais para revisÃ£o do nutricionista."
+        ),
+        "provider": "prompt_context",
+        "knowledge_mode": "agent_documents",
+        "schema_version": "1.0",
+        "requires_human_approval": True,
+        "active": True,
     },
 }
 
@@ -461,6 +526,11 @@ async def ensure_agents_seeded():
                 "name": cfg["name"],
                 "description": cfg["description"],
                 "base_prompt": cfg["base_prompt"],
+                "provider": cfg.get("provider"),
+                "knowledge_mode": cfg.get("knowledge_mode"),
+                "schema_version": cfg.get("schema_version"),
+                "requires_human_approval": cfg.get("requires_human_approval"),
+                "active": cfg.get("active", True),
                 "created_at": iso(now_utc()),
                 "updated_at": iso(now_utc()),
             })
@@ -474,13 +544,32 @@ def extract_text_from_upload(filename: str, content_type: str, raw: bytes) -> st
                 text = "\n".join((p.extract_text() or "") for p in pdf.pages)
             return text.strip()
         except Exception as e:
-            raise HTTPException(400, f"Não foi possível ler o PDF: {str(e)[:140]}")
+            raise HTTPException(400, f"NÃ£o foi possÃ­vel ler o PDF: {str(e)[:140]}")
     if name.endswith(".json") or (content_type or "").lower() == "application/json":
         try:
             data = json.loads(raw.decode("utf-8", errors="ignore"))
             return json.dumps(data, ensure_ascii=False, indent=2)
         except Exception:
             return raw.decode("utf-8", errors="ignore")
+    if name.endswith(".docx") or (content_type or "").lower() in {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/octet-stream",
+    }:
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                xml = zf.read("word/document.xml")
+            root = ET.fromstring(xml)
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            lines = []
+            for paragraph in root.findall(".//w:p", ns):
+                parts = [node.text for node in paragraph.findall(".//w:t", ns) if node.text]
+                line = "".join(parts).strip()
+                if line:
+                    lines.append(line)
+            return "\n".join(lines).strip()
+        except Exception as e:
+            if name.endswith(".docx"):
+                raise HTTPException(400, f"NÃ£o foi possÃ­vel ler o DOCX: {str(e)[:140]}")
     # treat everything else as plain text
     try:
         return raw.decode("utf-8", errors="ignore")
@@ -497,14 +586,18 @@ async def build_agent_system_prompt(agent_code: str, extra_context: str = "") ->
         agent = {"base_prompt": AGENT_DEFAULTS[agent_code]["base_prompt"]}
     base = agent.get("base_prompt", "") or ""
     docs = await db.agent_documents.find(
-        {"agent_code": agent_code}, {"_id": 0}
+        {
+            "agent_code": agent_code,
+            "$or": [{"status": "approved"}, {"status": {"$exists": False}}],
+        },
+        {"_id": 0},
     ).sort("created_at", 1).to_list(50)
 
     parts = [base.strip()]
     if docs:
         parts.append(
             "\n\n--- MATERIAL DE TREINAMENTO ENVIADO PELO NUTRICIONISTA ---\n"
-            "Use estes documentos como referência ao responder. Não invente conteúdo fora deles."
+            "Use estes documentos como referÃªncia ao responder. NÃ£o invente conteÃºdo fora deles."
         )
         for d in docs:
             title = d.get("title", "documento")
@@ -514,7 +607,7 @@ async def build_agent_system_prompt(agent_code: str, extra_context: str = "") ->
             parts.append(f"\n### DOC: {title}\n{body}")
 
     if extra_context:
-        parts.append(f"\n\n--- CONTEXTO DESTA INTERAÇÃO ---\n{extra_context.strip()}")
+        parts.append(f"\n\n--- CONTEXTO DESTA INTERAÃ‡ÃƒO ---\n{extra_context.strip()}")
 
     full = "\n".join(parts).strip()
     if len(full) > AGENT_PROMPT_MAX_CHARS:
@@ -523,36 +616,36 @@ async def build_agent_system_prompt(agent_code: str, extra_context: str = "") ->
 
 # ---------- AI ----------
 SYSTEM_CLINICAL = (
-    "Você é o assistente clínico nutricional sênior do Rogério Costa (Treinador e Nutricionista). "
-    "Responda sempre em Português (Brasil), tom acolhedor, preciso e sem jargão excessivo. "
-    "Nunca dê diagnóstico médico — apenas organize informações, destaque sinais de atenção, "
-    "e ofereça sugestões para o nutricionista revisar."
+    "VocÃª Ã© o assistente clÃ­nico nutricional sÃªnior do RogÃ©rio Costa (Treinador e Nutricionista). "
+    "Responda sempre em PortuguÃªs (Brasil), tom acolhedor, preciso e sem jargÃ£o excessivo. "
+    "Nunca dÃª diagnÃ³stico mÃ©dico â€” apenas organize informaÃ§Ãµes, destaque sinais de atenÃ§Ã£o, "
+    "e ofereÃ§a sugestÃµes para o nutricionista revisar."
 )
 
 async def ai_clinical_analysis(anamnesis: dict, evaluation: Optional[dict]) -> str:
     prompt = (
-        "Analise clinicamente este paciente e gere um relatório estruturado em Markdown com as seções: "
-        "1) Objetivo principal e prioridade. 2) Padrões alimentares e comportamentais detectados. "
-        "3) Riscos clínicos sugeridos (com bullets). 4) Score de adesão estimado (1–10) com justificativa. "
-        "5) 3 recomendações práticas para a primeira consulta. Seja conciso (máx. 400 palavras).\n\n"
-        f"ANAMNESE: {anamnesis}\n\nAVALIAÇÃO FÍSICA: {evaluation or 'não disponível'}"
+        "Analise clinicamente este paciente e gere um relatÃ³rio estruturado em Markdown com as seÃ§Ãµes: "
+        "1) Objetivo principal e prioridade. 2) PadrÃµes alimentares e comportamentais detectados. "
+        "3) Riscos clÃ­nicos sugeridos (com bullets). 4) Score de adesÃ£o estimado (1â€“10) com justificativa. "
+        "5) 3 recomendaÃ§Ãµes prÃ¡ticas para a primeira consulta. Seja conciso (mÃ¡x. 400 palavras).\n\n"
+        f"ANAMNESE: {anamnesis}\n\nAVALIAÃ‡ÃƒO FÃSICA: {evaluation or 'nÃ£o disponÃ­vel'}"
     )
     return await _ai_chat(f"analise-{uuid.uuid4()}", SYSTEM_CLINICAL, prompt)
 
 async def ai_meal_plan(patient: dict, anamnesis: dict, macros: dict, restricoes: str = None) -> str:
     prompt = (
-        f"Monte um plano alimentar diário em Markdown para o paciente {patient.get('name')}. "
+        f"Monte um plano alimentar diÃ¡rio em Markdown para o paciente {patient.get('name')}. "
         f"Meta: {macros['kcal']} kcal | PTN {macros['proteina_g']}g | CHO {macros['carboidrato_g']}g | LIP {macros['gordura_g']}g. "
-        f"Restrições/preferências: {restricoes or 'nenhuma informada'}. "
-        "Estruture em 5 a 6 refeições com horários sugeridos, alimentos em porções práticas (g/ml/unidades), "
-        "e finalize com uma seção 'Suplementação Sugerida' (se aplicável) e 'Hidratação'. "
-        "Use linguagem clara, sem jargão. Não exceda 500 palavras."
+        f"RestriÃ§Ãµes/preferÃªncias: {restricoes or 'nenhuma informada'}. "
+        "Estruture em 5 a 6 refeiÃ§Ãµes com horÃ¡rios sugeridos, alimentos em porÃ§Ãµes prÃ¡ticas (g/ml/unidades), "
+        "e finalize com uma seÃ§Ã£o 'SuplementaÃ§Ã£o Sugerida' (se aplicÃ¡vel) e 'HidrataÃ§Ã£o'. "
+        "Use linguagem clara, sem jargÃ£o. NÃ£o exceda 500 palavras."
     )
     return await _ai_chat(f"plano-{uuid.uuid4()}", SYSTEM_CLINICAL, prompt)
 
 async def ai_adaptive_chat(token: str, message: str, anamnesis: dict, history: list) -> str:
     sys_prompt = await build_agent_system_prompt("agent1")
-    context = f"Dados iniciais do paciente:\n{anamnesis}\n\nHistórico recente:\n"
+    context = f"Dados iniciais do paciente:\n{anamnesis}\n\nHistÃ³rico recente:\n"
     for m in history[-10:]:
         context += f"{m['role']}: {m['content']}\n"
     context += f"\nMensagem do paciente: {message}\nResponda de forma acolhedora."
@@ -567,6 +660,39 @@ async def ai_consultorio_chat(session_id: str, message: str, patient_context: di
     convo = "".join(f"{m['role']}: {m['content']}\n" for m in history[-10:])
     convo += f"user: {message}"
     return await _ai_chat(f"consult-{session_id}", sys_prompt, convo)
+
+CONSULTORIO_AGENT2_ACTIONS = {
+    "clinical_summary": (
+        "Gere um resumo clinico objetivo do paciente para abertura da consulta. "
+        "Use as secoes: 1) Queixa/objetivo, 2) achados relevantes, 3) hipoteses nutricionais a investigar, "
+        "4) proximas perguntas na consulta. Nao feche diagnostico medico."
+    ),
+    "risk_points": (
+        "Liste os pontos de atencao do paciente para revisao do nutricionista. "
+        "Separe em sinais metabolicos, comportamento alimentar, treino/rotina, exames e dados faltantes. "
+        "Marque prioridade como alta, media ou baixa."
+    ),
+    "exam_review": (
+        "Analise os exames recentes disponiveis no contexto. "
+        "Organize por marcador, possivel relevancia nutricional, o que confirmar na consulta e dados ausentes. "
+        "Nao invente valores que nao estejam no contexto."
+    ),
+    "conduct_draft": (
+        "Monte um rascunho de conduta nutricional para discussao em consultorio. "
+        "Inclua prioridades, ajustes alimentares, suplementacao apenas se houver base suficiente, "
+        "monitoramento e alertas para encaminhamento medico quando aplicavel. "
+        "Deixe claro que e rascunho para validacao do nutricionista."
+    ),
+}
+
+def _consultorio_message_for_action(action: Optional[str], message: str) -> str:
+    clean = (message or "").strip()
+    if action not in CONSULTORIO_AGENT2_ACTIONS:
+        return clean
+    instruction = CONSULTORIO_AGENT2_ACTIONS[action]
+    if clean:
+        return f"{instruction}\n\nSolicitacao adicional do nutricionista: {clean}"
+    return instruction
 
 async def ai_patient_chat(session_id: str, message: str, patient_context: dict, history: list) -> str:
     extra = (
@@ -585,12 +711,12 @@ async def ai_patient_proactive(session_id: str, instruction: str, patient_contex
     )
     sys_prompt = await build_agent_system_prompt("agent3", extra_context=extra)
     prompt = (
-        "[INSTRUÇÃO INTERNA — NÃO REVELAR AO PACIENTE]\n"
+        "[INSTRUÃ‡ÃƒO INTERNA â€” NÃƒO REVELAR AO PACIENTE]\n"
         f"Diretriz do nutricionista: {instruction}\n\n"
-        "Componha UMA mensagem proativa e curta (até 350 caracteres), em primeira pessoa, "
-        "iniciando você o contato (sem responder a uma pergunta). Tom acolhedor, claro. "
-        "Use o nome do paciente se disponível no contexto. "
-        "Não cite que isto é um lembrete automático. NÃO use emoji."
+        "Componha UMA mensagem proativa e curta (atÃ© 350 caracteres), em primeira pessoa, "
+        "iniciando vocÃª o contato (sem responder a uma pergunta). Tom acolhedor, claro. "
+        "Use o nome do paciente se disponÃ­vel no contexto. "
+        "NÃ£o cite que isto Ã© um lembrete automÃ¡tico. NÃƒO use emoji."
     )
     return await _ai_chat(f"proactive-{session_id}-{uuid.uuid4().hex[:6]}", sys_prompt, prompt)
 
@@ -605,7 +731,7 @@ async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
         role = "model" if m.get("role") == "assistant" else "user"
         contents.append({"role": role, "parts": [{"text": str(m.get("content", ""))}]})
     if not contents:
-        contents = [{"role": "user", "parts": [{"text": "Olá!"}]}]
+        contents = [{"role": "user", "parts": [{"text": "OlÃ¡!"}]}]
     body = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
@@ -624,18 +750,18 @@ async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
                     return data["candidates"][0]["content"]["parts"][0]["text"]
                 err_msg = data.get("error", {}).get("message", f"HTTP {resp.status_code}")
                 last_err = err_msg
-                # Erro fatal (auth, billing real) → não adianta retry
+                # Erro fatal (auth, billing real) â†’ nÃ£o adianta retry
                 if resp.status_code in (401, 403):
                     raise ValueError(err_msg)
-                # Alta demanda ou quota → retry com backoff
+                # Alta demanda ou quota â†’ retry com backoff
                 logging.warning(f"Gemini tentativa {attempt+1}: {err_msg[:120]}")
             except httpx.TimeoutException:
                 last_err = "Timeout"
                 logging.warning(f"Gemini timeout na tentativa {attempt+1}")
-    raise ValueError(f"Gemini indisponível após {len(_GEMINI_RETRY_DELAYS)+1} tentativas: {last_err[:120]}")
+    raise ValueError(f"Gemini indisponÃ­vel apÃ³s {len(_GEMINI_RETRY_DELAYS)+1} tentativas: {last_err[:120]}")
 
 async def _ai_chat(session_id: str, system_prompt: str, user_text: str) -> str:
-    """Usa Gemini quando disponível e Anthropic como alternativa."""
+    """Usa Gemini quando disponÃ­vel e Anthropic como alternativa."""
     if GEMINI_KEY:
         return await _gemini_chat(
             [{"role": "user", "content": user_text}],
@@ -653,25 +779,24 @@ async def ai_exam_analysis(raw_text: str) -> dict:
     """Extract laboratory markers from exam PDF text and classify them.
     Returns: {markers: [{nome, valor, unidade, referencia, status}], resumo, conduta_sugerida}
     """
-    chat = LlmChat(
-        api_key=ANTHROPIC_API_KEY,
-        session_id=f"exame-{uuid.uuid4()}",
-        system_message=(
-            "Você é um especialista em interpretação de exames laboratoriais. "
-            "Receberá o texto bruto extraído de um PDF de exame e deve devolver APENAS JSON válido "
-            "(sem markdown, sem comentários) com a seguinte estrutura: "
-            '{"markers":[{"nome":"...","valor":"...","unidade":"...","referencia":"...","status":"normal|atencao|prioridade","observacao":"..."}], '
-            '"resumo":"...","conduta_sugerida":"..."}. '
-            "Identifique marcadores comuns: hemoglobina, glicemia, glicose em jejum, vitamina D (25-OH), ferritina, "
-            "vitamina B12, colesterol total, LDL, HDL, triglicerídeos, TSH, T4 livre, PCR, ferro sérico, "
-            "creatinina, ureia, ácido úrico, ALT, AST, GGT, hemoglobina glicada (HbA1c). "
-            "Status: 'normal' (dentro da referência), 'atencao' (limítrofe ou levemente alterado), "
-            "'prioridade' (alteração relevante que merece atenção). "
-            "Responda em Português (BR). NÃO faça diagnóstico médico, apenas organize."
+    await ensure_agents_seeded()
+    system_prompt = await build_agent_system_prompt(
+        "drhouse",
+        extra_context=(
+            "Tarefa desta chamada: extrair e interpretar exames laboratoriais em JSON para a tela de exames. "
+            "Devolva APENAS JSON valido, sem markdown e sem comentarios."
         ),
-    ).with_model("anthropic", "claude-sonnet-4-6")
-    prompt = f"Texto extraído do exame:\n\n{raw_text[:8000]}"
-    raw = await chat.send_message(UserMessage(text=prompt))
+    )
+    prompt = (
+        "Texto extraido do exame:\n\n"
+        f"{raw_text[:12000]}\n\n"
+        "Formato obrigatorio:\n"
+        '{"markers":[{"nome":"...","valor":"...","unidade":"...","referencia":"...","status":"normal|atencao|prioridade","observacao":"..."}],'
+        '"resumo":"...","conduta_sugerida":"..."}\n'
+        "Status: normal para dentro da referencia, atencao para limitrofe/leve, prioridade para alteracao relevante. "
+        "Nao diagnostique e nao prescreva."
+    )
+    raw = await _ai_chat(f"drhouse-exame-{uuid.uuid4()}", system_prompt, prompt)
     # Try to parse JSON; fallback on first valid {...} block
     try:
         return json.loads(raw)
@@ -690,7 +815,7 @@ async def ai_exam_analysis(raw_text: str) -> dict:
 async def register(payload: RegisterIn, response: Response):
     email = payload.email.lower()
     if await db.users.find_one({"email": email}):
-        raise HTTPException(400, "E-mail já cadastrado")
+        raise HTTPException(400, "E-mail jÃ¡ cadastrado")
     uid = str(uuid.uuid4())
     doc = {
         "id": uid, "email": email, "name": payload.name,
@@ -726,9 +851,9 @@ async def login(payload: LoginIn, response: Response):
         if state["count"] >= LOCKOUT_MAX_ATTEMPTS:
             state["locked_until"] = now + timedelta(minutes=LOCKOUT_WINDOW_MIN)
         _login_attempts[email] = state
-        raise HTTPException(401, "Credenciais inválidas")
+        raise HTTPException(401, "Credenciais invÃ¡lidas")
 
-    # Success — reset counter
+    # Success â€” reset counter
     _login_attempts.pop(email, None)
     set_auth_cookie(response, create_token(user["id"], email))
     return UserOut(id=user["id"], email=email, name=user["name"], role=user.get("role", "nutritionist"))
@@ -772,86 +897,86 @@ async def create_lead(payload: LeadIn, request: Request, nutri: Optional[str] = 
     await db.patients.insert_one(patient)
     return LeadOut(token=token, patient_id=pid, name=payload.name)
 
-# ─── ATENDIMENTO PÚBLICO (Agente de Primeiro Contato) ────────────────────────
+# â”€â”€â”€ ATENDIMENTO PÃšBLICO (Agente de Primeiro Contato) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-ATENDIMENTO_SYSTEM_PROMPT = """Você é RC Nutri, o assistente de primeiro contato do nutricionista e treinador Rogério Costa.
+ATENDIMENTO_SYSTEM_PROMPT = """VocÃª Ã© RC Nutri, o assistente de primeiro contato do nutricionista e treinador RogÃ©rio Costa.
 
-Seu objetivo é realizar o primeiro contato com o potencial paciente, coletar informações essenciais, qualificá-lo e apresentar os planos da consultoria.
+Seu objetivo Ã© realizar o primeiro contato com o potencial paciente, coletar informaÃ§Ãµes essenciais, qualificÃ¡-lo e apresentar os planos da consultoria.
 
-Tom: motivador, empático, linguagem informal mas profissional. Use emojis moderadamente. Valide cada resposta antes de avançar.
+Tom: motivador, empÃ¡tico, linguagem informal mas profissional. Use emojis moderadamente. Valide cada resposta antes de avanÃ§ar.
 
-FLUXO OBRIGATÓRIO (siga exatamente esta ordem, nunca pule etapas):
+FLUXO OBRIGATÃ“RIO (siga exatamente esta ordem, nunca pule etapas):
 
-ETAPA 1 — SAUDAÇÃO:
-Comece apresentando-se e pedindo o nome do visitante. Após receber o nome, use exatamente:
-"Olá {nome} tudo bem? SEJA MUITO BEM VINDO(A)! 😊
+ETAPA 1 â€” SAUDAÃ‡ÃƒO:
+Comece apresentando-se e pedindo o nome do visitante. ApÃ³s receber o nome, use exatamente:
+"OlÃ¡ {nome} tudo bem? SEJA MUITO BEM VINDO(A)! ðŸ˜Š
 
-Vou te explicar todos os detalhes da consultoria online do Rogério.
-Mas antes preciso fazer algumas perguntas para ver se essa consultoria serve para você, ok?"
+Vou te explicar todos os detalhes da consultoria online do RogÃ©rio.
+Mas antes preciso fazer algumas perguntas para ver se essa consultoria serve para vocÃª, ok?"
 
-Depois pergunte: "Qual perfil e objetivo abaixo que você se encaixa atualmente?"
-1. Quero ganhar massa e volume muscular 💪
-2. Quero perder barriga, definir o corpo e emagrecer sem flacidez 🔥
-3. Apenas manutenção da saúde, sem fins estéticos ✅
+Depois pergunte: "Qual perfil e objetivo abaixo que vocÃª se encaixa atualmente?"
+1. Quero ganhar massa e volume muscular ðŸ’ª
+2. Quero perder barriga, definir o corpo e emagrecer sem flacidez ðŸ”¥
+3. Apenas manutenÃ§Ã£o da saÃºde, sem fins estÃ©ticos âœ…
 
-ETAPA 2 — DETALHES PESSOAIS:
-Após o objetivo, responda: "Agora compreendi perfeitamente seu objetivo 😊 Vou te ajudar nessa jornada! 👊 Últimos detalhes para eu entender 100% se meu método pode te ajudar!"
+ETAPA 2 â€” DETALHES PESSOAIS:
+ApÃ³s o objetivo, responda: "Agora compreendi perfeitamente seu objetivo ðŸ˜Š Vou te ajudar nessa jornada! ðŸ‘Š Ãšltimos detalhes para eu entender 100% se meu mÃ©todo pode te ajudar!"
 Pergunte (pode ser em uma mensagem):
 1. Qual sua idade, peso e altura ATUAL?
-2. Você já teve experiência com consultoria de treino e nutrição?
+2. VocÃª jÃ¡ teve experiÃªncia com consultoria de treino e nutriÃ§Ã£o?
 3. Qual sua maior dificuldade em atingir o objetivo?
 
-ETAPA 3 — AVALIAÇÃO CORPORAL:
-"Perfeito, obrigado pelas informações! Só mais uma coisa 👇"
-Peça que escolha uma faixa de 1 a 9 que representa o corpo HOJE e outra que representa o corpo que DESEJA:
-1 (10-12%) — Muito definido, músculos aparentes
-2 (15-17%) — Boa definição, forma atlética
-3 (20-22%) — Forma saudável, pouca definição
-4 (25%) — Acima do ideal, pouca tonicidade
-5 (30%) — Sobrepeso moderado
-6 (35%) — Sobrepeso significativo
-7 (40%) — Obesidade moderada
-8 (45%) — Obesidade severa
-9 (50%+) — Obesidade mórbida
+ETAPA 3 â€” AVALIAÃ‡ÃƒO CORPORAL:
+"Perfeito, obrigado pelas informaÃ§Ãµes! SÃ³ mais uma coisa ðŸ‘‡"
+PeÃ§a que escolha uma faixa de 1 a 9 que representa o corpo HOJE e outra que representa o corpo que DESEJA:
+1 (10-12%) â€” Muito definido, mÃºsculos aparentes
+2 (15-17%) â€” Boa definiÃ§Ã£o, forma atlÃ©tica
+3 (20-22%) â€” Forma saudÃ¡vel, pouca definiÃ§Ã£o
+4 (25%) â€” Acima do ideal, pouca tonicidade
+5 (30%) â€” Sobrepeso moderado
+6 (35%) â€” Sobrepeso significativo
+7 (40%) â€” Obesidade moderada
+8 (45%) â€” Obesidade severa
+9 (50%+) â€” Obesidade mÃ³rbida
 
-ETAPA 4 — APRESENTAÇÃO DA OFERTA:
+ETAPA 4 â€” APRESENTAÃ‡ÃƒO DA OFERTA:
 Apresente com entusiasmo:
-"COMO FUNCIONA A CONSULTORIA FITNESS GOLD 🏆
+"COMO FUNCIONA A CONSULTORIA FITNESS GOLD ðŸ†
 
-🏋 AVALIAÇÃO FÍSICA / CONSULTA — análise do condicionamento físico atual e rotina para o planejamento perfeito
+ðŸ‹ AVALIAÃ‡ÃƒO FÃSICA / CONSULTA â€” anÃ¡lise do condicionamento fÃ­sico atual e rotina para o planejamento perfeito
 
-📱 ACESSO EXCLUSIVO AO APP — vídeos da execução correta de cada exercício + PDF com planejamento nutricional 🍎🥗
+ðŸ“± ACESSO EXCLUSIVO AO APP â€” vÃ­deos da execuÃ§Ã£o correta de cada exercÃ­cio + PDF com planejamento nutricional ðŸŽðŸ¥—
 
-💎 SUPORTE VIP e ILIMITADO — acesso ao WhatsApp do Rogério para tirar dúvidas sempre que precisar
+ðŸ’Ž SUPORTE VIP e ILIMITADO â€” acesso ao WhatsApp do RogÃ©rio para tirar dÃºvidas sempre que precisar
 
-✅ FEEDBACK SEMANAL para acompanhamento mais próximo e ajustes no planejamento
+âœ… FEEDBACK SEMANAL para acompanhamento mais prÃ³ximo e ajustes no planejamento
 
-É esse tipo de acompanhamento PERSONALIZADO que você está procurando?
-Pois já vou te passar o valor promocional 👇"
+Ã‰ esse tipo de acompanhamento PERSONALIZADO que vocÃª estÃ¡ procurando?
+Pois jÃ¡ vou te passar o valor promocional ðŸ‘‡"
 
-Planos disponíveis:
+Planos disponÃ­veis:
 - Plano Treino (2 meses de acompanhamento)
-- Plano Nutrição (2 meses de acompanhamento)
-- Consultoria Gold (2 meses) ⭐ MAIS POPULAR
+- Plano NutriÃ§Ã£o (2 meses de acompanhamento)
+- Consultoria Gold (2 meses) â­ MAIS POPULAR
 
-Urgência: "Restam apenas algumas vagas para a consultoria Gold Fitness deste mês — oferta válida enquanto durarem as vagas!"
-"Qual plano fica melhor para você? 😊"
+UrgÃªncia: "Restam apenas algumas vagas para a consultoria Gold Fitness deste mÃªs â€” oferta vÃ¡lida enquanto durarem as vagas!"
+"Qual plano fica melhor para vocÃª? ðŸ˜Š"
 
-ETAPA 5 — ENCERRAMENTO:
-Após o paciente escolher o plano:
-"Perfeito, ótima escolha! 🎉
+ETAPA 5 â€” ENCERRAMENTO:
+ApÃ³s o paciente escolher o plano:
+"Perfeito, Ã³tima escolha! ðŸŽ‰
 
-Já vou processar suas informações e o Rogério entrará em contato para finalizar sua inscrição.
+JÃ¡ vou processar suas informaÃ§Ãµes e o RogÃ©rio entrarÃ¡ em contato para finalizar sua inscriÃ§Ã£o.
 
-Fique de olho no seu WhatsApp 📱"
+Fique de olho no seu WhatsApp ðŸ“±"
 
 REGRAS:
-- Nunca pule etapas. Sempre valide a resposta antes de avançar.
+- Nunca pule etapas. Sempre valide a resposta antes de avanÃ§ar.
 - Ao finalizar TODA a coleta, inclua obrigatoriamente este bloco no final da mensagem de encerramento:
 DADOS_COLETADOS: {"nome": "", "objetivo": "", "idade": "", "peso": "", "altura": "", "experiencia_previa": "", "maior_dificuldade": "", "gordura_atual_faixa": "", "gordura_desejada_faixa": "", "plano_escolhido": ""}
 """
 
-# Rate limit para atendimento (session_id → timestamps)
+# Rate limit para atendimento (session_id â†’ timestamps)
 _atendimento_rate: dict = defaultdict(deque)
 ATENDIMENTO_RATE_MAX = 30
 ATENDIMENTO_RATE_WINDOW = 60
@@ -903,10 +1028,10 @@ async def atendimento_chat(payload: AtendimentoMsgIn):
                 session_id=f"atend-{sid}-{uuid.uuid4().hex[:8]}",
                 system_message=ATENDIMENTO_SYSTEM_PROMPT,
             ).with_model("anthropic", "claude-sonnet-4-6")
-            reply = await chat.send_message(UserMessage(text=convo.strip() or "Olá!"))
+            reply = await chat.send_message(UserMessage(text=convo.strip() or "OlÃ¡!"))
     except Exception as e:
         logging.exception("Atendimento chat failed")
-        raise HTTPException(503, f"Agente indisponível: {str(e)[:160]}")
+        raise HTTPException(503, f"Agente indisponÃ­vel: {str(e)[:160]}")
 
     # Extract DADOS_COLETADOS if present
     collected = None
@@ -955,14 +1080,14 @@ async def atendimento_save_lead(payload: AtendimentoLeadIn):
 async def get_lead(token: str):
     p = await db.patients.find_one({"lead_token": token}, {"_id": 0, "password_hash": 0})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
+        raise HTTPException(404, "Lead nÃ£o encontrado")
     return public_lead_view(p)
 
 @api.post("/public/checkout/{token}/comprovante")
 async def upload_comprovante(token: str, file: UploadFile = File(...)):
     p = await db.patients.find_one({"lead_token": token})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
+        raise HTTPException(404, "Lead nÃ£o encontrado")
     ct = (file.content_type or "")
     if not (ct.startswith("image/") or ct == "application/pdf"):
         raise HTTPException(400, "Envie uma imagem ou PDF")
@@ -981,10 +1106,10 @@ async def upload_comprovante(token: str, file: UploadFile = File(...)):
     return {"ok": True}
 
 _COND_LABELS = {
-    "sem_experiencia": "Sem experiência",
+    "sem_experiencia": "Sem experiÃªncia",
     "inativo": "Inativo",
-    "ativo_1": "Ativo 1 — treina às vezes",
-    "ativo_2": "Ativo 2 — treina regularmente",
+    "ativo_1": "Ativo 1 â€” treina Ã s vezes",
+    "ativo_2": "Ativo 2 â€” treina regularmente",
     "atleta": "Atleta",
 }
 
@@ -1027,7 +1152,7 @@ def _map_preconsulta(r: dict) -> dict:
 async def submit_anamnesis(payload: AnamnesisIn):
     p = await db.patients.find_one({"lead_token": payload.token})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
+        raise HTTPException(404, "Lead nÃ£o encontrado")
     r = payload.respostas
     aid = str(uuid.uuid4())
     doc = {
@@ -1066,10 +1191,10 @@ async def submit_anamnesis(payload: AnamnesisIn):
 async def upload_lead_photos(token: str, payload: PhotosIn):
     p = await db.patients.find_one({"lead_token": token})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
+        raise HTTPException(404, "Lead nÃ£o encontrado")
     if not isinstance(payload.fotos, list):
-        raise HTTPException(400, "Formato inválido")
-    # Cap at 4 photos and ~3MB each (data URL ≈ 4MB raw)
+        raise HTTPException(400, "Formato invÃ¡lido")
+    # Cap at 4 photos and ~3MB each (data URL â‰ˆ 4MB raw)
     cleaned = []
     for f in payload.fotos[:4]:
         data_url = (f.get("data_url") or "")
@@ -1096,7 +1221,7 @@ async def get_chat(token: str):
 async def post_chat(payload: ChatIn):
     p = await db.patients.find_one({"lead_token": payload.token})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
+        raise HTTPException(404, "Lead nÃ£o encontrado")
 
     # Rate limit: max CHAT_RATE_MAX requests / CHAT_RATE_WINDOW seconds per token
     now = now_utc()
@@ -1119,7 +1244,7 @@ async def post_chat(payload: ChatIn):
         ai_text = await ai_adaptive_chat(payload.token, payload.message, anam.get("respostas") if anam else {}, history)
     except Exception as e:
         logging.exception("AI chat failed")
-        ai_text = "Desculpe, tive uma instabilidade. Pode repetir sua última resposta?"
+        ai_text = "Desculpe, tive uma instabilidade. Pode repetir sua Ãºltima resposta?"
     ai_msg = {
         "id": str(uuid.uuid4()), "token": payload.token, "role": "assistant",
         "content": ai_text, "created_at": iso(now_utc()),
@@ -1132,7 +1257,7 @@ async def post_chat(payload: ChatIn):
 async def get_slots(token: str):
     p = await db.patients.find_one({"lead_token": token})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
+        raise HTTPException(404, "Lead nÃ£o encontrado")
     # Generate next 7 days slots in America/Sao_Paulo (Mon-Sat 09-17h)
     booked = set()
     cursor = db.consultations.find({"nutricionista_id": p["nutricionista_id"], "status": "AGENDADA"})
@@ -1150,7 +1275,7 @@ async def get_slots(token: str):
             slots.append({
                 "datetime": key,
                 "available": key not in booked,
-                "label": f"{day.strftime('%d/%m')} · {h:02d}:00 (BRT)",
+                "label": f"{day.strftime('%d/%m')} Â· {h:02d}:00 (BRT)",
             })
     return slots
 
@@ -1158,14 +1283,14 @@ async def get_slots(token: str):
 async def schedule(payload: ScheduleIn):
     p = await db.patients.find_one({"lead_token": payload.token})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
-    # Build SP-local datetime → store ISO with offset
+        raise HTTPException(404, "Lead nÃ£o encontrado")
+    # Build SP-local datetime â†’ store ISO with offset
     try:
         y, m, dd = [int(x) for x in payload.date.split("-")]
         hh, mm = [int(x) for x in payload.time.split(":")]
         dt_local = datetime(y, m, dd, hh, mm, tzinfo=TZ_BR)
     except Exception:
-        raise HTTPException(400, "Data ou horário inválidos")
+        raise HTTPException(400, "Data ou horÃ¡rio invÃ¡lidos")
     dt_str = dt_local.isoformat()
     cid = str(uuid.uuid4())
     consult = {
@@ -1185,7 +1310,7 @@ PATIENT_STATUSES = {
 
 def _validate_patient_status(value: Optional[str]) -> Optional[str]:
     if value is not None and value not in PATIENT_STATUSES:
-        raise HTTPException(400, f"Status inválido. Use um de: {sorted(PATIENT_STATUSES)}")
+        raise HTTPException(400, f"Status invÃ¡lido. Use um de: {sorted(PATIENT_STATUSES)}")
     return value
 
 def _consultation_datetime(date_value: str, time_value: str) -> str:
@@ -1194,7 +1319,7 @@ def _consultation_datetime(date_value: str, time_value: str) -> str:
         hh, mm = [int(x) for x in time_value.split(":")]
         return datetime(y, m, dd, hh, mm, tzinfo=TZ_BR).isoformat()
     except Exception:
-        raise HTTPException(400, "Data ou horário inválidos")
+        raise HTTPException(400, "Data ou horÃ¡rio invÃ¡lidos")
 
 @api.get("/dashboard")
 async def dashboard(user=Depends(get_current_user)):
@@ -1236,7 +1361,7 @@ async def list_patients(user=Depends(get_current_user)):
 async def create_patient(payload: PatientCreateIn, user=Depends(require_nutritionist)):
     email = str(payload.email).lower() if payload.email else None
     if email and await db.patients.find_one({"nutricionista_id": user["id"], "email": email}):
-        raise HTTPException(409, "Já existe um paciente com este e-mail")
+        raise HTTPException(409, "JÃ¡ existe um paciente com este e-mail")
     _validate_patient_status(payload.status_funil)
     now_str = iso(now_utc())
     doc = {
@@ -1255,7 +1380,7 @@ async def create_patient(payload: PatientCreateIn, user=Depends(require_nutritio
 async def update_patient(pid: str, payload: PatientUpdateIn, user=Depends(require_nutritionist)):
     patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not patient:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     updates = payload.model_dump(exclude_unset=True)
     _validate_patient_status(updates.get("status_funil"))
     if updates.get("email"):
@@ -1264,7 +1389,7 @@ async def update_patient(pid: str, payload: PatientUpdateIn, user=Depends(requir
             "nutricionista_id": user["id"], "email": updates["email"], "id": {"$ne": pid}
         })
         if duplicate:
-            raise HTTPException(409, "Já existe outro paciente com este e-mail")
+            raise HTTPException(409, "JÃ¡ existe outro paciente com este e-mail")
     updates["updated_at"] = iso(now_utc())
     await db.patients.update_one({"id": pid}, {"$set": updates})
     return await db.patients.find_one({"id": pid}, {"_id": 0, "lead_token": 0})
@@ -1273,7 +1398,7 @@ async def update_patient(pid: str, payload: PatientUpdateIn, user=Depends(requir
 async def delete_patient(pid: str, user=Depends(require_nutritionist)):
     patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not patient:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     patient_filters = {
         "anamneses": {"paciente_id": pid},
         "consultations": {"paciente_id": pid},
@@ -1287,6 +1412,8 @@ async def delete_patient(pid: str, user=Depends(require_nutritionist)):
         "consultorio_messages": {"patient_id": pid},
         "planos_manuais": {"paciente_id": pid},
         "planos_manuais_historico": {"paciente_id": pid},
+        "donato_plan_generations": {"paciente_id": pid},
+        "drhouse_exam_analyses": {"paciente_id": pid},
         "exames_manuais": {"paciente_id": pid},
     }
     deleted = {}
@@ -1302,7 +1429,7 @@ async def delete_patient(pid: str, user=Depends(require_nutritionist)):
 async def get_patient(pid: str, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     anam = await db.anamneses.find({"paciente_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(10)
     consultas = await db.consultations.find({"paciente_id": pid}, {"_id": 0}).sort("data_hora", -1).to_list(50)
     avals = await db.evaluations.find({"paciente_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(50)
@@ -1319,7 +1446,7 @@ async def get_patient(pid: str, user=Depends(get_current_user)):
 async def add_evaluation(pid: str, payload: EvaluationIn, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     comp = calc_bodycomp(payload.model_dump())
     eid = str(uuid.uuid4())
     doc = {
@@ -1337,7 +1464,7 @@ async def add_evaluation(pid: str, payload: EvaluationIn, user=Depends(get_curre
 async def run_analysis(pid: str, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
     avals = await db.evaluations.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
     if not anam:
@@ -1346,7 +1473,7 @@ async def run_analysis(pid: str, user=Depends(get_current_user)):
         text = await ai_clinical_analysis(anam.get("respostas", {}), avals.get("composicao") if avals else None)
     except Exception as e:
         logging.exception("AI analysis failed")
-        raise HTTPException(503, f"Falha ao gerar análise (IA indisponível): {str(e)[:120]}")
+        raise HTTPException(503, f"Falha ao gerar anÃ¡lise (IA indisponÃ­vel): {str(e)[:120]}")
     aid = str(uuid.uuid4())
     doc = {"id": aid, "paciente_id": pid, "content": text, "created_at": iso(now_utc())}
     await db.ai_analyses.insert_one(doc)
@@ -1356,10 +1483,10 @@ async def run_analysis(pid: str, user=Depends(get_current_user)):
 async def gen_meal_plan(pid: str, payload: MealPlanRequest, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     avals = await db.evaluations.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
     if not avals:
-        raise HTTPException(400, "Cadastre uma avaliação física antes de gerar o plano")
+        raise HTTPException(400, "Cadastre uma avaliaÃ§Ã£o fÃ­sica antes de gerar o plano")
     comp = avals["composicao"]
     macros = calc_macros(comp["get_kcal"], payload.objetivo, avals["peso"], comp.get("massa_magra"))
     anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
@@ -1367,7 +1494,7 @@ async def gen_meal_plan(pid: str, payload: MealPlanRequest, user=Depends(get_cur
         text = await ai_meal_plan(p, anam.get("respostas") if anam else {}, macros, payload.restricoes)
     except Exception as e:
         logging.exception("AI meal plan failed")
-        raise HTTPException(503, f"Falha ao gerar plano (IA indisponível): {str(e)[:120]}")
+        raise HTTPException(503, f"Falha ao gerar plano (IA indisponÃ­vel): {str(e)[:120]}")
     last = await db.meal_plans.find_one({"paciente_id": pid}, sort=[("version", -1)])
     version = (last["version"] + 1) if last else 1
     mid = str(uuid.uuid4())
@@ -1387,7 +1514,7 @@ async def gen_meal_plan(pid: str, payload: MealPlanRequest, user=Depends(get_cur
 async def comparativo(pid: str, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     rows = await db.evaluations.find({"paciente_id": pid}, {"_id": 0}).sort("created_at", 1).to_list(50)
     return rows
 
@@ -1399,19 +1526,19 @@ async def agenda(user=Depends(get_current_user)):
     pats = await db.patients.find({"id": {"$in": pids}}, {"_id": 0, "id": 1, "nome": 1}).to_list(500)
     name_by = {p["id"]: p["nome"] for p in pats}
     for r in rows:
-        r["paciente_nome"] = name_by.get(r["paciente_id"], "—")
+        r["paciente_nome"] = name_by.get(r["paciente_id"], "â€”")
     return rows
 
 @api.post("/agenda", status_code=201)
 async def create_consultation(payload: ConsultationCreateIn, user=Depends(require_nutritionist)):
     patient = await db.patients.find_one({"id": payload.paciente_id, "nutricionista_id": user["id"]})
     if not patient:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     data_hora = _consultation_datetime(payload.date, payload.time)
     if await db.consultations.find_one({
         "nutricionista_id": user["id"], "data_hora": data_hora, "status": {"$ne": "CANCELADA"}
     }):
-        raise HTTPException(409, "Já existe uma consulta neste horário")
+        raise HTTPException(409, "JÃ¡ existe uma consulta neste horÃ¡rio")
     doc = {
         "id": str(uuid.uuid4()),
         "paciente_id": payload.paciente_id,
@@ -1431,7 +1558,7 @@ async def create_consultation(payload: ConsultationCreateIn, user=Depends(requir
 async def update_consultation(cid: str, payload: ConsultationUpdateIn, user=Depends(require_nutritionist)):
     consultation = await db.consultations.find_one({"id": cid, "nutricionista_id": user["id"]})
     if not consultation:
-        raise HTTPException(404, "Consulta não encontrada")
+        raise HTTPException(404, "Consulta nÃ£o encontrada")
     updates = payload.model_dump(exclude_unset=True)
     date_value = updates.pop("date", None)
     time_value = updates.pop("time", None)
@@ -1443,19 +1570,19 @@ async def update_consultation(cid: str, payload: ConsultationUpdateIn, user=Depe
             "data_hora": data_hora, "status": {"$ne": "CANCELADA"},
         })
         if conflict:
-            raise HTTPException(409, "Já existe uma consulta neste horário")
+            raise HTTPException(409, "JÃ¡ existe uma consulta neste horÃ¡rio")
         updates["data_hora"] = data_hora
     updates["updated_at"] = iso(now_utc())
     await db.consultations.update_one({"id": cid}, {"$set": updates})
     updated = await db.consultations.find_one({"id": cid}, {"_id": 0})
     patient = await db.patients.find_one({"id": consultation["paciente_id"]}, {"_id": 0, "nome": 1})
-    return {**updated, "paciente_nome": (patient or {}).get("nome", "—")}
+    return {**updated, "paciente_nome": (patient or {}).get("nome", "â€”")}
 
 @api.delete("/agenda/{cid}")
 async def delete_consultation(cid: str, user=Depends(require_nutritionist)):
     result = await db.consultations.delete_one({"id": cid, "nutricionista_id": user["id"]})
     if result.deleted_count == 0:
-        raise HTTPException(404, "Consulta não encontrada")
+        raise HTTPException(404, "Consulta nÃ£o encontrada")
     return {"ok": True}
 
 # ---------- Lab Exams ----------
@@ -1463,7 +1590,7 @@ async def delete_consultation(cid: str, user=Depends(require_nutritionist)):
 async def upload_exam(pid: str, file: UploadFile = File(...), user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(400, "Envie um arquivo PDF")
     contents = await file.read()
@@ -1474,15 +1601,15 @@ async def upload_exam(pid: str, file: UploadFile = File(...), user=Depends(get_c
         with pdfplumber.open(io.BytesIO(contents)) as pdf:
             raw = "\n".join((page.extract_text() or "") for page in pdf.pages)
     except Exception as e:
-        raise HTTPException(400, f"Não foi possível ler o PDF: {str(e)[:120]}")
+        raise HTTPException(400, f"NÃ£o foi possÃ­vel ler o PDF: {str(e)[:120]}")
     if not raw.strip():
-        raise HTTPException(400, "O PDF parece estar vazio ou ilegível (possivelmente uma imagem digitalizada).")
+        raise HTTPException(400, "O PDF parece estar vazio ou ilegÃ­vel (possivelmente uma imagem digitalizada).")
 
     try:
         analysis = await ai_exam_analysis(raw)
     except Exception as e:
         logging.exception("AI exam analysis failed")
-        raise HTTPException(503, f"Falha ao analisar exame (IA indisponível): {str(e)[:120]}")
+        raise HTTPException(503, f"Falha ao analisar exame (IA indisponÃ­vel): {str(e)[:120]}")
 
     eid = str(uuid.uuid4())
     doc = {
@@ -1499,7 +1626,7 @@ async def upload_exam(pid: str, file: UploadFile = File(...), user=Depends(get_c
 async def list_exams(pid: str, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     rows = await db.exams.find({"paciente_id": pid}, {"_id": 0, "raw_text": 0}).sort("created_at", -1).to_list(50)
     return rows
 
@@ -1507,7 +1634,7 @@ async def list_exams(pid: str, user=Depends(get_current_user)):
 async def delete_exam(pid: str, eid: str, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     await db.exams.delete_one({"id": eid, "paciente_id": pid})
     return {"ok": True}
 
@@ -1515,14 +1642,14 @@ async def delete_exam(pid: str, eid: str, user=Depends(get_current_user)):
 async def update_exam_notes(pid: str, eid: str, payload: dict, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     obs = (payload or {}).get("observacoes", "")
     await db.exams.update_one({"id": eid, "paciente_id": pid}, {"$set": {"observacoes": obs}})
     return {"ok": True}
 
 # ---------- PDF generation (meal plan) ----------
 def _md_to_html(md: str) -> str:
-    """Tiny markdown→html for meal plan content (headings, bold, bullets, line breaks)."""
+    """Tiny markdownâ†’html for meal plan content (headings, bold, bullets, line breaks)."""
     import re
     if not md:
         return ""
@@ -1545,7 +1672,7 @@ def _md_to_html(md: str) -> str:
         elif s.startswith("# "):
             if in_ul: out.append("</ul>"); in_ul = False
             out.append(f"<h2>{s[2:]}</h2>")
-        elif s.lstrip().startswith(("- ", "• ", "* ")):
+        elif s.lstrip().startswith(("- ", "â€¢ ", "* ")):
             if not in_ul: out.append("<ul>"); in_ul = True
             content = s.lstrip()[2:]
             out.append(f"<li>{content}</li>")
@@ -1562,43 +1689,43 @@ def _md_to_html(md: str) -> str:
 async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     plan = await db.meal_plans.find_one({"id": plan_id, "paciente_id": pid}, {"_id": 0})
     if not plan:
-        raise HTTPException(404, "Plano não encontrado")
+        raise HTTPException(404, "Plano nÃ£o encontrado")
 
     nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
     body_html = _md_to_html(plan.get("content", ""))
     issued = datetime.fromisoformat(plan["created_at"]).strftime("%d/%m/%Y")
 
     html_doc = f"""<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><title>Plano Alimentar — Rogério Costa</title></head>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Plano Alimentar â€” RogÃ©rio Costa</title></head>
 <body>
   <header class="brand">
     <div class="logo">
       <span class="logo-mark">P</span>
       <div>
-        <div class="brand-name">ROGÉRIO COSTA</div>
-        <div class="brand-sub">Treinador & Nutricionista · Plano alimentar personalizado</div>
+        <div class="brand-name">ROGÃ‰RIO COSTA</div>
+        <div class="brand-sub">Treinador & Nutricionista Â· Plano alimentar personalizado</div>
       </div>
     </div>
     <div class="meta">
-      <div><strong>Profissional</strong>{nutri.get('name','—')}</div>
+      <div><strong>Profissional</strong>{nutri.get('name','â€”')}</div>
       <div><strong>Data</strong>{issued}</div>
-      <div><strong>Versão</strong>v{plan.get('version', 1)}</div>
+      <div><strong>VersÃ£o</strong>v{plan.get('version', 1)}</div>
     </div>
   </header>
 
   <section class="patient">
     <h1>{p.get('nome','Paciente')}</h1>
-    <p class="muted">{p.get('telefone','')}{(' · ' + p.get('email','')) if p.get('email') else ''}</p>
+    <p class="muted">{p.get('telefone','')}{(' Â· ' + p.get('email','')) if p.get('email') else ''}</p>
   </section>
 
   <section class="kpis">
-    <div class="kpi kpi-primary"><div class="lbl">Calorias / dia</div><div class="val">{plan.get('kcal_total','—')} <span>kcal</span></div></div>
-    <div class="kpi"><div class="lbl">Proteína</div><div class="val">{plan.get('proteina_g','—')}g <span>· {plan.get('ptn_pct','—')}%</span></div></div>
-    <div class="kpi"><div class="lbl">Carboidrato</div><div class="val">{plan.get('carboidrato_g','—')}g <span>· {plan.get('cho_pct','—')}%</span></div></div>
-    <div class="kpi"><div class="lbl">Gordura</div><div class="val">{plan.get('gordura_g','—')}g <span>· {plan.get('lip_pct','—')}%</span></div></div>
+    <div class="kpi kpi-primary"><div class="lbl">Calorias / dia</div><div class="val">{plan.get('kcal_total','â€”')} <span>kcal</span></div></div>
+    <div class="kpi"><div class="lbl">ProteÃ­na</div><div class="val">{plan.get('proteina_g','â€”')}g <span>Â· {plan.get('ptn_pct','â€”')}%</span></div></div>
+    <div class="kpi"><div class="lbl">Carboidrato</div><div class="val">{plan.get('carboidrato_g','â€”')}g <span>Â· {plan.get('cho_pct','â€”')}%</span></div></div>
+    <div class="kpi"><div class="lbl">Gordura</div><div class="val">{plan.get('gordura_g','â€”')}g <span>Â· {plan.get('lip_pct','â€”')}%</span></div></div>
   </section>
 
   <section class="content">
@@ -1606,8 +1733,8 @@ async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
   </section>
 
   <footer>
-    <div>ROGÉRIO COSTA · Treinador e Nutricionista</div>
-    <div>Documento gerado automaticamente — revise com seu nutricionista.</div>
+    <div>ROGÃ‰RIO COSTA Â· Treinador e Nutricionista</div>
+    <div>Documento gerado automaticamente â€” revise com seu nutricionista.</div>
   </footer>
 </body></html>"""
 
@@ -1645,7 +1772,7 @@ async def meal_plan_pdf(pid: str, plan_id: str, user=Depends(get_current_user)):
     headers = {"Content-Disposition": f'attachment; filename="rogerio-costa-plano-{safe_name}-v{plan.get("version", 1)}.pdf"'}
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
 
-# ---------- Agentes (treináveis pelo nutricionista) ----------
+# ---------- Agentes (treinÃ¡veis pelo nutricionista) ----------
 def _agent_view(a: dict) -> dict:
     return {
         "id": a.get("id"),
@@ -1653,6 +1780,11 @@ def _agent_view(a: dict) -> dict:
         "name": a.get("name"),
         "description": a.get("description"),
         "base_prompt": a.get("base_prompt", ""),
+        "provider": a.get("provider"),
+        "knowledge_mode": a.get("knowledge_mode"),
+        "schema_version": a.get("schema_version"),
+        "requires_human_approval": a.get("requires_human_approval"),
+        "active": a.get("active", True),
         "created_at": a.get("created_at"),
         "updated_at": a.get("updated_at"),
     }
@@ -1676,7 +1808,7 @@ async def get_agent(code: str, user=Depends(require_nutritionist)):
     await ensure_agents_seeded()
     a = await db.agents.find_one({"code": code}, {"_id": 0})
     if not a:
-        raise HTTPException(404, "Agente não encontrado")
+        raise HTTPException(404, "Agente nÃ£o encontrado")
     docs = await db.agent_documents.find(
         {"agent_code": code}, {"_id": 0, "content": 0}
     ).sort("created_at", 1).to_list(100)
@@ -1709,13 +1841,13 @@ async def upload_agent_document(
     if code not in AGENT_CODES:
         raise HTTPException(404, "Agente desconhecido")
     if not file:
-        raise HTTPException(400, "Arquivo é obrigatório")
+        raise HTTPException(400, "Arquivo Ã© obrigatÃ³rio")
     raw = await file.read()
     if len(raw) > 15 * 1024 * 1024:
         raise HTTPException(400, "Arquivo maior que 15MB")
     text = extract_text_from_upload(file.filename or "doc", file.content_type or "", raw)
     if not text.strip():
-        raise HTTPException(400, "Não foi possível extrair texto do arquivo enviado")
+        raise HTTPException(400, "NÃ£o foi possÃ­vel extrair texto do arquivo enviado")
     # cap each doc at 200k chars to keep mongo doc small; truncated content still useful
     text = text[:200_000]
     did = str(uuid.uuid4())
@@ -1723,8 +1855,22 @@ async def upload_agent_document(
         "id": did, "agent_code": code,
         "title": title or file.filename or "documento",
         "filename": file.filename, "content_type": file.content_type,
+        "source_filename": file.filename,
         "size": len(raw), "chars": len(text), "content": text,
+        "normalized_content": text if code == "donato" else None,
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "status": "draft" if code == "donato" else "approved",
+        "document_type": "scientific_evidence" if code == "donato" else None,
+        "topic": None,
+        "source_document_id": None,
+        "version": "1.0" if code == "donato" else None,
+        "indexed": False if code == "donato" else None,
+        "openai_file_id": None,
+        "vector_store_id": None,
+        "approved_by": None,
+        "approved_at": None,
         "created_at": iso(now_utc()),
+        "updated_at": iso(now_utc()),
     }
     await db.agent_documents.insert_one(doc)
     return {k: v for k, v in doc.items() if k not in ("content", "_id")}
@@ -1735,14 +1881,28 @@ async def add_agent_text_document(code: str, payload: AgentDocCreate, user=Depen
         raise HTTPException(404, "Agente desconhecido")
     text = (payload.content or "").strip()
     if not text:
-        raise HTTPException(400, "Conteúdo vazio")
+        raise HTTPException(400, "ConteÃºdo vazio")
     text = text[:200_000]
     did = str(uuid.uuid4())
     doc = {
         "id": did, "agent_code": code, "title": (payload.title or "Texto manual")[:200],
         "filename": None, "content_type": "text/plain",
+        "source_filename": None,
         "size": len(text.encode("utf-8")), "chars": len(text), "content": text,
+        "normalized_content": text if code == "donato" else None,
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "status": "draft" if code == "donato" else "approved",
+        "document_type": "scientific_evidence" if code == "donato" else None,
+        "topic": None,
+        "source_document_id": None,
+        "version": "1.0" if code == "donato" else None,
+        "indexed": False if code == "donato" else None,
+        "openai_file_id": None,
+        "vector_store_id": None,
+        "approved_by": None,
+        "approved_at": None,
         "created_at": iso(now_utc()),
+        "updated_at": iso(now_utc()),
     }
     await db.agent_documents.insert_one(doc)
     return {k: v for k, v in doc.items() if k not in ("content", "_id")}
@@ -1753,13 +1913,498 @@ async def delete_agent_document(code: str, doc_id: str, user=Depends(require_nut
         raise HTTPException(404, "Agente desconhecido")
     res = await db.agent_documents.delete_one({"id": doc_id, "agent_code": code})
     if res.deleted_count == 0:
-        raise HTTPException(404, "Documento não encontrado")
+        raise HTTPException(404, "Documento nÃ£o encontrado")
     return {"ok": True}
 
-# ---------- Consultório (Agente 2, uso interno do nutricionista) ----------
+# ---------- DONATO (rascunho estruturado com aprovacao humana) ----------
+DONATO_MISSING_REQUIRED_SOURCES = DONATO_KNOWLEDGE_MANIFEST["missing_required_sources"]
+DONATO_STAGE_LABELS = [
+    "Consolidando dados do paciente",
+    "Selecionando protocolos",
+    "Consultando base de conhecimento",
+    "Montando estrategia",
+    "Calculando plano",
+    "Validando",
+]
+DONATO_MEALS = [
+    "Cafe da manha", "Lanche da manha", "Almoco", "Lanche da tarde",
+    "Jantar", "Ceia", "Pre-treino", "Pos-treino", "Refeicao 9", "Refeicao 10",
+]
+DONATO_PROTOCOL_KEYWORDS = {
+    "diabetes_mellitus": ("Protocolo Clinico de Diabetes Mellitus", "03.10", ["diabetes", "diabetico"]),
+    "pre_diabetes": ("Protocolo Clinico de Pre-Diabetes", "03.11", ["pre-diabetes", "prediabetes"]),
+    "resistencia_insulina": ("Protocolo Clinico de Resistencia a Insulina", "03.12", ["resistencia a insulina", "homa"]),
+    "hipertensao": ("Protocolo Clinico de Hipertensao Arterial", "03.13", ["hipertensao", "pressao alta"]),
+    "dislipidemia": ("Protocolo Clinico de Dislipidemia", "03.14", ["dislipidemia", "colesterol", "triglicer"]),
+    "obesidade": ("Protocolo Clinico de Obesidade", "03.15", ["obesidade", "obeso"]),
+    "sop": ("Protocolo Clinico de Sindrome dos Ovarios Policisticos", "03.16", ["sop", "ovarios policisticos"]),
+    "esteatose_hepatica": ("Protocolo Clinico de Esteatose Hepatica", "03.17", ["esteatose", "hepatica"]),
+    "doenca_celiaca": ("Protocolo Clinico de Doenca Celiaca", "03.19", ["celiaca", "gluten"]),
+    "intolerancia_lactose": ("Protocolo Clinico de Intolerancia a Lactose", "03.20", ["lactose"]),
+    "performance_esportiva": ("Protocolo Clinico de Performance Esportiva", "03.05", ["performance", "esport", "treino", "hipertrofia"]),
+}
+
+def _patient_age_years(p: dict) -> Optional[int]:
+    value = p.get("data_nascimento")
+    if not value:
+        return None
+    try:
+        birth = date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+    today = datetime.now(TZ_BR).date()
+    return max(0, today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day)))
+
+def _donato_split_terms(value: Any) -> list[str]:
+    if not value:
+        return []
+    raw = value if isinstance(value, list) else (value.values() if isinstance(value, dict) else re.split(r"[,;\n|]+", str(value)))
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+def _donato_select_protocols(patient: dict, anam: dict, objective: str) -> list[dict]:
+    respostas = (anam or {}).get("respostas") or anam or {}
+    text = unicodedata.normalize("NFKD", " ".join([
+        str(patient.get("objetivo") or ""), str(objective or ""), json.dumps(respostas, ensure_ascii=False), str(patient.get("observacoes") or "")
+    ])).encode("ascii", "ignore").decode("ascii").lower()
+    protocols = []
+    for code, (title, source_id, keywords) in DONATO_PROTOCOL_KEYWORDS.items():
+        if any(keyword in text for keyword in keywords):
+            protocols.append({
+                "codigo": code,
+                "titulo": title,
+                "motivo": "Detectado em objetivo, anamnese ou observacoes do paciente.",
+                "prioridade": 5 if code == "performance_esportiva" else 1,
+                "source_document_id": source_id,
+            })
+    return sorted(protocols, key=lambda item: item["prioridade"])
+
+async def _donato_pick_food(regexes: list[str]) -> Optional[dict]:
+    filt = {"$or": [{"nome": {"$regex": term, "$options": "i"}} for term in regexes]}
+    return await db.alimentos.find_one(filt, {"_id": 0})
+
+def _donato_food_item(food: dict, grams: float, alternatives: Optional[list[dict]] = None) -> dict:
+    nutr = _nutrientes_por_porcao(food, grams)
+    return {
+        "alimento_id": food.get("id"),
+        "nome": food.get("nome"),
+        "categoria": food.get("grupo") or food.get("categoria") or "alimento",
+        "quantidade": {"peso_g": grams, "unidade": "g", "medida_caseira": food.get("medida_caseira") or f"{round(grams)} g"},
+        "modo_preparo": None,
+        "nutrientes": {
+            "energia_kcal": nutr.get("energia_kcal"),
+            "proteinas_g": nutr.get("proteinas_g"),
+            "carboidratos_g": nutr.get("carboidratos_g"),
+            "gorduras_g": nutr.get("lipidios_g"),
+            "fibras_g": nutr.get("fibras_g"),
+        },
+        "alternativas": alternatives or [],
+    }
+
+def _donato_calc_summary(refeicoes: list[dict], peso_kg: Optional[float]) -> dict:
+    totals = {"energia_kcal": 0.0, "proteinas_g": 0.0, "carboidratos_g": 0.0, "gorduras_g": 0.0, "fibras_g": 0.0}
+    for meal in refeicoes:
+        meal_totals = {key: 0.0 for key in totals}
+        for item in meal.get("alimentos") or []:
+            n = item.get("nutrientes") or {}
+            for key in meal_totals:
+                meal_totals[key] += _coerce_float(n.get(key)) or 0.0
+        meal["resumo_refeicao"] = {key: round(value, 2) for key, value in meal_totals.items()}
+        for key in totals:
+            totals[key] += meal_totals[key]
+    kcal = round(totals["energia_kcal"], 2)
+    def macro(field: str, factor: int) -> dict:
+        grams = round(totals[field], 2)
+        return {
+            "quantidade_g": grams,
+            "percentual_energetico": round((grams * factor / kcal) * 100, 1) if kcal else None,
+            "gramas_por_kg": round(grams / peso_kg, 2) if peso_kg else None,
+        }
+    return {
+        "valor_energetico_total_kcal": kcal,
+        "peso_utilizado_calculo_kg": peso_kg,
+        "proteinas": macro("proteinas_g", 4),
+        "carboidratos": macro("carboidratos_g", 4),
+        "gorduras": macro("gorduras_g", 9),
+        "fibras_g": round(totals["fibras_g"], 2),
+        "agua_recomendada_ml": round(peso_kg * 35) if peso_kg else None,
+    }
+
+async def _donato_recalculate_evonut(draft: dict) -> dict:
+    paciente = draft.get("paciente") or {}
+    peso_kg = _coerce_float(paciente.get("peso_kg"))
+    errors = []
+    for meal in draft.get("refeicoes") or []:
+        for item in meal.get("alimentos") or []:
+            alimento_id = item.get("alimento_id")
+            if not alimento_id:
+                errors.append(f"Alimento sem alimento_id em {meal.get('nome') or 'refeicao'}.")
+                continue
+            food = await db.alimentos.find_one({"id": alimento_id}, {"_id": 0})
+            if not food:
+                errors.append(f"Alimento EVONUT nao encontrado: {item.get('nome') or alimento_id}.")
+                continue
+            q = item.get("quantidade") or {}
+            grams = _coerce_float(q.get("peso_g"))
+            if grams is None:
+                errors.append(f"Quantidade em gramas ausente: {food.get('nome')}.")
+                continue
+            item.update(_donato_food_item(food, grams, item.get("alternativas") or []))
+    draft["resumo_nutricional"] = _donato_calc_summary(draft.get("refeicoes") or [], peso_kg)
+    validation = draft.setdefault("validacao", {})
+    previous = validation.get("erros") or []
+    validation["erros"] = previous + errors
+    validation["status"] = "needs_data" if draft.get("dados_pendentes") else "pending_backend_validation"
+    return draft
+
+def _donato_to_manual_payload(draft: dict) -> dict:
+    resumo = draft.get("resumo_nutricional") or {}
+    refs = []
+    for meal in draft.get("refeicoes") or []:
+        foods = []
+        for item in meal.get("alimentos") or []:
+            q = item.get("quantidade") or {}
+            foods.append({
+                "alimento_id": item.get("alimento_id"),
+                "medida_nome": q.get("medida_caseira") or q.get("unidade") or "Gramas",
+                "quantidade": q.get("peso_g"),
+                "quantidade_g": q.get("peso_g"),
+                "substituivel": True,
+                "substitutos": [
+                    {
+                        "alimento_id": alt.get("alimento_id"),
+                        "nome": alt.get("nome"),
+                        "medida_nome": (alt.get("quantidade") or {}).get("medida_caseira") or "Gramas",
+                        "quantidade": (alt.get("quantidade") or {}).get("peso_g"),
+                        "quantidade_g": (alt.get("quantidade") or {}).get("peso_g"),
+                    }
+                    for alt in item.get("alternativas") or []
+                    if alt.get("alimento_id")
+                ],
+                "observacao": item.get("modo_preparo"),
+            })
+        refs.append({
+            "nome": meal.get("nome") or "Refeicao",
+            "horario": meal.get("horario"),
+            "meta_kcal": (meal.get("resumo_refeicao") or {}).get("energia_kcal"),
+            "alimentos": foods,
+            "observacao": None,
+        })
+    return {
+        "titulo": "Prescricao Dietetica - DONATO",
+        "objetivo": ((draft.get("estrategia_nutricional") or {}).get("objetivo_principal")),
+        "estrategia": ((draft.get("estrategia_nutricional") or {}).get("tipo_plano")),
+        "meta_kcal": resumo.get("valor_energetico_total_kcal"),
+        "meta_proteina_g": (resumo.get("proteinas") or {}).get("quantidade_g"),
+        "meta_carboidrato_g": (resumo.get("carboidratos") or {}).get("quantidade_g"),
+        "meta_lipidio_g": (resumo.get("gorduras") or {}).get("quantidade_g"),
+        "prescricao_dietetica": {"origem": "donato", "schema_version": draft.get("versao_schema")},
+        "orientacao_ids": [],
+        "refeicoes": refs,
+        "observacoes": "\n".join((draft.get("orientacoes_gerais") or []) + (draft.get("observacoes") or [])),
+    }
+
+async def _build_donato_draft(patient: dict, payload: DonatoDraftIn) -> dict:
+    anam = await db.anamneses.find_one({"paciente_id": patient["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    aval = await db.evaluations.find_one({"paciente_id": patient["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    peso = _coerce_float(patient.get("peso") or (aval or {}).get("peso"))
+    altura = _coerce_float(patient.get("altura") or (aval or {}).get("altura"))
+    idade = _patient_age_years(patient) or (aval or {}).get("idade")
+    objetivo = payload.objetivo or patient.get("objetivo")
+    dados_pendentes = []
+    if not peso:
+        dados_pendentes.append("Peso atual do paciente")
+    if not altura:
+        dados_pendentes.append("Altura do paciente")
+    if not objetivo:
+        dados_pendentes.append("Objetivo nutricional")
+    food_sets = [
+        (["ovo", "frango", "atum"], 100), (["banana", "mamao", "maca"], 100),
+        (["arroz", "batata", "mandioca"], 120), (["feijao", "lentilha"], 90),
+        (["frango", "peixe", "patinho"], 140), (["azeite", "abacate", "castanha"], 15),
+    ]
+    picked = []
+    for regexes, grams in food_sets:
+        food = await _donato_pick_food(regexes)
+        if food:
+            picked.append((food, grams))
+    refeicoes = []
+    count = min(payload.numero_refeicoes, len(DONATO_MEALS))
+    for idx in range(count):
+        item_food = picked[idx % len(picked)] if picked else None
+        items = []
+        if item_food:
+            food, grams = item_food
+            alt_food = picked[(idx + 1) % len(picked)][0] if len(picked) > 1 else None
+            alternatives = []
+            if alt_food and alt_food.get("id") != food.get("id"):
+                alternatives.append({
+                    "alimento_id": alt_food.get("id"),
+                    "nome": alt_food.get("nome"),
+                    "categoria": alt_food.get("grupo") or alt_food.get("categoria") or "alimento",
+                    "quantidade": {"peso_g": grams, "unidade": "g", "medida_caseira": alt_food.get("medida_caseira") or f"{round(grams)} g"},
+                })
+            items.append(_donato_food_item(food, grams, alternatives))
+        refeicoes.append({
+            "ordem": idx + 1,
+            "nome": DONATO_MEALS[idx],
+            "horario": None,
+            "resumo_refeicao": {"energia_kcal": None, "proteinas_g": None, "carboidratos_g": None, "gorduras_g": None, "fibras_g": None},
+            "alimentos": items,
+        })
+    resumo = _donato_calc_summary(refeicoes, peso)
+    protocols = _donato_select_protocols(patient, anam or {}, objetivo or "")
+    validation_errors = []
+    if DONATO_STRICT_SOURCE_GATE:
+        validation_errors.append("Base documental incompleta: Prompt Mestre e Guia Mestre Alimentar pendentes.")
+    if not picked:
+        validation_errors.append("Nao foi possivel resolver alimentos na base EVONUT para montar o rascunho.")
+    return {
+        "tipo_resposta": "plano_alimentar",
+        "versao_schema": DONATO_SCHEMA_VERSION,
+        "status": "needs_data" if dados_pendentes else "draft_ai",
+        "paciente": {
+            "nome": patient.get("nome"),
+            "idade_anos": idade,
+            "sexo": patient.get("sexo"),
+            "peso_kg": peso,
+            "altura_cm": altura,
+            "percentual_gordura": ((aval or {}).get("composicao") or {}).get("pct_gordura"),
+            "objetivo_nutricional": objetivo,
+            "condicoes_clinicas": _donato_split_terms((anam or {}).get("condicoes_clinicas")),
+            "medicamentos": _donato_split_terms((anam or {}).get("medicamentos")),
+            "nivel_atividade_fisica": str((aval or {}).get("nivel_atividade") or "") or None,
+            "alergias": _donato_split_terms((anam or {}).get("alergias")),
+            "intolerancias": _donato_split_terms((anam or {}).get("intolerancias")),
+            "restricoes_alimentares": _donato_split_terms((anam or {}).get("restricoes")),
+            "preferencias_alimentares": _donato_split_terms((anam or {}).get("preferencias")),
+        },
+        "estrategia_nutricional": {
+            "tipo_plano": "rascunho_evonut",
+            "objetivo_principal": objetivo,
+            "numero_refeicoes": count,
+            "distribuicao_refeicoes": "Distribuicao inicial calculada sobre refeicoes disponiveis.",
+            "observacao_estrategica": payload.observacoes,
+        },
+        "protocolos_aplicados": protocols,
+        "dados_pendentes": dados_pendentes,
+        "resumo_nutricional": resumo,
+        "refeicoes": refeicoes,
+        "hidratacao": {"quantidade_diaria_ml": resumo.get("agua_recomendada_ml"), "orientacao": "Ajustar conforme treino, sudorese e conduta do nutricionista."},
+        "orientacoes_gerais": ["Rascunho gerado para revisao do nutricionista.", "Conferir preferencias, restricoes e rotina antes da aprovacao."],
+        "observacoes": [payload.observacoes] if payload.observacoes else [],
+        "justificativa_tecnica": {"titulo": "Justificativa TÃ©cnica", "texto": "Rascunho estruturado calculado no backend com alimentos vinculados a base EVONUT. A camada OpenAI/RAG ainda depende da configuracao e dos documentos pendentes."},
+        "evidencias": [{"source_document_id": item["source_document_id"], "titulo": item["titulo"], "file_id": None, "relevancia": "Protocolo selecionado pelo contexto; validar clinicamente."} for item in protocols],
+        "validacao": {"status": "needs_data" if dados_pendentes else "pending_backend_validation", "erros": validation_errors, "avisos": ["Aprovacao humana obrigatoria antes de virar plano oficial."]},
+    }
+
+@api.get("/agents/donato/knowledge")
+async def donato_knowledge_status(user=Depends(require_nutritionist)):
+    await ensure_agents_seeded()
+    approved = await db.agent_documents.count_documents({"agent_code": "donato", "status": "approved"})
+    waiting = await db.agent_documents.count_documents({"agent_code": "donato", "$or": [{"status": {"$exists": False}}, {"status": "draft"}]})
+    inactive = await db.agent_documents.count_documents({"agent_code": "donato", "status": "inactive"})
+    agent = await db.agents.find_one({"code": "donato"}, {"_id": 0})
+    return {
+        "enabled": DONATO_ENABLED,
+        "schema_version": DONATO_SCHEMA_VERSION,
+        "requires_human_approval": DONATO_REQUIRE_HUMAN_APPROVAL,
+        "strict_source_gate": DONATO_STRICT_SOURCE_GATE,
+        "knowledge_mode": (agent or {}).get("knowledge_mode") or "vector_store",
+        "vector_store_id": os.environ.get("OPENAI_DONATO_VECTOR_STORE_ID") or (agent or {}).get("vector_store_id"),
+        "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
+        "approved_documents": approved,
+        "waiting_review_documents": waiting,
+        "inactive_documents": inactive,
+        "missing_required_sources": DONATO_MISSING_REQUIRED_SOURCES,
+        "stages": DONATO_STAGE_LABELS,
+    }
+
+@api.post("/agents/donato/knowledge/documents/{doc_id}/approve")
+async def approve_donato_knowledge_document(doc_id: str, user=Depends(require_nutritionist)):
+    now = iso(now_utc())
+    res = await db.agent_documents.update_one(
+        {"id": doc_id, "agent_code": "donato"},
+        {"$set": {"status": "approved", "approved_by": user["id"], "approved_at": now, "updated_at": now}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Documento DONATO nao encontrado")
+    return await db.agent_documents.find_one({"id": doc_id}, {"_id": 0, "content": 0, "normalized_content": 0})
+
+@api.post("/agents/donato/knowledge/documents/{doc_id}/deactivate")
+async def deactivate_donato_knowledge_document(doc_id: str, user=Depends(require_nutritionist)):
+    res = await db.agent_documents.update_one(
+        {"id": doc_id, "agent_code": "donato"},
+        {"$set": {"status": "inactive", "updated_at": iso(now_utc())}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Documento DONATO nao encontrado")
+    return await db.agent_documents.find_one({"id": doc_id}, {"_id": 0, "content": 0, "normalized_content": 0})
+
+@api.post("/agents/donato/knowledge/sync")
+async def sync_donato_knowledge(user=Depends(require_nutritionist)):
+    try:
+        result = await sync_approved_documents(get_donato_settings(), db, iso(now_utc()))
+    except DonatoProviderUnavailable as exc:
+        raise HTTPException(503, {"code": "DONATO_PROVIDER_UNAVAILABLE", "message": str(exc)})
+    except Exception as exc:
+        logging.exception("DONATO knowledge sync failed")
+        raise HTTPException(503, {"code": "DONATO_KNOWLEDGE_UNAVAILABLE", "message": str(exc)[:180]})
+    return result
+
+@api.get("/agents/drhouse/knowledge")
+async def drhouse_knowledge_status(user=Depends(require_nutritionist)):
+    await ensure_agents_seeded()
+    approved = await db.agent_documents.count_documents({"agent_code": "drhouse", "status": "approved"})
+    inactive = await db.agent_documents.count_documents({"agent_code": "drhouse", "status": "inactive"})
+    agent = await db.agents.find_one({"code": "drhouse"}, {"_id": 0})
+    return {
+        "agent_code": "drhouse",
+        "agent": _agent_view(agent) if agent else None,
+        "approved_documents": approved,
+        "inactive_documents": inactive,
+        "source_dir": os.environ.get("DRHOUSE_KNOWLEDGE_SOURCE_DIR") or str(Path.home() / "Downloads" / "DRHOUSERCTEAMNUTRI"),
+    }
+
+@api.post("/agents/drhouse/knowledge/sync")
+async def sync_drhouse_knowledge(user=Depends(require_nutritionist)):
+    try:
+        return await sync_drhouse_documents(
+            db,
+            iso(now_utc()),
+            source_dir=os.environ.get("DRHOUSE_KNOWLEDGE_SOURCE_DIR") or None,
+        )
+    except Exception as exc:
+        logging.exception("Dr. House knowledge sync failed")
+        raise HTTPException(503, {"code": "DRHOUSE_KNOWLEDGE_UNAVAILABLE", "message": str(exc)[:180]})
+
+@api.get("/patients/{pid}/donato/plans")
+async def list_donato_plans(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente nao encontrado")
+    return [d async for d in db.donato_plan_generations.find({"paciente_id": pid, "nutricionista_id": user["id"]}, {"_id": 0}).sort("created_at", -1)]
+
+@api.post("/patients/{pid}/donato/plan/draft", status_code=201)
+async def create_donato_plan_draft(pid: str, payload: DonatoDraftIn, user=Depends(require_nutritionist)):
+    if not DONATO_ENABLED:
+        raise HTTPException(403, "DONATO desativado por feature flag")
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Paciente nao encontrado")
+    settings = get_donato_settings()
+    scaffold = await _build_donato_draft(p, payload)
+    provider = "deterministic_scaffold"
+    provider_meta = {}
+    agent = await db.agents.find_one({"code": "donato"}, {"_id": 0})
+    vector_store_id = settings.vector_store_id or (agent or {}).get("vector_store_id")
+    indexed_docs = await db.agent_documents.count_documents({
+        "agent_code": "donato",
+        "status": "approved",
+        "indexed": True,
+        "vector_store_id": vector_store_id,
+    }) if vector_store_id else 0
+    if settings.openai_api_key and vector_store_id and indexed_docs > 0:
+        try:
+            context = {
+                "paciente": scaffold.get("paciente"),
+                "estrategia_solicitada": payload.model_dump(),
+                "dados_pendentes": scaffold.get("dados_pendentes"),
+                "source_gate": {
+                    "strict": settings.strict_source_gate,
+                    "missing_required_sources": DONATO_MISSING_REQUIRED_SOURCES,
+                },
+            }
+            draft, provider_meta = await generate_donato_plan_with_openai(
+                settings,
+                context,
+                scaffold.get("protocolos_aplicados") or [],
+                vector_store_id,
+            )
+            draft = await _donato_recalculate_evonut(draft)
+            provider = "openai_responses_file_search"
+        except DonatoProviderUnavailable as exc:
+            raise HTTPException(503, {"code": "DONATO_PROVIDER_UNAVAILABLE", "message": str(exc)})
+        except Exception as exc:
+            logging.exception("DONATO draft generation failed")
+            raise HTTPException(503, {"code": "DONATO_GENERATION_FAILED", "message": str(exc)[:180]})
+    else:
+        draft = scaffold
+    now = iso(now_utc())
+    doc = {
+        "id": str(uuid.uuid4()),
+        "paciente_id": pid,
+        "nutricionista_id": user["id"],
+        "agent_code": "donato",
+        "status": draft.get("status") or "draft_ai",
+        "approval_status": "pending",
+        "schema_version": DONATO_SCHEMA_VERSION,
+        "provider": provider,
+        "provider_meta": provider_meta,
+        "model": settings.model,
+        "stages": DONATO_STAGE_LABELS,
+        "draft": draft,
+        "input_snapshot_hash": hashlib.sha256(json.dumps(p, sort_keys=True, default=str).encode("utf-8")).hexdigest(),
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.donato_plan_generations.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+@api.patch("/patients/{pid}/donato/plans/{generation_id}/draft")
+async def update_donato_plan_draft(pid: str, generation_id: str, payload: DonatoDraftPatch, user=Depends(require_nutritionist)):
+    existing = await db.donato_plan_generations.find_one({"id": generation_id, "paciente_id": pid, "nutricionista_id": user["id"]})
+    if not existing:
+        raise HTTPException(404, "Rascunho DONATO nao encontrado")
+    if existing.get("approval_status") == "approved":
+        raise HTTPException(409, "Rascunho ja aprovado")
+    draft = payload.draft or {}
+    await db.donato_plan_generations.update_one({"id": generation_id}, {"$set": {"draft": draft, "status": draft.get("status") or "edited_by_nutritionist", "approval_status": "pending", "updated_at": iso(now_utc())}})
+    return await db.donato_plan_generations.find_one({"id": generation_id}, {"_id": 0})
+
+@api.post("/patients/{pid}/donato/plans/{generation_id}/approve", status_code=201)
+async def approve_donato_plan(pid: str, generation_id: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente nao encontrado")
+    generation = await db.donato_plan_generations.find_one({"id": generation_id, "paciente_id": pid, "nutricionista_id": user["id"]})
+    if not generation:
+        raise HTTPException(404, "Rascunho DONATO nao encontrado")
+    if generation.get("approval_status") == "approved":
+        raise HTTPException(409, "Rascunho ja aprovado")
+    draft = generation.get("draft") or {}
+    if draft.get("status") == "needs_data":
+        raise HTTPException(400, "Rascunho possui dados pendentes e nao pode ser aprovado")
+    latest = await db.planos_manuais.find_one({"paciente_id": pid}, {"versao": 1}, sort=[("versao", -1)])
+    now = iso(now_utc())
+    manual = {
+        "id": str(uuid.uuid4()),
+        "paciente_id": pid,
+        "nutricionista_id": user["id"],
+        **_donato_to_manual_payload(draft),
+        "versao": int((latest or {}).get("versao") or 0) + 1,
+        "origem_donato_generation_id": generation_id,
+        "criado_em": now,
+        "atualizado_em": now,
+    }
+    await db.planos_manuais.insert_one(manual)
+    await _create_plano_snapshot(manual, "approve_donato", user["id"])
+    await db.donato_plan_generations.update_one({"id": generation_id}, {"$set": {"approval_status": "approved", "approved_by": user["id"], "approved_at": now, "plano_manual_id": manual["id"], "updated_at": now}})
+    return await _enrich_plano({k: v for k, v in manual.items() if k != "_id"})
+
+@api.post("/patients/{pid}/donato/plans/{generation_id}/reject")
+async def reject_donato_plan(pid: str, generation_id: str, user=Depends(require_nutritionist)):
+    res = await db.donato_plan_generations.update_one(
+        {"id": generation_id, "paciente_id": pid, "nutricionista_id": user["id"]},
+        {"$set": {"approval_status": "rejected", "status": "rejected", "updated_at": iso(now_utc())}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Rascunho DONATO nao encontrado")
+    return {"ok": True}
+
+# ---------- ConsultÃ³rio (Agente 2, uso interno do nutricionista) ----------
 @api.get("/consultorio/patients")
 async def consultorio_list_patients(user=Depends(require_nutritionist)):
-    """Lightweight list for the patient selector on the consultório page."""
+    """Lightweight list for the patient selector on the consultÃ³rio page."""
     rows = await db.patients.find(
         {"nutricionista_id": user["id"]},
         {"_id": 0, "id": 1, "nome": 1, "email": 1, "status_funil": 1},
@@ -1768,11 +2413,14 @@ async def consultorio_list_patients(user=Depends(require_nutritionist)):
 
 @api.post("/consultorio/chat")
 async def consultorio_chat(payload: ConsultorioChatIn, user=Depends(require_nutritionist)):
+    final_message = _consultorio_message_for_action(payload.action, payload.message)
+    if not final_message:
+        raise HTTPException(400, "Mensagem ou acao do Agente 2 e obrigatoria")
     p = await db.patients.find_one({"id": payload.patient_id, "nutricionista_id": user["id"]}, {"_id": 0})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     session_id = payload.session_id or f"{user['id']}-{payload.patient_id}"
-    # Build patient context (anamnese mais recente, última avaliação, exames recentes)
+    # Build patient context (anamnese mais recente, Ãºltima avaliaÃ§Ã£o, exames recentes)
     anam = await db.anamneses.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
     aval = await db.evaluations.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
     exams = await db.exams.find(
@@ -1795,15 +2443,16 @@ async def consultorio_chat(payload: ConsultorioChatIn, user=Depends(require_nutr
     ).sort("created_at", 1).to_list(50)
     user_msg = {
         "id": str(uuid.uuid4()), "session_id": session_id, "nutricionista_id": user["id"],
-        "patient_id": p["id"], "role": "user", "content": payload.message,
+        "patient_id": p["id"], "role": "user", "content": final_message,
+        "action": payload.action,
         "created_at": iso(now_utc()),
     }
     await db.consultorio_messages.insert_one(user_msg)
     try:
-        ai_text = await ai_consultorio_chat(session_id, payload.message, patient_ctx, history)
+        ai_text = await ai_consultorio_chat(session_id, final_message, patient_ctx, history)
     except Exception as e:
         logging.exception("Consultorio chat failed")
-        raise HTTPException(503, f"Falha no chat (IA indisponível): {str(e)[:140]}")
+        raise HTTPException(503, f"Falha no chat (IA indisponÃ­vel): {str(e)[:140]}")
     ai_msg = {
         "id": str(uuid.uuid4()), "session_id": session_id, "nutricionista_id": user["id"],
         "patient_id": p["id"], "role": "assistant", "content": ai_text,
@@ -1816,27 +2465,27 @@ async def consultorio_chat(payload: ConsultorioChatIn, user=Depends(require_nutr
 async def consultorio_chat_history(patient_id: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": patient_id, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     session_id = f"{user['id']}-{patient_id}"
     msgs = await db.consultorio_messages.find(
         {"session_id": session_id}, {"_id": 0}
     ).sort("created_at", 1).to_list(200)
     return msgs
 
-# ---------- Patient signup (final da pré-consulta) ----------
+# ---------- Patient signup (final da prÃ©-consulta) ----------
 @api.post("/patient/signup", response_model=UserOut)
 async def patient_signup(payload: PatientSignupIn, response: Response):
     p = await db.patients.find_one({"lead_token": payload.token})
     if not p:
-        raise HTTPException(404, "Lead não encontrado")
+        raise HTTPException(404, "Lead nÃ£o encontrado")
     email = (p.get("email") or "").lower().strip()
     if not email:
-        raise HTTPException(400, "E-mail do paciente não cadastrado na pré-consulta")
+        raise HTTPException(400, "E-mail do paciente nÃ£o cadastrado na prÃ©-consulta")
     existing = await db.users.find_one({"email": email})
     if existing:
-        # If patient account already exists, just log them in by checking password? No — for security
+        # If patient account already exists, just log them in by checking password? No â€” for security
         # require the user to log in via /auth/login. Block re-signup.
-        raise HTTPException(400, "Já existe uma conta com este e-mail. Faça login.")
+        raise HTTPException(400, "JÃ¡ existe uma conta com este e-mail. FaÃ§a login.")
     uid = str(uuid.uuid4())
     doc = {
         "id": uid, "email": email, "name": p.get("nome") or email,
@@ -1851,7 +2500,7 @@ async def patient_signup(payload: PatientSignupIn, response: Response):
     set_auth_cookie(response, create_token(uid, email))
     return UserOut(id=uid, email=email, name=doc["name"], role="patient")
 
-# ---------- Área do paciente (Agente 3) ----------
+# ---------- Ãrea do paciente (Agente 3) ----------
 def _patient_summary(p: dict) -> dict:
     keys = ["id", "nome", "email", "telefone", "peso", "altura", "objetivo", "sexo", "data_nascimento"]
     return {k: p.get(k) for k in keys}
@@ -1860,7 +2509,7 @@ def _patient_summary(p: dict) -> dict:
 async def patient_me(user=Depends(require_patient)):
     p = await db.patients.find_one({"id": user.get("patient_id")}, {"_id": 0})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     return {"user": {"id": user["id"], "email": user["email"], "name": user["name"], "role": "patient"},
             "patient": _patient_summary(p)}
 
@@ -1918,7 +2567,7 @@ async def patient_chat(payload: PatientChatIn, user=Depends(require_patient)):
         ai_text = await ai_patient_chat(session_id, payload.message, patient_ctx, history)
     except Exception as e:
         logging.exception("Patient chat failed")
-        raise HTTPException(503, f"Falha no chat (IA indisponível): {str(e)[:140]}")
+        raise HTTPException(503, f"Falha no chat (IA indisponÃ­vel): {str(e)[:140]}")
     ai_msg = {
         "id": str(uuid.uuid4()), "session_id": session_id, "user_id": user["id"],
         "patient_id": pid, "role": "assistant", "content": ai_text,
@@ -1927,7 +2576,7 @@ async def patient_chat(payload: PatientChatIn, user=Depends(require_patient)):
     await db.patient_messages.insert_one(ai_msg)
     return {"reply": ai_text, "session_id": session_id}
 
-# ---------- Nudges (Agente 3 pró-ativo) ----------
+# ---------- Nudges (Agente 3 prÃ³-ativo) ----------
 def _nudge_view(n: dict) -> dict:
     return {
         "id": n.get("id"),
@@ -1975,7 +2624,7 @@ async def _fire_nudge(nudge: dict) -> Optional[str]:
     # Locate the patient's user account (role=patient) to write into THEIR session_id
     pu = await db.users.find_one({"role": "patient", "patient_id": pid}, {"_id": 0})
     if not pu:
-        # Patient hasn't signed up yet — store message anyway tied to patient_id
+        # Patient hasn't signed up yet â€” store message anyway tied to patient_id
         session_id = f"patient-pending-{pid}"
     else:
         session_id = f"patient-{pu['id']}"
@@ -1999,7 +2648,7 @@ async def _fire_nudge(nudge: dict) -> Optional[str]:
 async def list_nudges(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     rows = await db.patient_nudges.find(
         {"patient_id": pid}, {"_id": 0}
     ).sort("created_at", 1).to_list(50)
@@ -2009,7 +2658,7 @@ async def list_nudges(pid: str, user=Depends(require_nutritionist)):
 async def create_nudge(pid: str, payload: NudgeIn, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     nid = str(uuid.uuid4())
     next_run = _compute_next_run(payload.hour, payload.minute, payload.weekdays)
     doc = {
@@ -2026,10 +2675,10 @@ async def create_nudge(pid: str, payload: NudgeIn, user=Depends(require_nutritio
 async def update_nudge(pid: str, nid: str, payload: NudgeUpdate, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     existing = await db.patient_nudges.find_one({"id": nid, "patient_id": pid}, {"_id": 0})
     if not existing:
-        raise HTTPException(404, "Lembrete não encontrado")
+        raise HTTPException(404, "Lembrete nÃ£o encontrado")
     upd = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
     if any(k in upd for k in ("hour", "minute", "weekdays")) or upd.get("active") is True:
         hour = upd.get("hour", existing["hour"])
@@ -2044,23 +2693,23 @@ async def update_nudge(pid: str, nid: str, payload: NudgeUpdate, user=Depends(re
 async def delete_nudge(pid: str, nid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     res = await db.patient_nudges.delete_one({"id": nid, "patient_id": pid})
     if res.deleted_count == 0:
-        raise HTTPException(404, "Lembrete não encontrado")
+        raise HTTPException(404, "Lembrete nÃ£o encontrado")
     return {"ok": True}
 
 @api.post("/patients/{pid}/nudges/{nid}/run-now")
 async def run_nudge_now(pid: str, nid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     nudge = await db.patient_nudges.find_one({"id": nid, "patient_id": pid}, {"_id": 0})
     if not nudge:
-        raise HTTPException(404, "Lembrete não encontrado")
+        raise HTTPException(404, "Lembrete nÃ£o encontrado")
     text = await _fire_nudge(nudge)
     if text is None:
-        raise HTTPException(503, "Falha ao gerar mensagem (IA indisponível)")
+        raise HTTPException(503, "Falha ao gerar mensagem (IA indisponÃ­vel)")
     now = now_utc()
     await db.patient_nudges.update_one(
         {"id": nid},
@@ -2071,7 +2720,7 @@ async def run_nudge_now(pid: str, nid: str, user=Depends(require_nutritionist)):
     )
     return {"ok": True, "message": text}
 
-# ─── DEPOIMENTOS (Testimonials) ──────────────────────────────────────────────
+# â”€â”€â”€ DEPOIMENTOS (Testimonials) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import base64 as _base64
 
@@ -2094,14 +2743,14 @@ async def list_public_testimonials():
 async def get_testimonial_photo(tid: str):
     t = await db.testimonials.find_one({"id": tid}, {"_id": 0, "photo_data_url": 1})
     if not t or not t.get("photo_data_url"):
-        raise HTTPException(404, "Foto não encontrada")
+        raise HTTPException(404, "Foto nÃ£o encontrada")
     data_url = t["photo_data_url"]
     try:
         header, b64 = data_url.split(",", 1)
         content_type = header.split(":")[1].split(";")[0]
         content = _base64.b64decode(b64)
     except Exception:
-        raise HTTPException(400, "Dados de imagem inválidos")
+        raise HTTPException(400, "Dados de imagem invÃ¡lidos")
     return Response(content=content, media_type=content_type)
 
 @api.get("/testimonials")
@@ -2133,7 +2782,7 @@ async def create_testimonial(payload: TestimonialIn, user=Depends(require_nutrit
 async def upload_testimonial_photo(tid: str, file: UploadFile = File(...), user=Depends(require_nutritionist)):
     t = await db.testimonials.find_one({"id": tid, "nutricionista_id": user["id"]})
     if not t:
-        raise HTTPException(404, "Depoimento não encontrado")
+        raise HTTPException(404, "Depoimento nÃ£o encontrado")
     if not (file.content_type or "").startswith("image/"):
         raise HTTPException(400, "Envie uma imagem (JPG, PNG, etc.)")
     contents = await file.read()
@@ -2148,7 +2797,7 @@ async def upload_testimonial_photo(tid: str, file: UploadFile = File(...), user=
 async def update_testimonial(tid: str, payload: dict, user=Depends(require_nutritionist)):
     t = await db.testimonials.find_one({"id": tid, "nutricionista_id": user["id"]})
     if not t:
-        raise HTTPException(404, "Depoimento não encontrado")
+        raise HTTPException(404, "Depoimento nÃ£o encontrado")
     allowed = {"name", "stars", "phrase", "quote", "active", "order"}
     updates = {k: v for k, v in (payload or {}).items() if k in allowed}
     if updates:
@@ -2159,7 +2808,7 @@ async def update_testimonial(tid: str, payload: dict, user=Depends(require_nutri
 async def delete_testimonial(tid: str, user=Depends(require_nutritionist)):
     t = await db.testimonials.find_one({"id": tid, "nutricionista_id": user["id"]})
     if not t:
-        raise HTTPException(404, "Depoimento não encontrado")
+        raise HTTPException(404, "Depoimento nÃ£o encontrado")
     await db.testimonials.delete_one({"id": tid})
     return {"ok": True}
 
@@ -2172,7 +2821,7 @@ async def patient_exams(user=Depends(require_patient)):
     ).sort("created_at", -1).to_list(30)
     return rows
 
-# Background scheduler — checks every 60s for due nudges
+# Background scheduler â€” checks every 60s for due nudges
 _scheduler_task = None
 
 async def nudge_scheduler_loop():
@@ -2208,11 +2857,11 @@ async def nudge_scheduler_loop():
         await asyncio.sleep(60)
 
 # ================================================================
-# MOTOR CLÍNICO COMPLETO — RCTEAM-NUTRI SPEC v2.0
+# MOTOR CLÃNICO COMPLETO â€” RCTEAM-NUTRI SPEC v2.0
 # ================================================================
 import math as _math
 
-# ── TMB protocols ────────────────────────────────────────────────
+# â”€â”€ TMB protocols â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _tmb_by_table(rows, idade, peso):
     for (mn, mx), fn in rows:
@@ -2269,7 +2918,7 @@ PROTOCOLOS_TMB_DESCRICAO = {
     "tinsley_mlg": "Tinsley (por MLG)",
 }
 
-# ── NAF tables ───────────────────────────────────────────────────
+# â”€â”€ NAF tables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _NAF_PADRAO = {
     1: {1: 1.20, 2: 1.56, 3: 1.78, 4: 2.10},
@@ -2284,7 +2933,7 @@ _NAF_EER = {
     2: {1: 1.00, 2: 1.16, 3: 1.31, 4: 1.56},
 }
 _NAF_DESCRICAO = {
-    1: "Sedentário",
+    1: "SedentÃ¡rio",
     2: "Pouco ativo / Atividade leve",
     3: "Ativo / Atividade moderada",
     4: "Muito ativo / Atividade intensa",
@@ -2298,39 +2947,39 @@ _NAF_BY_PROTOCOLO = {
     "eer_iom_2005": _NAF_EER,
 }
 
-# ── Fatores de Injúria ───────────────────────────────────────────
+# â”€â”€ Fatores de InjÃºria â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 FATORES_INJURIA_TABLE = {
-    1:  {"descricao": "Paciente não complicado", "fator": 1.00, "min": 1.00, "max": 1.00},
-    2:  {"descricao": "Câncer", "fator": 1.275, "min": 1.10, "max": 1.45},
+    1:  {"descricao": "Paciente nÃ£o complicado", "fator": 1.00, "min": 1.00, "max": 1.00},
+    2:  {"descricao": "CÃ¢ncer", "fator": 1.275, "min": 1.10, "max": 1.45},
     3:  {"descricao": "Cirurgia eletiva", "fator": 1.05, "min": 1.00, "max": 1.10},
-    4:  {"descricao": "Desnutrição grave", "fator": 1.50, "min": 1.50, "max": 1.50},
-    5:  {"descricao": "Doença cardiopulmonar", "fator": 0.90, "min": 0.80, "max": 1.00},
-    6:  {"descricao": "Doença cardiopulmonar c/ cirurgia", "fator": 1.425, "min": 1.30, "max": 1.55},
+    4:  {"descricao": "DesnutriÃ§Ã£o grave", "fator": 1.50, "min": 1.50, "max": 1.50},
+    5:  {"descricao": "DoenÃ§a cardiopulmonar", "fator": 0.90, "min": 0.80, "max": 1.00},
+    6:  {"descricao": "DoenÃ§a cardiopulmonar c/ cirurgia", "fator": 1.425, "min": 1.30, "max": 1.55},
     7:  {"descricao": "Fratura", "fator": 1.20, "min": 1.20, "max": 1.20},
-    8:  {"descricao": "Fraturas múltiplas", "fator": 1.275, "min": 1.20, "max": 1.35},
-    9:  {"descricao": "Infecção grave", "fator": 1.325, "min": 1.30, "max": 1.35},
-    10: {"descricao": "Insuficiência cardíaca", "fator": 1.40, "min": 1.30, "max": 1.50},
-    11: {"descricao": "Insuficiência hepática", "fator": 1.425, "min": 1.30, "max": 1.55},
-    12: {"descricao": "Insuficiência renal aguda", "fator": 1.30, "min": 1.30, "max": 1.30},
-    13: {"descricao": "Jejum / inanição", "fator": 0.925, "min": 0.85, "max": 1.00},
-    14: {"descricao": "Multitrauma (reabilitação)", "fator": 1.50, "min": 1.50, "max": 1.50},
+    8:  {"descricao": "Fraturas mÃºltiplas", "fator": 1.275, "min": 1.20, "max": 1.35},
+    9:  {"descricao": "InfecÃ§Ã£o grave", "fator": 1.325, "min": 1.30, "max": 1.35},
+    10: {"descricao": "InsuficiÃªncia cardÃ­aca", "fator": 1.40, "min": 1.30, "max": 1.50},
+    11: {"descricao": "InsuficiÃªncia hepÃ¡tica", "fator": 1.425, "min": 1.30, "max": 1.55},
+    12: {"descricao": "InsuficiÃªncia renal aguda", "fator": 1.30, "min": 1.30, "max": 1.30},
+    13: {"descricao": "Jejum / inaniÃ§Ã£o", "fator": 0.925, "min": 0.85, "max": 1.00},
+    14: {"descricao": "Multitrauma (reabilitaÃ§Ã£o)", "fator": 1.50, "min": 1.50, "max": 1.50},
     15: {"descricao": "Multitrauma + sepse", "fator": 1.60, "min": 1.60, "max": 1.60},
     16: {"descricao": "Pequena cirurgia", "fator": 1.20, "min": 1.20, "max": 1.20},
     17: {"descricao": "Pequeno trauma de tecido", "fator": 1.255, "min": 1.14, "max": 1.37},
     18: {"descricao": "Peritonite", "fator": 1.35, "min": 1.20, "max": 1.50},
-    19: {"descricao": "PO cirurgia cardíaca", "fator": 1.35, "min": 1.20, "max": 1.50},
+    19: {"descricao": "PO cirurgia cardÃ­aca", "fator": 1.35, "min": 1.20, "max": 1.50},
     20: {"descricao": "PO cirurgia geral", "fator": 1.25, "min": 1.00, "max": 1.50},
-    21: {"descricao": "Pós-operatório", "fator": 1.10, "min": 1.10, "max": 1.10},
+    21: {"descricao": "PÃ³s-operatÃ³rio", "fator": 1.10, "min": 1.10, "max": 1.10},
     22: {"descricao": "Queimadura 30-50%", "fator": 1.70, "min": 1.70, "max": 1.70},
     23: {"descricao": "Queimadura 50-70%", "fator": 1.80, "min": 1.80, "max": 1.80},
     24: {"descricao": "Queimadura 70-90%", "fator": 2.00, "min": 2.00, "max": 2.00},
-    25: {"descricao": "Queimadura até 20%", "fator": 1.25, "min": 1.00, "max": 1.50},
+    25: {"descricao": "Queimadura atÃ© 20%", "fator": 1.25, "min": 1.00, "max": 1.50},
     26: {"descricao": "Sepse", "fator": 1.45, "min": 1.10, "max": 1.80},
-    27: {"descricao": "Transplante de fígado", "fator": 1.35, "min": 1.20, "max": 1.50},
+    27: {"descricao": "Transplante de fÃ­gado", "fator": 1.35, "min": 1.20, "max": 1.50},
 }
 
-# ── IMC classification by age group ─────────────────────────────
+# â”€â”€ IMC classification by age group â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _classif_imc_adulto(imc: float) -> str:
     if imc < 16.0: return "Magreza Grau III"
@@ -2381,7 +3030,7 @@ def _classif_imc(imc: float, idade: int, gestante: bool = False, ig_semanas: int
         return _classif_imc_idoso(imc, ref_idoso), f"Lipschitz 1994 (SISVAN)" if ref_idoso == "lipschitz_1994" else ref_idoso
     return _classif_imc_adulto(imc), "OMS 1995/1997"
 
-# ── %MG classification by sex ────────────────────────────────────
+# â”€â”€ %MG classification by sex â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _CLASSIF_MG = {
     1: [(8.0,"Muito baixo"),(22.0,"Bom"),(27.0,"Adequado"),(999,"Elevado")],
@@ -2393,7 +3042,7 @@ def _classif_pct_mg(pct_mg: float, sexo_num: int) -> str:
         if pct_mg < lim: return label
     return "Elevado"
 
-# ── Anthropometric indices ────────────────────────────────────────
+# â”€â”€ Anthropometric indices â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _peso_ideal(altura_cm: float) -> tuple:
     h = altura_cm / 100
@@ -2418,7 +3067,7 @@ def _calc_amb_agb(circ_braco_cm: float, dobra_tricipital_mm: float) -> tuple:
     agb = at - amb
     return round(amb, 2), round(agb, 2)
 
-# ── Venta (goal weight planning) ─────────────────────────────────
+# â”€â”€ Venta (goal weight planning) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _calcular_venta(peso_atual: float, peso_desejado: float, prazo_dias: int) -> dict:
     diferenca_kg = round(peso_atual - peso_desejado, 2)
@@ -2430,7 +3079,7 @@ def _calcular_venta(peso_atual: float, peso_desejado: float, prazo_dias: int) ->
         "objetivo": "perder" if diferenca_kg > 0 else "ganhar",
     }
 
-# ── GET with FI and METs ─────────────────────────────────────────
+# â”€â”€ GET with FI and METs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _calc_get(tmb: float, naf: float, fi: float = 1.0) -> float:
     return round(tmb * naf * fi, 2)
@@ -2442,7 +3091,7 @@ def _calc_get_mets(tmb: float, atividades: list, peso_kg: float) -> float:
     total = sum(_calc_kcal_met(a["met"], peso_kg, a["duracao_min"]) for a in atividades)
     return round(tmb + total, 2)
 
-# ── Enhanced body composition (complete) ─────────────────────────
+# â”€â”€ Enhanced body composition (complete) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _sexo_str_to_num(sexo_str: str) -> int:
     return 1 if str(sexo_str).upper().startswith("M") else 2
@@ -2484,6 +3133,7 @@ def calc_bodycomp_v2(data: dict) -> dict:
 
     bio_pct = _coerce_float(bioimp.get("pct_gordura"))
     bio_massa_magra = _coerce_float(bioimp.get("massa_magra_kg"))
+    bio_massa_gorda = _coerce_float(bioimp.get("massa_gorda_kg"))
     if pct_mg is None and bio_pct is not None:
         pct_mg = round(bio_pct, 2)
         pct_mg_class = _classif_pct_mg(pct_mg, sexo_num)
@@ -2494,6 +3144,12 @@ def calc_bodycomp_v2(data: dict) -> dict:
     if massa_magra is None and bio_massa_magra is not None:
         massa_magra = round(bio_massa_magra, 2)
         massa_gorda = round(peso - massa_magra, 2)
+        pct_mg = round((massa_gorda / peso) * 100, 2) if peso else None
+        pct_magra = round(100 - pct_mg, 2) if pct_mg is not None else None
+        pct_mg_class = _classif_pct_mg(pct_mg, sexo_num) if pct_mg is not None else None
+    elif massa_gorda is None and bio_massa_gorda is not None:
+        massa_gorda = round(bio_massa_gorda, 2)
+        massa_magra = round(peso - massa_gorda, 2)
         pct_mg = round((massa_gorda / peso) * 100, 2) if peso else None
         pct_magra = round(100 - pct_mg, 2) if pct_mg is not None else None
         pct_mg_class = _classif_pct_mg(pct_mg, sexo_num) if pct_mg is not None else None
@@ -2569,17 +3225,15 @@ def calc_bodycomp_v2(data: dict) -> dict:
         "ig_semanas": ig_semanas,
         "imc_gestacional_classificacao": _classif_imc_gestacional(imc, ig_semanas) if (gestante and ig_semanas) else None,
         "bioimpedancia": {
-            "pct_gordura": bio_pct,
-            "massa_magra_kg": bio_massa_magra,
-            "agua_corporal_pct": _coerce_float(bioimp.get("agua_corporal_pct")),
-            "gordura_visceral": _coerce_float(bioimp.get("gordura_visceral")),
-            "musculo_esqueletico_pct": _coerce_float(bioimp.get("musculo_esqueletico_pct")),
+            key: _coerce_float(value)
+            for key, value in bioimp.items()
+            if _coerce_float(value) is not None
         } if bioimp else None,
         "composicao_fonte": "dobras" if dobras else ("bioimpedancia" if bioimp else "basico"),
     }
     return result
 
-# ── New Pydantic models ──────────────────────────────────────────
+# â”€â”€ New Pydantic models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TmbPreviewIn(BaseModel):
     protocolo: str = "mifflin_st_jeor"
@@ -2654,6 +3308,8 @@ class EvaluationV2In(BaseModel):
     altura: float
     idade: int
     sexo: str = "F"
+    data_avaliacao: Optional[str] = None
+    retorno: bool = False
     sexo_num: Optional[int] = None
     gestante: bool = False
     ig_semanas: Optional[int] = None
@@ -2662,7 +3318,9 @@ class EvaluationV2In(BaseModel):
     protocolo_tmb: str = "mifflin_st_jeor"
     dobras: Optional[dict] = None
     perimetria: Optional[dict] = None
+    diametros_osseos: Optional[dict] = None
     bioimpedancia: Optional[dict] = None
+    gestacional: Optional[dict] = None
     nivel_atividade: Optional[float] = None
     naf_codigo: Optional[int] = 2
     naf_manual: Optional[float] = None
@@ -2671,7 +3329,7 @@ class EvaluationV2In(BaseModel):
     objetivo: str = "manutencao"
     mlg_kg: Optional[float] = None
 
-# ── Clinical calculation endpoints ──────────────────────────────
+# â”€â”€ Clinical calculation endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api.post("/calculos/tmb")
 async def preview_tmb(payload: TmbPreviewIn, user=Depends(get_current_user)):
@@ -2721,7 +3379,7 @@ async def get_fi_ref(user=Depends(get_current_user)):
 async def get_tmb_ref(user=Depends(get_current_user)):
     return [{"codigo": k, "descricao": v} for k, v in PROTOCOLOS_TMB_DESCRICAO.items()]
 
-# ── Enhanced anamnese endpoints ──────────────────────────────────
+# â”€â”€ Enhanced anamnese endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 SECOES_ANAMNESE = {
     "dados_sociais": ["estado_civil","ocupacao","escolaridade","naturalidade","email","redes_sociais","telefone","celular","endereco","bairro","cidade_uf","cep","motivo","motivo_outro"],
@@ -2754,17 +3412,17 @@ async def migrate_anamneses(user=Depends(require_nutritionist)):
 async def get_anamnese_v2(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
     return anam or {}
 
 @api.patch("/patients/{pid}/anamnese/{secao}")
 async def patch_anamnese_secao(pid: str, secao: str, payload: AnamnseSecaoIn, user=Depends(require_nutritionist)):
     if secao not in SECOES_ANAMNESE:
-        raise HTTPException(400, f"Seção inválida. Válidas: {list(SECOES_ANAMNESE)}")
+        raise HTTPException(400, f"SeÃ§Ã£o invÃ¡lida. VÃ¡lidas: {list(SECOES_ANAMNESE)}")
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     campos = SECOES_ANAMNESE[secao]
     dados = {k: v for k, v in payload.dados.items() if k in campos}
     now_str = iso(now_utc())
@@ -2781,25 +3439,25 @@ async def patch_anamnese_secao(pid: str, secao: str, payload: AnamnseSecaoIn, us
 @api.delete("/patients/{pid}/anamnese/{secao}")
 async def clear_anamnese_secao(pid: str, secao: str, user=Depends(require_nutritionist)):
     if secao not in SECOES_ANAMNESE:
-        raise HTTPException(400, f"Seção inválida. Válidas: {list(SECOES_ANAMNESE)}")
+        raise HTTPException(400, f"SeÃ§Ã£o invÃ¡lida. VÃ¡lidas: {list(SECOES_ANAMNESE)}")
     patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not patient:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     fields = {field: "" for field in SECOES_ANAMNESE[secao]}
     fields["atualizado_em"] = iso(now_utc())
     result = await db.anamneses.update_one({"paciente_id": pid}, {"$set": fields})
     if result.matched_count == 0:
-        raise HTTPException(404, "Anamnese não encontrada")
+        raise HTTPException(404, "Anamnese nÃ£o encontrada")
     return {"ok": True}
 
 @api.post("/patients/{pid}/anamnese/observacoes/{tipo}")
 async def add_observacao_anamnese(pid: str, tipo: str, payload: ObsAddIn, user=Depends(require_nutritionist)):
     tipos_validos = ["dados_iniciais","habitos_vida","patologias","avaliacao_clinica","alimentacao","atividade_fisica","mulheres"]
     if tipo not in tipos_validos:
-        raise HTTPException(400, f"Tipo inválido: {tipo}")
+        raise HTTPException(400, f"Tipo invÃ¡lido: {tipo}")
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     campo = f"obs_{tipo}"
     entrada = {"texto": payload.texto, "data": iso(now_utc())}
     now_str = iso(now_utc())
@@ -2813,16 +3471,16 @@ async def add_observacao_anamnese(pid: str, tipo: str, payload: ObsAddIn, user=D
         await db.anamneses.insert_one(doc)
     return {"ok": True}
 
-# ── Enhanced evaluation endpoint v2 ─────────────────────────────
+# â”€â”€ Enhanced evaluation endpoint v2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api.post("/patients/{pid}/evaluations-v2")
 async def add_evaluation_v2(pid: str, payload: EvaluationV2In, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     count = await db.evaluations.count_documents({"paciente_id": pid})
     if count >= 10:
-        raise HTTPException(400, "Máximo de 10 avaliações por paciente")
+        raise HTTPException(400, "MÃ¡ximo de 10 avaliaÃ§Ãµes por paciente")
     data = payload.model_dump()
     comp = calc_bodycomp_v2(data)
     eid = str(uuid.uuid4())
@@ -2838,10 +3496,10 @@ async def add_evaluation_v2(pid: str, payload: EvaluationV2In, user=Depends(requ
 async def update_evaluation(pid: str, eid: str, payload: EvaluationV2In, user=Depends(require_nutritionist)):
     patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not patient:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     existing = await db.evaluations.find_one({"id": eid, "paciente_id": pid})
     if not existing:
-        raise HTTPException(404, "Avaliação não encontrada")
+        raise HTTPException(404, "AvaliaÃ§Ã£o nÃ£o encontrada")
     data = payload.model_dump()
     composition = calc_bodycomp_v2(data)
     updates = {**data, "composicao": composition, "updated_at": iso(now_utc())}
@@ -2853,22 +3511,22 @@ async def update_evaluation(pid: str, eid: str, payload: EvaluationV2In, user=De
 async def delete_evaluation(pid: str, eid: str, user=Depends(require_nutritionist)):
     patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not patient:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     result = await db.evaluations.delete_one({"id": eid, "paciente_id": pid})
     if result.deleted_count == 0:
-        raise HTTPException(404, "Avaliação não encontrada")
+        raise HTTPException(404, "AvaliaÃ§Ã£o nÃ£o encontrada")
     latest = await db.evaluations.find_one({"paciente_id": pid}, sort=[("created_at", -1)])
     if latest:
         await db.patients.update_one({"id": pid}, {"$set": {"peso": latest.get("peso"), "altura": latest.get("altura"), "ultima_avaliacao": latest.get("created_at")}})
     return {"ok": True}
 
-# ── Recordatório endpoints ───────────────────────────────────────
+# â”€â”€ RecordatÃ³rio endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api.get("/patients/{pid}/recordatorios")
 async def list_recordatorios(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     rows = await db.recordatorios.find({"paciente_id": pid}, {"_id": 0}).sort("data", -1).to_list(100)
     return rows
 
@@ -2912,7 +3570,7 @@ async def create_recordatorio(pid: str, payload: RecordatorioIn, user=Depends(re
     from recordatorio_calc import finalizar_recordatorio
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     rid = str(uuid.uuid4())
     now_str = iso(now_utc())
     rec = await _build_recordatorio_model(payload, pid, user["id"])
@@ -2929,12 +3587,12 @@ async def update_recordatorio(pid: str, rid: str, payload: RecordatorioIn, user=
     from recordatorio_calc import finalizar_recordatorio
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     existing = await db.recordatorios.find_one({"id": rid, "paciente_id": pid})
     if not existing:
-        raise HTTPException(404, "Recordatório não encontrado")
+        raise HTTPException(404, "RecordatÃ³rio nÃ£o encontrado")
     if existing.get("finalizado"):
-        raise HTTPException(409, "Recordatório finalizado não pode ser editado")
+        raise HTTPException(409, "RecordatÃ³rio finalizado nÃ£o pode ser editado")
     rec = await _build_recordatorio_model(payload, pid, user["id"])
     rec = finalizar_recordatorio(rec)
     upd = rec.model_dump()
@@ -2946,13 +3604,13 @@ async def update_recordatorio(pid: str, rid: str, payload: RecordatorioIn, user=
 async def delete_recordatorio(pid: str, rid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     res = await db.recordatorios.delete_one({"id": rid, "paciente_id": pid})
     if res.deleted_count == 0:
-        raise HTTPException(404, "Recordatório não encontrado")
+        raise HTTPException(404, "RecordatÃ³rio nÃ£o encontrado")
     return {"ok": True}
 
-# ── Configurações do nutricionista ───────────────────────────────
+# â”€â”€ ConfiguraÃ§Ãµes do nutricionista â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api.get("/configuracoes")
 async def get_configuracoes(user=Depends(require_nutritionist)):
@@ -2967,61 +3625,61 @@ async def update_configuracoes(payload: ConfigNutricionistaIn, user=Depends(requ
     u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
     return u or {}
 
-# ── TACO Food Database ──────────────────────────────────────────
+# â”€â”€ TACO Food Database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _TACO_SEED = [
     {"id":"taco-1","nome":"Arroz, branco, cozido","categoria":"Cereais e derivados","porcao_padrao_g":125,"medida_caseira":"1 escumadeira cheia","por_100g":{"energia_kcal":128,"proteinas_g":2.5,"carboidratos_g":28.1,"lipidios_g":0.2,"fibras_g":1.6,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.3,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":34,"magnesio_mg":9}},
     {"id":"taco-2","nome":"Arroz, integral, cozido","categoria":"Cereais e derivados","porcao_padrao_g":125,"medida_caseira":"1 escumadeira cheia","por_100g":{"energia_kcal":124,"proteinas_g":2.6,"carboidratos_g":25.8,"lipidios_g":1.0,"fibras_g":2.7,"sodio_mg":1,"calcio_mg":7,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.2,"acidos_graxos_mono_g":0.3,"acidos_graxos_poli_g":0.4,"potassio_mg":60,"magnesio_mg":43}},
-    {"id":"taco-3","nome":"Macarrão, cozido","categoria":"Cereais e derivados","porcao_padrao_g":140,"medida_caseira":"1 prato fundo","por_100g":{"energia_kcal":148,"proteinas_g":5.3,"carboidratos_g":29.9,"lipidios_g":0.9,"fibras_g":1.6,"sodio_mg":1,"calcio_mg":7,"ferro_mg":0.7,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.2,"acidos_graxos_poli_g":0.4,"potassio_mg":24,"magnesio_mg":16}},
-    {"id":"taco-4","nome":"Pão francês","categoria":"Cereais e derivados","porcao_padrao_g":50,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":300,"proteinas_g":8.0,"carboidratos_g":58.6,"lipidios_g":3.1,"fibras_g":2.3,"sodio_mg":588,"calcio_mg":25,"ferro_mg":1.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.7,"acidos_graxos_mono_g":1.4,"acidos_graxos_poli_g":0.7,"potassio_mg":104,"magnesio_mg":24}},
+    {"id":"taco-3","nome":"MacarrÃ£o, cozido","categoria":"Cereais e derivados","porcao_padrao_g":140,"medida_caseira":"1 prato fundo","por_100g":{"energia_kcal":148,"proteinas_g":5.3,"carboidratos_g":29.9,"lipidios_g":0.9,"fibras_g":1.6,"sodio_mg":1,"calcio_mg":7,"ferro_mg":0.7,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.2,"acidos_graxos_poli_g":0.4,"potassio_mg":24,"magnesio_mg":16}},
+    {"id":"taco-4","nome":"PÃ£o francÃªs","categoria":"Cereais e derivados","porcao_padrao_g":50,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":300,"proteinas_g":8.0,"carboidratos_g":58.6,"lipidios_g":3.1,"fibras_g":2.3,"sodio_mg":588,"calcio_mg":25,"ferro_mg":1.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.7,"acidos_graxos_mono_g":1.4,"acidos_graxos_poli_g":0.7,"potassio_mg":104,"magnesio_mg":24}},
     {"id":"taco-5","nome":"Aveia, flocos, crua","categoria":"Cereais e derivados","porcao_padrao_g":40,"medida_caseira":"4 colheres de sopa","por_100g":{"energia_kcal":394,"proteinas_g":13.9,"carboidratos_g":66.6,"lipidios_g":8.5,"fibras_g":9.1,"sodio_mg":4,"calcio_mg":54,"ferro_mg":4.5,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":1.5,"acidos_graxos_mono_g":2.9,"acidos_graxos_poli_g":3.5,"potassio_mg":372,"magnesio_mg":119}},
-    {"id":"taco-6","nome":"Feijão, preto, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":77,"proteinas_g":4.5,"carboidratos_g":14.0,"lipidios_g":0.5,"fibras_g":8.4,"sodio_mg":2,"calcio_mg":29,"ferro_mg":1.5,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":255,"magnesio_mg":43}},
-    {"id":"taco-7","nome":"Feijão, carioca, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":76,"proteinas_g":4.8,"carboidratos_g":13.6,"lipidios_g":0.5,"fibras_g":8.5,"sodio_mg":2,"calcio_mg":27,"ferro_mg":1.8,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":258,"magnesio_mg":37}},
+    {"id":"taco-6","nome":"FeijÃ£o, preto, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":77,"proteinas_g":4.5,"carboidratos_g":14.0,"lipidios_g":0.5,"fibras_g":8.4,"sodio_mg":2,"calcio_mg":29,"ferro_mg":1.5,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":255,"magnesio_mg":43}},
+    {"id":"taco-7","nome":"FeijÃ£o, carioca, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":76,"proteinas_g":4.8,"carboidratos_g":13.6,"lipidios_g":0.5,"fibras_g":8.5,"sodio_mg":2,"calcio_mg":27,"ferro_mg":1.8,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":258,"magnesio_mg":37}},
     {"id":"taco-8","nome":"Lentilha, cozida","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":93,"proteinas_g":7.0,"carboidratos_g":15.9,"lipidios_g":0.5,"fibras_g":5.8,"sodio_mg":2,"calcio_mg":19,"ferro_mg":3.4,"vitamina_c_mg":1.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.2,"potassio_mg":319,"magnesio_mg":35}},
-    {"id":"taco-9","nome":"Grão-de-bico, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":164,"proteinas_g":9.0,"carboidratos_g":27.4,"lipidios_g":2.6,"fibras_g":6.0,"sodio_mg":7,"calcio_mg":57,"ferro_mg":3.2,"vitamina_c_mg":1.3,"colesterol_mg":0,"acidos_graxos_saturados_g":0.3,"acidos_graxos_mono_g":0.6,"acidos_graxos_poli_g":1.2,"potassio_mg":291,"magnesio_mg":48}},
-    {"id":"taco-10","nome":"Frango, peito, grelhado","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 filé médio","por_100g":{"energia_kcal":159,"proteinas_g":32.0,"carboidratos_g":0,"lipidios_g":2.9,"fibras_g":0,"sodio_mg":67,"calcio_mg":5,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":81,"acidos_graxos_saturados_g":0.8,"acidos_graxos_mono_g":1.0,"acidos_graxos_poli_g":0.6,"potassio_mg":355,"magnesio_mg":28}},
+    {"id":"taco-9","nome":"GrÃ£o-de-bico, cozido","categoria":"Leguminosas e derivados","porcao_padrao_g":86,"medida_caseira":"1 concha cheia","por_100g":{"energia_kcal":164,"proteinas_g":9.0,"carboidratos_g":27.4,"lipidios_g":2.6,"fibras_g":6.0,"sodio_mg":7,"calcio_mg":57,"ferro_mg":3.2,"vitamina_c_mg":1.3,"colesterol_mg":0,"acidos_graxos_saturados_g":0.3,"acidos_graxos_mono_g":0.6,"acidos_graxos_poli_g":1.2,"potassio_mg":291,"magnesio_mg":48}},
+    {"id":"taco-10","nome":"Frango, peito, grelhado","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 filÃ© mÃ©dio","por_100g":{"energia_kcal":159,"proteinas_g":32.0,"carboidratos_g":0,"lipidios_g":2.9,"fibras_g":0,"sodio_mg":67,"calcio_mg":5,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":81,"acidos_graxos_saturados_g":0.8,"acidos_graxos_mono_g":1.0,"acidos_graxos_poli_g":0.6,"potassio_mg":355,"magnesio_mg":28}},
     {"id":"taco-11","nome":"Frango, coxa, assada","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 coxa","por_100g":{"energia_kcal":213,"proteinas_g":24.7,"carboidratos_g":0,"lipidios_g":12.4,"fibras_g":0,"sodio_mg":75,"calcio_mg":14,"ferro_mg":0.7,"vitamina_c_mg":0,"colesterol_mg":88,"acidos_graxos_saturados_g":3.4,"acidos_graxos_mono_g":5.0,"acidos_graxos_poli_g":2.7,"potassio_mg":245,"magnesio_mg":22}},
-    {"id":"taco-12","nome":"Carne bovina, patinho, cozido","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 bife médio","por_100g":{"energia_kcal":219,"proteinas_g":30.6,"carboidratos_g":0,"lipidios_g":10.9,"fibras_g":0,"sodio_mg":60,"calcio_mg":10,"ferro_mg":3.4,"vitamina_c_mg":0,"colesterol_mg":104,"acidos_graxos_saturados_g":4.3,"acidos_graxos_mono_g":4.7,"acidos_graxos_poli_g":0.4,"potassio_mg":326,"magnesio_mg":24}},
-    {"id":"taco-13","nome":"Atum, enlatado em água, escorrido","categoria":"Peixes e frutos do mar","porcao_padrao_g":80,"medida_caseira":"1/2 lata","por_100g":{"energia_kcal":130,"proteinas_g":28.8,"carboidratos_g":0,"lipidios_g":1.7,"fibras_g":0,"sodio_mg":347,"calcio_mg":20,"ferro_mg":1.2,"vitamina_c_mg":0,"colesterol_mg":49,"acidos_graxos_saturados_g":0.4,"acidos_graxos_mono_g":0.4,"acidos_graxos_poli_g":0.5,"potassio_mg":265,"magnesio_mg":32}},
-    {"id":"taco-14","nome":"Salmão, assado","categoria":"Peixes e frutos do mar","porcao_padrao_g":100,"medida_caseira":"1 filé médio","por_100g":{"energia_kcal":181,"proteinas_g":25.4,"carboidratos_g":0,"lipidios_g":8.6,"fibras_g":0,"sodio_mg":55,"calcio_mg":14,"ferro_mg":0.6,"vitamina_c_mg":0,"colesterol_mg":71,"acidos_graxos_saturados_g":2.0,"acidos_graxos_mono_g":3.5,"acidos_graxos_poli_g":2.4,"potassio_mg":440,"magnesio_mg":28}},
+    {"id":"taco-12","nome":"Carne bovina, patinho, cozido","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 bife mÃ©dio","por_100g":{"energia_kcal":219,"proteinas_g":30.6,"carboidratos_g":0,"lipidios_g":10.9,"fibras_g":0,"sodio_mg":60,"calcio_mg":10,"ferro_mg":3.4,"vitamina_c_mg":0,"colesterol_mg":104,"acidos_graxos_saturados_g":4.3,"acidos_graxos_mono_g":4.7,"acidos_graxos_poli_g":0.4,"potassio_mg":326,"magnesio_mg":24}},
+    {"id":"taco-13","nome":"Atum, enlatado em Ã¡gua, escorrido","categoria":"Peixes e frutos do mar","porcao_padrao_g":80,"medida_caseira":"1/2 lata","por_100g":{"energia_kcal":130,"proteinas_g":28.8,"carboidratos_g":0,"lipidios_g":1.7,"fibras_g":0,"sodio_mg":347,"calcio_mg":20,"ferro_mg":1.2,"vitamina_c_mg":0,"colesterol_mg":49,"acidos_graxos_saturados_g":0.4,"acidos_graxos_mono_g":0.4,"acidos_graxos_poli_g":0.5,"potassio_mg":265,"magnesio_mg":32}},
+    {"id":"taco-14","nome":"SalmÃ£o, assado","categoria":"Peixes e frutos do mar","porcao_padrao_g":100,"medida_caseira":"1 filÃ© mÃ©dio","por_100g":{"energia_kcal":181,"proteinas_g":25.4,"carboidratos_g":0,"lipidios_g":8.6,"fibras_g":0,"sodio_mg":55,"calcio_mg":14,"ferro_mg":0.6,"vitamina_c_mg":0,"colesterol_mg":71,"acidos_graxos_saturados_g":2.0,"acidos_graxos_mono_g":3.5,"acidos_graxos_poli_g":2.4,"potassio_mg":440,"magnesio_mg":28}},
     {"id":"taco-15","nome":"Ovo de galinha, cozido","categoria":"Ovos e derivados","porcao_padrao_g":50,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":146,"proteinas_g":13.3,"carboidratos_g":0.6,"lipidios_g":9.5,"fibras_g":0,"sodio_mg":164,"calcio_mg":50,"ferro_mg":1.9,"vitamina_c_mg":0,"colesterol_mg":425,"acidos_graxos_saturados_g":2.9,"acidos_graxos_mono_g":3.6,"acidos_graxos_poli_g":1.3,"potassio_mg":140,"magnesio_mg":11}},
     {"id":"taco-16","nome":"Leite integral","categoria":"Leite e derivados","porcao_padrao_g":200,"medida_caseira":"1 copo","por_100g":{"energia_kcal":61,"proteinas_g":3.2,"carboidratos_g":4.5,"lipidios_g":3.2,"fibras_g":0,"sodio_mg":38,"calcio_mg":113,"ferro_mg":0,"vitamina_c_mg":1.0,"colesterol_mg":10,"acidos_graxos_saturados_g":1.9,"acidos_graxos_mono_g":0.8,"acidos_graxos_poli_g":0.1,"potassio_mg":141,"magnesio_mg":10}},
     {"id":"taco-17","nome":"Iogurte, natural, integral","categoria":"Leite e derivados","porcao_padrao_g":170,"medida_caseira":"1 pote","por_100g":{"energia_kcal":66,"proteinas_g":3.7,"carboidratos_g":5.2,"lipidios_g":3.2,"fibras_g":0,"sodio_mg":49,"calcio_mg":121,"ferro_mg":0.1,"vitamina_c_mg":1.0,"colesterol_mg":11,"acidos_graxos_saturados_g":2.0,"acidos_graxos_mono_g":0.9,"acidos_graxos_poli_g":0.1,"potassio_mg":155,"magnesio_mg":11}},
     {"id":"taco-18","nome":"Queijo mussarela","categoria":"Leite e derivados","porcao_padrao_g":30,"medida_caseira":"1 fatia","por_100g":{"energia_kcal":289,"proteinas_g":19.7,"carboidratos_g":2.2,"lipidios_g":22.4,"fibras_g":0,"sodio_mg":547,"calcio_mg":577,"ferro_mg":0.3,"vitamina_c_mg":0,"colesterol_mg":73,"acidos_graxos_saturados_g":13.2,"acidos_graxos_mono_g":6.5,"acidos_graxos_poli_g":0.8,"potassio_mg":100,"magnesio_mg":20}},
     {"id":"taco-19","nome":"Queijo cottage","categoria":"Leite e derivados","porcao_padrao_g":100,"medida_caseira":"2 colheres de sopa","por_100g":{"energia_kcal":98,"proteinas_g":11.1,"carboidratos_g":3.4,"lipidios_g":4.3,"fibras_g":0,"sodio_mg":406,"calcio_mg":98,"ferro_mg":0.1,"vitamina_c_mg":0,"colesterol_mg":15,"acidos_graxos_saturados_g":2.7,"acidos_graxos_mono_g":1.2,"acidos_graxos_poli_g":0.1,"potassio_mg":120,"magnesio_mg":9}},
-    {"id":"taco-20","nome":"Alface, crua","categoria":"Hortaliças e derivados","porcao_padrao_g":35,"medida_caseira":"1 pires","por_100g":{"energia_kcal":11,"proteinas_g":1.3,"carboidratos_g":1.7,"lipidios_g":0.2,"fibras_g":1.8,"sodio_mg":14,"calcio_mg":28,"ferro_mg":0.4,"vitamina_c_mg":18.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":164,"magnesio_mg":12}},
-    {"id":"taco-21","nome":"Tomate, cru","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":15,"proteinas_g":1.1,"carboidratos_g":3.1,"lipidios_g":0.2,"fibras_g":1.2,"sodio_mg":5,"calcio_mg":11,"ferro_mg":0.3,"vitamina_c_mg":21.2,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":222,"magnesio_mg":11}},
-    {"id":"taco-22","nome":"Brócolis, cozido","categoria":"Hortaliças e derivados","porcao_padrao_g":90,"medida_caseira":"1 pires","por_100g":{"energia_kcal":35,"proteinas_g":2.3,"carboidratos_g":6.6,"lipidios_g":0.4,"fibras_g":3.4,"sodio_mg":18,"calcio_mg":57,"ferro_mg":1.1,"vitamina_c_mg":50.6,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":274,"magnesio_mg":22}},
-    {"id":"taco-23","nome":"Espinafre, cru","categoria":"Hortaliças e derivados","porcao_padrao_g":40,"medida_caseira":"1 pires","por_100g":{"energia_kcal":18,"proteinas_g":2.2,"carboidratos_g":2.9,"lipidios_g":0.4,"fibras_g":2.2,"sodio_mg":79,"calcio_mg":84,"ferro_mg":3.0,"vitamina_c_mg":28.1,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":466,"magnesio_mg":68}},
-    {"id":"taco-24","nome":"Cenoura, crua","categoria":"Hortaliças e derivados","porcao_padrao_g":80,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":34,"proteinas_g":0.9,"carboidratos_g":7.7,"lipidios_g":0.2,"fibras_g":3.2,"sodio_mg":72,"calcio_mg":32,"ferro_mg":0.3,"vitamina_c_mg":5.6,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":263,"magnesio_mg":13}},
-    {"id":"taco-25","nome":"Batata, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade pequena","por_100g":{"energia_kcal":52,"proteinas_g":1.2,"carboidratos_g":11.9,"lipidios_g":0.1,"fibras_g":1.5,"sodio_mg":2,"calcio_mg":4,"ferro_mg":0.4,"vitamina_c_mg":10.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":392,"magnesio_mg":20}},
-    {"id":"taco-26","nome":"Batata-doce, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade pequena","por_100g":{"energia_kcal":77,"proteinas_g":0.6,"carboidratos_g":18.4,"lipidios_g":0.1,"fibras_g":2.2,"sodio_mg":37,"calcio_mg":30,"ferro_mg":0.5,"vitamina_c_mg":17.7,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":301,"magnesio_mg":18}},
-    {"id":"taco-27","nome":"Abobrinha, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":90,"medida_caseira":"2 colheres de servir","por_100g":{"energia_kcal":20,"proteinas_g":1.2,"carboidratos_g":4.1,"lipidios_g":0.2,"fibras_g":1.1,"sodio_mg":2,"calcio_mg":21,"ferro_mg":0.4,"vitamina_c_mg":10.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":248,"magnesio_mg":14}},
-    {"id":"taco-28","nome":"Banana, nanica","categoria":"Frutas e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":92,"proteinas_g":1.3,"carboidratos_g":23.8,"lipidios_g":0.1,"fibras_g":1.9,"sodio_mg":1,"calcio_mg":3,"ferro_mg":0.3,"vitamina_c_mg":5.9,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":376,"magnesio_mg":27}},
-    {"id":"taco-29","nome":"Maçã, fuji","categoria":"Frutas e derivados","porcao_padrao_g":150,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":56,"proteinas_g":0.3,"carboidratos_g":15.2,"lipidios_g":0.1,"fibras_g":1.3,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.1,"vitamina_c_mg":2.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":113,"magnesio_mg":6}},
-    {"id":"taco-30","nome":"Laranja, pera","categoria":"Frutas e derivados","porcao_padrao_g":140,"medida_caseira":"1 unidade média","por_100g":{"energia_kcal":37,"proteinas_g":1.0,"carboidratos_g":8.9,"lipidios_g":0.1,"fibras_g":0.8,"sodio_mg":1,"calcio_mg":24,"ferro_mg":0.1,"vitamina_c_mg":53.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":176,"magnesio_mg":11}},
-    {"id":"taco-31","nome":"Mamão, papaia","categoria":"Frutas e derivados","porcao_padrao_g":170,"medida_caseira":"1 fatia média","por_100g":{"energia_kcal":40,"proteinas_g":0.5,"carboidratos_g":10.4,"lipidios_g":0.1,"fibras_g":1.8,"sodio_mg":4,"calcio_mg":20,"ferro_mg":0.1,"vitamina_c_mg":78.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":206,"magnesio_mg":10}},
-    {"id":"taco-32","nome":"Abacate","categoria":"Frutas e derivados","porcao_padrao_g":85,"medida_caseira":"1/2 unidade média","por_100g":{"energia_kcal":96,"proteinas_g":1.2,"carboidratos_g":6.0,"lipidios_g":8.4,"fibras_g":6.3,"sodio_mg":2,"calcio_mg":10,"ferro_mg":0.4,"vitamina_c_mg":12.5,"colesterol_mg":0,"acidos_graxos_saturados_g":1.6,"acidos_graxos_mono_g":5.5,"acidos_graxos_poli_g":1.1,"potassio_mg":485,"magnesio_mg":29}},
-    {"id":"taco-33","nome":"Morango","categoria":"Frutas e derivados","porcao_padrao_g":120,"medida_caseira":"1 xícara","por_100g":{"energia_kcal":30,"proteinas_g":0.8,"carboidratos_g":6.9,"lipidios_g":0.3,"fibras_g":1.7,"sodio_mg":1,"calcio_mg":14,"ferro_mg":0.4,"vitamina_c_mg":58.8,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":168,"magnesio_mg":14}},
-    {"id":"taco-34","nome":"Azeite de oliva extra virgem","categoria":"Óleos e gorduras","porcao_padrao_g":10,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":884,"proteinas_g":0,"carboidratos_g":0,"lipidios_g":100.0,"fibras_g":0,"sodio_mg":2,"calcio_mg":1,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":13.8,"acidos_graxos_mono_g":73.0,"acidos_graxos_poli_g":10.5,"potassio_mg":1,"magnesio_mg":0}},
-    {"id":"taco-35","nome":"Óleo de soja","categoria":"Óleos e gorduras","porcao_padrao_g":10,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":884,"proteinas_g":0,"carboidratos_g":0,"lipidios_g":100.0,"fibras_g":0,"sodio_mg":0,"calcio_mg":0,"ferro_mg":0,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":15.6,"acidos_graxos_mono_g":22.8,"acidos_graxos_poli_g":57.7,"potassio_mg":0,"magnesio_mg":0}},
-    {"id":"taco-36","nome":"Açúcar cristal","categoria":"Açúcares e doces","porcao_padrao_g":5,"medida_caseira":"1 colher de chá","por_100g":{"energia_kcal":387,"proteinas_g":0,"carboidratos_g":99.6,"lipidios_g":0,"fibras_g":0,"sodio_mg":0,"calcio_mg":2,"ferro_mg":0.2,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":3,"magnesio_mg":1}},
-    {"id":"taco-37","nome":"Mel de abelha","categoria":"Açúcares e doces","porcao_padrao_g":15,"medida_caseira":"1 colher de sobremesa","por_100g":{"energia_kcal":309,"proteinas_g":0.3,"carboidratos_g":84.0,"lipidios_g":0,"fibras_g":0.2,"sodio_mg":8,"calcio_mg":5,"ferro_mg":0.3,"vitamina_c_mg":2.4,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":50,"magnesio_mg":2}},
-    {"id":"taco-38","nome":"Café, infusão 5%","categoria":"Bebidas","porcao_padrao_g":200,"medida_caseira":"1 xícara","por_100g":{"energia_kcal":2,"proteinas_g":0.2,"carboidratos_g":0.4,"lipidios_g":0,"fibras_g":0,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":64,"magnesio_mg":8}},
+    {"id":"taco-20","nome":"Alface, crua","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":35,"medida_caseira":"1 pires","por_100g":{"energia_kcal":11,"proteinas_g":1.3,"carboidratos_g":1.7,"lipidios_g":0.2,"fibras_g":1.8,"sodio_mg":14,"calcio_mg":28,"ferro_mg":0.4,"vitamina_c_mg":18.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":164,"magnesio_mg":12}},
+    {"id":"taco-21","nome":"Tomate, cru","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade mÃ©dia","por_100g":{"energia_kcal":15,"proteinas_g":1.1,"carboidratos_g":3.1,"lipidios_g":0.2,"fibras_g":1.2,"sodio_mg":5,"calcio_mg":11,"ferro_mg":0.3,"vitamina_c_mg":21.2,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":222,"magnesio_mg":11}},
+    {"id":"taco-22","nome":"BrÃ³colis, cozido","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":90,"medida_caseira":"1 pires","por_100g":{"energia_kcal":35,"proteinas_g":2.3,"carboidratos_g":6.6,"lipidios_g":0.4,"fibras_g":3.4,"sodio_mg":18,"calcio_mg":57,"ferro_mg":1.1,"vitamina_c_mg":50.6,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":274,"magnesio_mg":22}},
+    {"id":"taco-23","nome":"Espinafre, cru","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":40,"medida_caseira":"1 pires","por_100g":{"energia_kcal":18,"proteinas_g":2.2,"carboidratos_g":2.9,"lipidios_g":0.4,"fibras_g":2.2,"sodio_mg":79,"calcio_mg":84,"ferro_mg":3.0,"vitamina_c_mg":28.1,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":466,"magnesio_mg":68}},
+    {"id":"taco-24","nome":"Cenoura, crua","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":80,"medida_caseira":"1 unidade mÃ©dia","por_100g":{"energia_kcal":34,"proteinas_g":0.9,"carboidratos_g":7.7,"lipidios_g":0.2,"fibras_g":3.2,"sodio_mg":72,"calcio_mg":32,"ferro_mg":0.3,"vitamina_c_mg":5.6,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":263,"magnesio_mg":13}},
+    {"id":"taco-25","nome":"Batata, cozida","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade pequena","por_100g":{"energia_kcal":52,"proteinas_g":1.2,"carboidratos_g":11.9,"lipidios_g":0.1,"fibras_g":1.5,"sodio_mg":2,"calcio_mg":4,"ferro_mg":0.4,"vitamina_c_mg":10.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":392,"magnesio_mg":20}},
+    {"id":"taco-26","nome":"Batata-doce, cozida","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade pequena","por_100g":{"energia_kcal":77,"proteinas_g":0.6,"carboidratos_g":18.4,"lipidios_g":0.1,"fibras_g":2.2,"sodio_mg":37,"calcio_mg":30,"ferro_mg":0.5,"vitamina_c_mg":17.7,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":301,"magnesio_mg":18}},
+    {"id":"taco-27","nome":"Abobrinha, cozida","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":90,"medida_caseira":"2 colheres de servir","por_100g":{"energia_kcal":20,"proteinas_g":1.2,"carboidratos_g":4.1,"lipidios_g":0.2,"fibras_g":1.1,"sodio_mg":2,"calcio_mg":21,"ferro_mg":0.4,"vitamina_c_mg":10.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.1,"potassio_mg":248,"magnesio_mg":14}},
+    {"id":"taco-28","nome":"Banana, nanica","categoria":"Frutas e derivados","porcao_padrao_g":100,"medida_caseira":"1 unidade mÃ©dia","por_100g":{"energia_kcal":92,"proteinas_g":1.3,"carboidratos_g":23.8,"lipidios_g":0.1,"fibras_g":1.9,"sodio_mg":1,"calcio_mg":3,"ferro_mg":0.3,"vitamina_c_mg":5.9,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":376,"magnesio_mg":27}},
+    {"id":"taco-29","nome":"MaÃ§Ã£, fuji","categoria":"Frutas e derivados","porcao_padrao_g":150,"medida_caseira":"1 unidade mÃ©dia","por_100g":{"energia_kcal":56,"proteinas_g":0.3,"carboidratos_g":15.2,"lipidios_g":0.1,"fibras_g":1.3,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.1,"vitamina_c_mg":2.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":113,"magnesio_mg":6}},
+    {"id":"taco-30","nome":"Laranja, pera","categoria":"Frutas e derivados","porcao_padrao_g":140,"medida_caseira":"1 unidade mÃ©dia","por_100g":{"energia_kcal":37,"proteinas_g":1.0,"carboidratos_g":8.9,"lipidios_g":0.1,"fibras_g":0.8,"sodio_mg":1,"calcio_mg":24,"ferro_mg":0.1,"vitamina_c_mg":53.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":176,"magnesio_mg":11}},
+    {"id":"taco-31","nome":"MamÃ£o, papaia","categoria":"Frutas e derivados","porcao_padrao_g":170,"medida_caseira":"1 fatia mÃ©dia","por_100g":{"energia_kcal":40,"proteinas_g":0.5,"carboidratos_g":10.4,"lipidios_g":0.1,"fibras_g":1.8,"sodio_mg":4,"calcio_mg":20,"ferro_mg":0.1,"vitamina_c_mg":78.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":206,"magnesio_mg":10}},
+    {"id":"taco-32","nome":"Abacate","categoria":"Frutas e derivados","porcao_padrao_g":85,"medida_caseira":"1/2 unidade mÃ©dia","por_100g":{"energia_kcal":96,"proteinas_g":1.2,"carboidratos_g":6.0,"lipidios_g":8.4,"fibras_g":6.3,"sodio_mg":2,"calcio_mg":10,"ferro_mg":0.4,"vitamina_c_mg":12.5,"colesterol_mg":0,"acidos_graxos_saturados_g":1.6,"acidos_graxos_mono_g":5.5,"acidos_graxos_poli_g":1.1,"potassio_mg":485,"magnesio_mg":29}},
+    {"id":"taco-33","nome":"Morango","categoria":"Frutas e derivados","porcao_padrao_g":120,"medida_caseira":"1 xÃ­cara","por_100g":{"energia_kcal":30,"proteinas_g":0.8,"carboidratos_g":6.9,"lipidios_g":0.3,"fibras_g":1.7,"sodio_mg":1,"calcio_mg":14,"ferro_mg":0.4,"vitamina_c_mg":58.8,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0.2,"potassio_mg":168,"magnesio_mg":14}},
+    {"id":"taco-34","nome":"Azeite de oliva extra virgem","categoria":"Ã“leos e gorduras","porcao_padrao_g":10,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":884,"proteinas_g":0,"carboidratos_g":0,"lipidios_g":100.0,"fibras_g":0,"sodio_mg":2,"calcio_mg":1,"ferro_mg":0.4,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":13.8,"acidos_graxos_mono_g":73.0,"acidos_graxos_poli_g":10.5,"potassio_mg":1,"magnesio_mg":0}},
+    {"id":"taco-35","nome":"Ã“leo de soja","categoria":"Ã“leos e gorduras","porcao_padrao_g":10,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":884,"proteinas_g":0,"carboidratos_g":0,"lipidios_g":100.0,"fibras_g":0,"sodio_mg":0,"calcio_mg":0,"ferro_mg":0,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":15.6,"acidos_graxos_mono_g":22.8,"acidos_graxos_poli_g":57.7,"potassio_mg":0,"magnesio_mg":0}},
+    {"id":"taco-36","nome":"AÃ§Ãºcar cristal","categoria":"AÃ§Ãºcares e doces","porcao_padrao_g":5,"medida_caseira":"1 colher de chÃ¡","por_100g":{"energia_kcal":387,"proteinas_g":0,"carboidratos_g":99.6,"lipidios_g":0,"fibras_g":0,"sodio_mg":0,"calcio_mg":2,"ferro_mg":0.2,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":3,"magnesio_mg":1}},
+    {"id":"taco-37","nome":"Mel de abelha","categoria":"AÃ§Ãºcares e doces","porcao_padrao_g":15,"medida_caseira":"1 colher de sobremesa","por_100g":{"energia_kcal":309,"proteinas_g":0.3,"carboidratos_g":84.0,"lipidios_g":0,"fibras_g":0.2,"sodio_mg":8,"calcio_mg":5,"ferro_mg":0.3,"vitamina_c_mg":2.4,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":50,"magnesio_mg":2}},
+    {"id":"taco-38","nome":"CafÃ©, infusÃ£o 5%","categoria":"Bebidas","porcao_padrao_g":200,"medida_caseira":"1 xÃ­cara","por_100g":{"energia_kcal":2,"proteinas_g":0.2,"carboidratos_g":0.4,"lipidios_g":0,"fibras_g":0,"sodio_mg":1,"calcio_mg":4,"ferro_mg":0.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":64,"magnesio_mg":8}},
     {"id":"taco-39","nome":"Amendoim, torrado, sem sal","categoria":"Nozes e sementes","porcao_padrao_g":30,"medida_caseira":"1 punhado","por_100g":{"energia_kcal":603,"proteinas_g":27.0,"carboidratos_g":21.4,"lipidios_g":49.5,"fibras_g":8.0,"sodio_mg":382,"calcio_mg":54,"ferro_mg":2.3,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":9.1,"acidos_graxos_mono_g":24.4,"acidos_graxos_poli_g":14.6,"potassio_mg":740,"magnesio_mg":178}},
-    {"id":"taco-40","nome":"Castanha-do-pará","categoria":"Nozes e sementes","porcao_padrao_g":10,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":643,"proteinas_g":14.3,"carboidratos_g":15.1,"lipidios_g":63.5,"fibras_g":7.9,"sodio_mg":3,"calcio_mg":160,"ferro_mg":2.4,"vitamina_c_mg":0.7,"colesterol_mg":0,"acidos_graxos_saturados_g":15.1,"acidos_graxos_mono_g":24.5,"acidos_graxos_poli_g":20.6,"potassio_mg":659,"magnesio_mg":376}},
+    {"id":"taco-40","nome":"Castanha-do-parÃ¡","categoria":"Nozes e sementes","porcao_padrao_g":10,"medida_caseira":"1 unidade","por_100g":{"energia_kcal":643,"proteinas_g":14.3,"carboidratos_g":15.1,"lipidios_g":63.5,"fibras_g":7.9,"sodio_mg":3,"calcio_mg":160,"ferro_mg":2.4,"vitamina_c_mg":0.7,"colesterol_mg":0,"acidos_graxos_saturados_g":15.1,"acidos_graxos_mono_g":24.5,"acidos_graxos_poli_g":20.6,"potassio_mg":659,"magnesio_mg":376}},
     {"id":"taco-41","nome":"Chia, semente","categoria":"Nozes e sementes","porcao_padrao_g":15,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":490,"proteinas_g":16.5,"carboidratos_g":42.1,"lipidios_g":30.7,"fibras_g":34.4,"sodio_mg":16,"calcio_mg":631,"ferro_mg":7.7,"vitamina_c_mg":1.6,"colesterol_mg":0,"acidos_graxos_saturados_g":3.3,"acidos_graxos_mono_g":2.3,"acidos_graxos_poli_g":23.7,"potassio_mg":407,"magnesio_mg":335}},
-    {"id":"taco-42","nome":"Linhaça, semente dourada","categoria":"Nozes e sementes","porcao_padrao_g":15,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":534,"proteinas_g":18.3,"carboidratos_g":28.9,"lipidios_g":42.2,"fibras_g":27.3,"sodio_mg":30,"calcio_mg":255,"ferro_mg":5.7,"vitamina_c_mg":0.6,"colesterol_mg":0,"acidos_graxos_saturados_g":3.7,"acidos_graxos_mono_g":7.5,"acidos_graxos_poli_g":28.7,"potassio_mg":813,"magnesio_mg":392}},
+    {"id":"taco-42","nome":"LinhaÃ§a, semente dourada","categoria":"Nozes e sementes","porcao_padrao_g":15,"medida_caseira":"1 colher de sopa","por_100g":{"energia_kcal":534,"proteinas_g":18.3,"carboidratos_g":28.9,"lipidios_g":42.2,"fibras_g":27.3,"sodio_mg":30,"calcio_mg":255,"ferro_mg":5.7,"vitamina_c_mg":0.6,"colesterol_mg":0,"acidos_graxos_saturados_g":3.7,"acidos_graxos_mono_g":7.5,"acidos_graxos_poli_g":28.7,"potassio_mg":813,"magnesio_mg":392}},
     {"id":"taco-43","nome":"Whey protein, concentrado","categoria":"Suplementos","porcao_padrao_g":30,"medida_caseira":"1 scoop","por_100g":{"energia_kcal":378,"proteinas_g":80.0,"carboidratos_g":8.0,"lipidios_g":4.0,"fibras_g":0,"sodio_mg":200,"calcio_mg":600,"ferro_mg":1.0,"vitamina_c_mg":0,"colesterol_mg":40,"acidos_graxos_saturados_g":2.0,"acidos_graxos_mono_g":1.0,"acidos_graxos_poli_g":0.5,"potassio_mg":450,"magnesio_mg":50}},
     {"id":"taco-44","nome":"Biscoito, cream-cracker","categoria":"Cereais e derivados","porcao_padrao_g":30,"medida_caseira":"6 unidades","por_100g":{"energia_kcal":442,"proteinas_g":9.6,"carboidratos_g":72.1,"lipidios_g":12.1,"fibras_g":3.0,"sodio_mg":769,"calcio_mg":25,"ferro_mg":2.1,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":2.9,"acidos_graxos_mono_g":5.1,"acidos_graxos_poli_g":3.4,"potassio_mg":138,"magnesio_mg":24}},
-    {"id":"taco-45","nome":"Tilápia, filé, grelhado","categoria":"Peixes e frutos do mar","porcao_padrao_g":100,"medida_caseira":"1 filé médio","por_100g":{"energia_kcal":96,"proteinas_g":20.1,"carboidratos_g":0,"lipidios_g":1.7,"fibras_g":0,"sodio_mg":52,"calcio_mg":10,"ferro_mg":0.5,"vitamina_c_mg":0,"colesterol_mg":56,"acidos_graxos_saturados_g":0.6,"acidos_graxos_mono_g":0.5,"acidos_graxos_poli_g":0.5,"potassio_mg":302,"magnesio_mg":27}},
+    {"id":"taco-45","nome":"TilÃ¡pia, filÃ©, grelhado","categoria":"Peixes e frutos do mar","porcao_padrao_g":100,"medida_caseira":"1 filÃ© mÃ©dio","por_100g":{"energia_kcal":96,"proteinas_g":20.1,"carboidratos_g":0,"lipidios_g":1.7,"fibras_g":0,"sodio_mg":52,"calcio_mg":10,"ferro_mg":0.5,"vitamina_c_mg":0,"colesterol_mg":56,"acidos_graxos_saturados_g":0.6,"acidos_graxos_mono_g":0.5,"acidos_graxos_poli_g":0.5,"potassio_mg":302,"magnesio_mg":27}},
     {"id":"taco-46","nome":"Sardinha, assada","categoria":"Peixes e frutos do mar","porcao_padrao_g":40,"medida_caseira":"2 unidades","por_100g":{"energia_kcal":185,"proteinas_g":27.0,"carboidratos_g":0,"lipidios_g":8.4,"fibras_g":0,"sodio_mg":81,"calcio_mg":354,"ferro_mg":2.2,"vitamina_c_mg":0,"colesterol_mg":90,"acidos_graxos_saturados_g":2.4,"acidos_graxos_mono_g":3.1,"acidos_graxos_poli_g":2.1,"potassio_mg":414,"magnesio_mg":39}},
-    {"id":"taco-47","nome":"Carne bovina, contrafilé, grelhado","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 bife médio","por_100g":{"energia_kcal":252,"proteinas_g":26.6,"carboidratos_g":0,"lipidios_g":15.8,"fibras_g":0,"sodio_mg":53,"calcio_mg":7,"ferro_mg":3.0,"vitamina_c_mg":0,"colesterol_mg":86,"acidos_graxos_saturados_g":6.2,"acidos_graxos_mono_g":7.0,"acidos_graxos_poli_g":0.7,"potassio_mg":296,"magnesio_mg":23}},
+    {"id":"taco-47","nome":"Carne bovina, contrafilÃ©, grelhado","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 bife mÃ©dio","por_100g":{"energia_kcal":252,"proteinas_g":26.6,"carboidratos_g":0,"lipidios_g":15.8,"fibras_g":0,"sodio_mg":53,"calcio_mg":7,"ferro_mg":3.0,"vitamina_c_mg":0,"colesterol_mg":86,"acidos_graxos_saturados_g":6.2,"acidos_graxos_mono_g":7.0,"acidos_graxos_poli_g":0.7,"potassio_mg":296,"magnesio_mg":23}},
     {"id":"taco-48","nome":"Peru, peito, cozido","categoria":"Carnes e derivados","porcao_padrao_g":100,"medida_caseira":"1 fatia grossa","por_100g":{"energia_kcal":139,"proteinas_g":28.6,"carboidratos_g":0,"lipidios_g":2.3,"fibras_g":0,"sodio_mg":68,"calcio_mg":11,"ferro_mg":0.7,"vitamina_c_mg":0,"colesterol_mg":76,"acidos_graxos_saturados_g":0.6,"acidos_graxos_mono_g":0.5,"acidos_graxos_poli_g":0.6,"potassio_mg":298,"magnesio_mg":28}},
     {"id":"taco-49","nome":"Leite desnatado","categoria":"Leite e derivados","porcao_padrao_g":200,"medida_caseira":"1 copo","por_100g":{"energia_kcal":35,"proteinas_g":3.4,"carboidratos_g":4.8,"lipidios_g":0.1,"fibras_g":0,"sodio_mg":47,"calcio_mg":123,"ferro_mg":0.1,"vitamina_c_mg":1.0,"colesterol_mg":2,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0,"acidos_graxos_poli_g":0,"potassio_mg":156,"magnesio_mg":12}},
     {"id":"taco-50","nome":"Queijo ricota","categoria":"Leite e derivados","porcao_padrao_g":50,"medida_caseira":"2 colheres de sopa","por_100g":{"energia_kcal":164,"proteinas_g":11.3,"carboidratos_g":2.0,"lipidios_g":12.6,"fibras_g":0,"sodio_mg":104,"calcio_mg":204,"ferro_mg":0.3,"vitamina_c_mg":0,"colesterol_mg":46,"acidos_graxos_saturados_g":7.9,"acidos_graxos_mono_g":3.7,"acidos_graxos_poli_g":0.4,"potassio_mg":125,"magnesio_mg":10}},
-    {"id":"taco-51","nome":"Couve, refogada","categoria":"Hortaliças e derivados","porcao_padrao_g":35,"medida_caseira":"1 colher de servir","por_100g":{"energia_kcal":64,"proteinas_g":3.0,"carboidratos_g":8.7,"lipidios_g":2.4,"fibras_g":3.6,"sodio_mg":44,"calcio_mg":199,"ferro_mg":1.6,"vitamina_c_mg":107.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.3,"acidos_graxos_mono_g":1.6,"acidos_graxos_poli_g":0.3,"potassio_mg":460,"magnesio_mg":46}},
-    {"id":"taco-52","nome":"Mandioca, cozida","categoria":"Hortaliças e derivados","porcao_padrao_g":100,"medida_caseira":"2 pedaços médios","por_100g":{"energia_kcal":125,"proteinas_g":0.6,"carboidratos_g":30.1,"lipidios_g":0.3,"fibras_g":1.9,"sodio_mg":7,"calcio_mg":18,"ferro_mg":0.3,"vitamina_c_mg":19.1,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":271,"magnesio_mg":25}},
+    {"id":"taco-51","nome":"Couve, refogada","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":35,"medida_caseira":"1 colher de servir","por_100g":{"energia_kcal":64,"proteinas_g":3.0,"carboidratos_g":8.7,"lipidios_g":2.4,"fibras_g":3.6,"sodio_mg":44,"calcio_mg":199,"ferro_mg":1.6,"vitamina_c_mg":107.0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.3,"acidos_graxos_mono_g":1.6,"acidos_graxos_poli_g":0.3,"potassio_mg":460,"magnesio_mg":46}},
+    {"id":"taco-52","nome":"Mandioca, cozida","categoria":"HortaliÃ§as e derivados","porcao_padrao_g":100,"medida_caseira":"2 pedaÃ§os mÃ©dios","por_100g":{"energia_kcal":125,"proteinas_g":0.6,"carboidratos_g":30.1,"lipidios_g":0.3,"fibras_g":1.9,"sodio_mg":7,"calcio_mg":18,"ferro_mg":0.3,"vitamina_c_mg":19.1,"colesterol_mg":0,"acidos_graxos_saturados_g":0.1,"acidos_graxos_mono_g":0.1,"acidos_graxos_poli_g":0.1,"potassio_mg":271,"magnesio_mg":25}},
     {"id":"taco-53","nome":"Milho verde, cozido","categoria":"Cereais e derivados","porcao_padrao_g":85,"medida_caseira":"3 colheres de sopa","por_100g":{"energia_kcal":90,"proteinas_g":3.1,"carboidratos_g":18.8,"lipidios_g":1.3,"fibras_g":2.0,"sodio_mg":1,"calcio_mg":2,"ferro_mg":0.8,"vitamina_c_mg":11.5,"colesterol_mg":0,"acidos_graxos_saturados_g":0.2,"acidos_graxos_mono_g":0.4,"acidos_graxos_poli_g":0.6,"potassio_mg":270,"magnesio_mg":37}},
     {"id":"taco-54","nome":"Quinoa, cozida","categoria":"Cereais e derivados","porcao_padrao_g":100,"medida_caseira":"4 colheres de sopa","por_100g":{"energia_kcal":120,"proteinas_g":4.4,"carboidratos_g":21.3,"lipidios_g":1.9,"fibras_g":2.8,"sodio_mg":7,"calcio_mg":17,"ferro_mg":1.5,"vitamina_c_mg":0,"colesterol_mg":0,"acidos_graxos_saturados_g":0.2,"acidos_graxos_mono_g":0.5,"acidos_graxos_poli_g":1.0,"potassio_mg":172,"magnesio_mg":64}},
 ]
@@ -3039,10 +3697,37 @@ class AlimentoCustomIn(BaseModel):
     medida_caseira: str = "100g"
     por_100g: dict
 
+class SuplementoIn(BaseModel):
+    nome: str
+    marca: Optional[str] = None
+    categoria: str = "Suplementos"
+    dose_padrao: Optional[float] = None
+    unidade: str = "g"
+    objetivo: Optional[str] = None
+    composicao: dict = {}
+    observacoes: Optional[str] = None
+
+class FormulaItemIn(BaseModel):
+    tipo: str = "alimento"
+    item_id: Optional[str] = None
+    nome: str
+    quantidade: float = 0
+    unidade: str = "g"
+    nutrientes: dict = {}
+
+class FormulaIn(BaseModel):
+    nome: str
+    categoria: str = "Formula"
+    rendimento: Optional[float] = None
+    unidade_rendimento: str = "porcao"
+    itens: List[FormulaItemIn] = []
+    modo_preparo: Optional[str] = None
+    observacoes: Optional[str] = None
+
 _GRUPOS_ALIMENTARES = [
-    "Carnes e Proteínas",
-    "Cereais, Raízes, Tubérculos e Frutos",
-    "Feijão e Leguminosas",
+    "Carnes e ProteÃ­nas",
+    "Cereais, RaÃ­zes, TubÃ©rculos e Frutos",
+    "FeijÃ£o e Leguminosas",
     "Fibras A",
     "Fibras B",
     "Frutas",
@@ -3051,11 +3736,11 @@ _GRUPOS_ALIMENTARES = [
     "Livres",
     "Oleaginosas e Sementes",
     "Outros",
-    "Pães e Variedades",
+    "PÃ£es e Variedades",
     "Sucos Naturais e Integrais",
     "Vegetais A (livres para o consumo)",
     "Vegetais B",
-    "Óleos e Gorduras",
+    "Ã“leos e Gorduras",
 ]
 
 _MEASURES_WIDE_PATH = ROOT_DIR.parent / "frontend" / "public" / "data" / "cadastro_medidas_caseiras_evonut_wide.csv"
@@ -3066,7 +3751,7 @@ def _normalize_food_lookup(text: str) -> str:
     if not text:
         return ""
     s = unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii")
-    s = s.replace("®", " ").replace("@", " ").replace("/", " ").replace("|", " ")
+    s = s.replace("Â®", " ").replace("@", " ").replace("/", " ").replace("|", " ")
     s = re.sub(r"[^a-zA-Z0-9]+", " ", s).strip().lower()
     return re.sub(r"\s+", " ", s)
 
@@ -3319,14 +4004,14 @@ async def search_alimentos(
 async def get_alimento(aid: str, user=Depends(require_nutritionist)):
     doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Alimento não encontrado")
+        raise HTTPException(404, "Alimento nÃ£o encontrado")
     return doc
 
 @api.get("/alimentos/{aid}/medidas")
 async def get_alimento_medidas(aid: str, user=Depends(require_nutritionist)):
     doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Alimento não encontrado")
+        raise HTTPException(404, "Alimento nÃ£o encontrado")
     measures = [{"nome": "Gramas", "gramas": 1.0, "origem": "sistema"}]
     base_grams = _coerce_float(doc.get("porcao_padrao_g") or doc.get("quantidade_referencia_g"))
     base_measure = doc.get("medida_caseira")
@@ -3348,7 +4033,7 @@ async def get_alimento_medidas(aid: str, user=Depends(require_nutritionist)):
 async def get_alimento_equivalentes(aid: str, user=Depends(require_nutritionist)):
     doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Alimento não encontrado")
+        raise HTTPException(404, "Alimento nÃ£o encontrado")
     entry = _find_equivalente_entry(doc.get("nome", ""))
     if not entry:
         return {"alimento_id": aid, "alimento_nome": doc.get("nome"), "equivalentes": []}
@@ -3386,7 +4071,7 @@ class AlimentoCalcIn(BaseModel):
 async def calcular_porcao(payload: AlimentoCalcIn, user=Depends(require_nutritionist)):
     doc = await db.alimentos.find_one({"id": payload.alimento_id}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Alimento não encontrado")
+        raise HTTPException(404, "Alimento nÃ£o encontrado")
     nutr = _nutrientes_por_porcao(doc, payload.quantidade_g)
     return {
         "alimento_id": payload.alimento_id,
@@ -3416,11 +4101,11 @@ async def create_alimento(payload: AlimentoCustomIn, user=Depends(require_nutrit
 async def update_alimento(aid: str, payload: AlimentoCustomIn, user=Depends(require_nutritionist)):
     existing = await db.alimentos.find_one({"id": aid})
     if not existing:
-        raise HTTPException(404, "Alimento não encontrado")
+        raise HTTPException(404, "Alimento nÃ£o encontrado")
     if not existing.get("nutricionista_id"):
-        raise HTTPException(403, "Alimentos do banco não podem ser editados")
+        raise HTTPException(403, "Alimentos do banco nÃ£o podem ser editados")
     if existing.get("nutricionista_id") != user["id"]:
-        raise HTTPException(403, "Sem permissão")
+        raise HTTPException(403, "Sem permissÃ£o")
     upd = {**payload.model_dump(), "atualizado_em": iso(now_utc())}
     await db.alimentos.update_one({"id": aid}, {"$set": upd})
     return await db.alimentos.find_one({"id": aid}, {"_id": 0})
@@ -3429,15 +4114,190 @@ async def update_alimento(aid: str, payload: AlimentoCustomIn, user=Depends(requ
 async def delete_alimento(aid: str, user=Depends(require_nutritionist)):
     existing = await db.alimentos.find_one({"id": aid})
     if not existing:
-        raise HTTPException(404, "Alimento não encontrado")
+        raise HTTPException(404, "Alimento nÃ£o encontrado")
     if not existing.get("nutricionista_id"):
-        raise HTTPException(403, "Alimentos do banco não podem ser excluídos")
+        raise HTTPException(403, "Alimentos do banco nÃ£o podem ser excluÃ­dos")
     if existing.get("nutricionista_id") != user["id"]:
-        raise HTTPException(403, "Sem permissão")
+        raise HTTPException(403, "Sem permissÃ£o")
     await db.alimentos.delete_one({"id": aid})
     return {"ok": True}
 
-# ── Plano Alimentar Manual ────────────────────────────────────────
+def _csv_num(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    raw = str(value).strip().replace(".", "").replace(",", ".") if "," in str(value) else str(value).strip()
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+def _csv_first(row: dict, *names: str) -> str:
+    lowered = {str(k).strip().lower(): v for k, v in row.items()}
+    for name in names:
+        value = lowered.get(name.lower())
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+@api.get("/suplementos")
+async def list_suplementos(q: str = "", categoria: str = "", page: int = 1, limit: int = 80, user=Depends(require_nutritionist)):
+    filt = {"nutricionista_id": user["id"]}
+    if q:
+        filt["nome"] = {"$regex": q, "$options": "i"}
+    if categoria:
+        filt["categoria"] = {"$regex": categoria, "$options": "i"}
+    skip = max(0, page - 1) * limit
+    total = await db.suplementos.count_documents(filt)
+    items = await db.suplementos.find(filt, {"_id": 0}).sort("nome", 1).skip(skip).limit(limit).to_list(limit)
+    return {"total": total, "page": page, "limit": limit, "items": items}
+
+@api.post("/suplementos", status_code=201)
+async def create_suplemento(payload: SuplementoIn, user=Depends(require_nutritionist)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        **payload.model_dump(),
+        "fonte": "CUSTOM",
+        "nutricionista_id": user["id"],
+        "criado_em": iso(now_utc()),
+        "atualizado_em": iso(now_utc()),
+    }
+    await db.suplementos.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+@api.put("/suplementos/{sid}")
+async def update_suplemento(sid: str, payload: SuplementoIn, user=Depends(require_nutritionist)):
+    existing = await db.suplementos.find_one({"id": sid})
+    if not existing:
+        raise HTTPException(404, "Suplemento nao encontrado")
+    if existing.get("nutricionista_id") != user["id"]:
+        raise HTTPException(403, "Sem permissao")
+    await db.suplementos.update_one({"id": sid}, {"$set": {**payload.model_dump(), "atualizado_em": iso(now_utc())}})
+    return await db.suplementos.find_one({"id": sid}, {"_id": 0})
+
+@api.delete("/suplementos/{sid}")
+async def delete_suplemento(sid: str, user=Depends(require_nutritionist)):
+    res = await db.suplementos.delete_one({"id": sid, "nutricionista_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Suplemento nao encontrado")
+    return {"ok": True}
+
+@api.get("/formulas")
+async def list_formulas(q: str = "", categoria: str = "", page: int = 1, limit: int = 80, user=Depends(require_nutritionist)):
+    filt = {"nutricionista_id": user["id"]}
+    if q:
+        filt["nome"] = {"$regex": q, "$options": "i"}
+    if categoria:
+        filt["categoria"] = {"$regex": categoria, "$options": "i"}
+    skip = max(0, page - 1) * limit
+    total = await db.formulas.count_documents(filt)
+    items = await db.formulas.find(filt, {"_id": 0}).sort("nome", 1).skip(skip).limit(limit).to_list(limit)
+    return {"total": total, "page": page, "limit": limit, "items": items}
+
+@api.post("/formulas", status_code=201)
+async def create_formula(payload: FormulaIn, user=Depends(require_nutritionist)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        **payload.model_dump(),
+        "fonte": "CUSTOM",
+        "nutricionista_id": user["id"],
+        "criado_em": iso(now_utc()),
+        "atualizado_em": iso(now_utc()),
+    }
+    await db.formulas.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+@api.put("/formulas/{fid}")
+async def update_formula(fid: str, payload: FormulaIn, user=Depends(require_nutritionist)):
+    existing = await db.formulas.find_one({"id": fid})
+    if not existing:
+        raise HTTPException(404, "Formula nao encontrada")
+    if existing.get("nutricionista_id") != user["id"]:
+        raise HTTPException(403, "Sem permissao")
+    await db.formulas.update_one({"id": fid}, {"$set": {**payload.model_dump(), "atualizado_em": iso(now_utc())}})
+    return await db.formulas.find_one({"id": fid}, {"_id": 0})
+
+@api.delete("/formulas/{fid}")
+async def delete_formula(fid: str, user=Depends(require_nutritionist)):
+    res = await db.formulas.delete_one({"id": fid, "nutricionista_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Formula nao encontrada")
+    return {"ok": True}
+
+@api.post("/cadastros/importar-csv", status_code=201)
+async def importar_cadastros_csv(tipo: str = Query(...), file: UploadFile = File(...), user=Depends(require_nutritionist)):
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(400, "Envie um CSV autorizado")
+    raw = await file.read()
+    if len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo maior que 8MB")
+    text = raw.decode("utf-8-sig", errors="ignore")
+    rows = list(csv.DictReader(io.StringIO(text), delimiter=";" if text.splitlines()[0].count(";") >= text.splitlines()[0].count(",") else ","))
+    if not rows:
+        raise HTTPException(400, "CSV vazio")
+    created = updated = skipped = 0
+    now = iso(now_utc())
+    for row in rows[:5000]:
+        nome = _csv_first(row, "nome", "alimento", "produto", "suplemento", "formula")
+        if not nome:
+            skipped += 1
+            continue
+        if tipo == "alimentos":
+            por_100g = {
+                "energia_kcal": _csv_num(_csv_first(row, "energia_kcal", "kcal", "calorias")),
+                "proteinas_g": _csv_num(_csv_first(row, "proteinas_g", "proteina_g", "proteina")),
+                "carboidratos_g": _csv_num(_csv_first(row, "carboidratos_g", "carboidrato_g", "carboidrato")),
+                "lipidios_g": _csv_num(_csv_first(row, "lipidios_g", "gorduras_g", "lipideos_g", "gordura")),
+                "fibras_g": _csv_num(_csv_first(row, "fibras_g", "fibra")),
+                "sodio_mg": _csv_num(_csv_first(row, "sodio_mg", "sodio")),
+            }
+            doc = {
+                "nome": nome,
+                "categoria": _csv_first(row, "categoria", "grupo") or "Importados",
+                "fonte": "CUSTOM",
+                "nutricionista_id": user["id"],
+                "porcao_padrao_g": _csv_num(_csv_first(row, "porcao_padrao_g", "porcao_g", "gramas"), 100),
+                "medida_caseira": _csv_first(row, "medida_caseira", "medida") or "100 g",
+                "por_100g": por_100g,
+                "atualizado_em": now,
+            }
+            existing = await db.alimentos.find_one({"nutricionista_id": user["id"], "nome": {"$regex": f"^{re.escape(nome)}$", "$options": "i"}})
+            if existing:
+                await db.alimentos.update_one({"id": existing["id"]}, {"$set": doc})
+                updated += 1
+            else:
+                await db.alimentos.insert_one({"id": str(uuid.uuid4()), **doc, "criado_em": now})
+                created += 1
+        elif tipo == "suplementos":
+            doc = {
+                "nome": nome,
+                "marca": _csv_first(row, "marca"),
+                "categoria": _csv_first(row, "categoria", "grupo") or "Suplementos",
+                "dose_padrao": _csv_num(_csv_first(row, "dose_padrao", "dose", "quantidade")),
+                "unidade": _csv_first(row, "unidade") or "g",
+                "objetivo": _csv_first(row, "objetivo", "indicacao"),
+                "observacoes": _csv_first(row, "observacoes", "obs"),
+                "composicao": {
+                    "energia_kcal": _csv_num(_csv_first(row, "energia_kcal", "kcal")),
+                    "proteinas_g": _csv_num(_csv_first(row, "proteinas_g", "proteina")),
+                    "carboidratos_g": _csv_num(_csv_first(row, "carboidratos_g", "carboidrato")),
+                    "lipidios_g": _csv_num(_csv_first(row, "lipidios_g", "gordura")),
+                },
+                "fonte": "CUSTOM",
+                "nutricionista_id": user["id"],
+                "atualizado_em": now,
+            }
+            existing = await db.suplementos.find_one({"nutricionista_id": user["id"], "nome": {"$regex": f"^{re.escape(nome)}$", "$options": "i"}})
+            if existing:
+                await db.suplementos.update_one({"id": existing["id"]}, {"$set": doc})
+                updated += 1
+            else:
+                await db.suplementos.insert_one({"id": str(uuid.uuid4()), **doc, "criado_em": now})
+                created += 1
+        else:
+            raise HTTPException(400, "Tipo suportado: alimentos ou suplementos")
+    return {"ok": True, "tipo": tipo, "created": created, "updated": updated, "skipped": skipped, "total_rows": len(rows)}
+
+# â”€â”€ Plano Alimentar Manual â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _nutrientes_por_porcao(alimento: dict, quantidade_g: float) -> dict:
     ref_g = alimento.get("quantidade_referencia_g", 100.0) or 100.0
@@ -3484,6 +4344,7 @@ class AlimentoPlanoItem(BaseModel):
     medida_nome: str = "Gramas"
     quantidade: Optional[float] = None
     substituivel: bool = True
+    substitutos: List[dict] = []
     observacao: Optional[str] = None
 
 class RefeicaoPlano(BaseModel):
@@ -3504,10 +4365,12 @@ class OrientacaoNutricionalIn(BaseModel):
 class PlanoManualIn(BaseModel):
     titulo: str = "Plano Alimentar"
     objetivo: Optional[str] = None
+    estrategia: Optional[str] = None
     meta_kcal: Optional[float] = None
     meta_proteina_g: Optional[float] = None
     meta_carboidrato_g: Optional[float] = None
     meta_lipidio_g: Optional[float] = None
+    prescricao_dietetica: Optional[dict] = None
     orientacao_ids: List[str] = []
     refeicoes: List[RefeicaoPlano] = []
     observacoes: Optional[str] = None
@@ -3517,10 +4380,12 @@ class PlanoTemplateIn(BaseModel):
     categoria: Optional[str] = None
     descricao: Optional[str] = None
     objetivo: Optional[str] = None
+    estrategia: Optional[str] = None
     meta_kcal: Optional[float] = None
     meta_proteina_g: Optional[float] = None
     meta_carboidrato_g: Optional[float] = None
     meta_lipidio_g: Optional[float] = None
+    prescricao_dietetica: Optional[dict] = None
     orientacao_ids: List[str] = []
     refeicoes: List[RefeicaoPlano] = []
     observacoes: Optional[str] = None
@@ -3650,7 +4515,7 @@ async def create_orientacao(payload: OrientacaoNutricionalIn, user=Depends(requi
 async def update_orientacao(oid: str, payload: OrientacaoNutricionalIn, user=Depends(require_nutritionist)):
     existing = await db.orientacoes_nutricionais.find_one({"id": oid, "nutricionista_id": user["id"]})
     if not existing:
-        raise HTTPException(404, "Orientação não encontrada")
+        raise HTTPException(404, "OrientaÃ§Ã£o nÃ£o encontrada")
     upd = {
         "titulo": payload.titulo.strip()[:140],
         "categoria": (payload.categoria or "").strip()[:80] or None,
@@ -3667,7 +4532,7 @@ async def update_orientacao(oid: str, payload: OrientacaoNutricionalIn, user=Dep
 async def delete_orientacao(oid: str, user=Depends(require_nutritionist)):
     res = await db.orientacoes_nutricionais.delete_one({"id": oid, "nutricionista_id": user["id"]})
     if res.deleted_count == 0:
-        raise HTTPException(404, "Orientação não encontrada")
+        raise HTTPException(404, "OrientaÃ§Ã£o nÃ£o encontrada")
     await db.planos_manuais.update_many(
         {"nutricionista_id": user["id"], "orientacao_ids": oid},
         {"$pull": {"orientacao_ids": oid}, "$set": {"atualizado_em": iso(now_utc())}},
@@ -3678,7 +4543,7 @@ async def delete_orientacao(oid: str, user=Depends(require_nutritionist)):
 async def list_planos_manuais(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     docs = [d async for d in db.planos_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("criado_em", -1)]
     return [await _enrich_plano(d) for d in docs]
 
@@ -3716,10 +4581,10 @@ async def create_template_from_plano(
 ):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Plano não encontrado")
+        raise HTTPException(404, "Plano nÃ£o encontrado")
     body = payload or {}
     now = iso(now_utc())
     template = {
@@ -3729,10 +4594,12 @@ async def create_template_from_plano(
         "categoria": (str(body.get("categoria") or "").strip() or None),
         "descricao": (str(body.get("descricao") or "").strip() or None),
         "objetivo": doc.get("objetivo"),
+        "estrategia": doc.get("estrategia"),
         "meta_kcal": doc.get("meta_kcal"),
         "meta_proteina_g": doc.get("meta_proteina_g"),
         "meta_carboidrato_g": doc.get("meta_carboidrato_g"),
         "meta_lipidio_g": doc.get("meta_lipidio_g"),
+        "prescricao_dietetica": doc.get("prescricao_dietetica"),
         "orientacao_ids": doc.get("orientacao_ids") or [],
         "refeicoes": doc.get("refeicoes") or [],
         "observacoes": doc.get("observacoes"),
@@ -3747,10 +4614,10 @@ async def create_template_from_plano(
 async def apply_plano_template(pid: str, tid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     template = await db.plano_templates.find_one({"id": tid, "nutricionista_id": user["id"]}, {"_id": 0})
     if not template:
-        raise HTTPException(404, "Template não encontrado")
+        raise HTTPException(404, "Template nÃ£o encontrado")
     latest = await db.planos_manuais.find_one({"paciente_id": pid}, {"versao": 1}, sort=[("versao", -1)])
     now = iso(now_utc())
     doc = {
@@ -3759,10 +4626,12 @@ async def apply_plano_template(pid: str, tid: str, user=Depends(require_nutritio
         "nutricionista_id": user["id"],
         "titulo": template.get("nome") or "Plano Alimentar",
         "objetivo": template.get("objetivo"),
+        "estrategia": template.get("estrategia"),
         "meta_kcal": template.get("meta_kcal"),
         "meta_proteina_g": template.get("meta_proteina_g"),
         "meta_carboidrato_g": template.get("meta_carboidrato_g"),
         "meta_lipidio_g": template.get("meta_lipidio_g"),
+        "prescricao_dietetica": template.get("prescricao_dietetica"),
         "orientacao_ids": template.get("orientacao_ids") or [],
         "refeicoes": template.get("refeicoes") or [],
         "observacoes": template.get("observacoes"),
@@ -3779,7 +4648,7 @@ async def apply_plano_template(pid: str, tid: str, user=Depends(require_nutritio
 async def create_plano_manual(pid: str, payload: PlanoManualIn, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     latest = await db.planos_manuais.find_one({"paciente_id": pid}, {"versao": 1}, sort=[("versao", -1)])
     doc = {
         "id": str(uuid.uuid4()),
@@ -3798,20 +4667,20 @@ async def create_plano_manual(pid: str, payload: PlanoManualIn, user=Depends(req
 async def get_plano_manual(pid: str, pmid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Plano não encontrado")
+        raise HTTPException(404, "Plano nÃ£o encontrado")
     return await _enrich_plano(doc)
 
 @api.put("/patients/{pid}/planos-manuais/{pmid}")
 async def update_plano_manual(pid: str, pmid: str, payload: PlanoManualIn, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid})
     if not doc:
-        raise HTTPException(404, "Plano não encontrado")
+        raise HTTPException(404, "Plano nÃ£o encontrado")
     await _create_plano_snapshot(doc, "update_before", user["id"])
     upd = {**payload.model_dump(), "atualizado_em": iso(now_utc())}
     await db.planos_manuais.update_one({"id": pmid}, {"$set": upd})
@@ -3823,7 +4692,7 @@ async def update_plano_manual(pid: str, pmid: str, payload: PlanoManualIn, user=
 async def list_plano_manual_historico(pid: str, pmid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente nÃ£o encontrado")
+        raise HTTPException(404, "Paciente nÃƒÂ£o encontrado")
     return [d async for d in db.planos_manuais_historico.find(
         {"plano_id": pmid, "paciente_id": pid, "nutricionista_id": user["id"]},
         {"_id": 0}
@@ -3833,15 +4702,15 @@ async def list_plano_manual_historico(pid: str, pmid: str, user=Depends(require_
 async def duplicate_plano_manual(pid: str, pmid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente nÃ£o encontrado")
+        raise HTTPException(404, "Paciente nÃƒÂ£o encontrado")
     doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Plano nÃ£o encontrado")
+        raise HTTPException(404, "Plano nÃƒÂ£o encontrado")
     latest = await db.planos_manuais.find_one({"paciente_id": pid}, {"versao": 1}, sort=[("versao", -1)])
     clone = {
         **doc,
         "id": str(uuid.uuid4()),
-        "titulo": f"{doc.get('titulo', 'Plano')} (cÃ³pia)",
+        "titulo": f"{doc.get('titulo', 'Plano')} (cÃƒÂ³pia)",
         "versao": int((latest or {}).get("versao") or 0) + 1,
         "origem_plano_id": pmid,
         "criado_em": iso(now_utc()),
@@ -3855,13 +4724,13 @@ async def duplicate_plano_manual(pid: str, pmid: str, user=Depends(require_nutri
 async def delete_plano_manual(pid: str, pmid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}, {"_id": 0})
     if doc:
         await _create_plano_snapshot(doc, "delete", user["id"])
     res = await db.planos_manuais.delete_one({"id": pmid, "paciente_id": pid})
     if res.deleted_count == 0:
-        raise HTTPException(404, "Plano não encontrado")
+        raise HTTPException(404, "Plano nÃ£o encontrado")
     return {"ok": True}
 
 def _build_adequacao_payload(plano: Optional[dict], recordatorio: Optional[dict]) -> dict:
@@ -3909,29 +4778,29 @@ def _build_adequacao_payload(plano: Optional[dict], recordatorio: Optional[dict]
 async def get_adequacao_clinica(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     plano_raw = await db.planos_manuais.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("criado_em", -1)])
     plano = await _enrich_plano(plano_raw) if plano_raw else None
     recordatorio = await db.recordatorios.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("data", -1)])
     return _build_adequacao_payload(plano, recordatorio)
 
-# ── Exames laboratoriais — catálogo + entrada manual ─────────────
+# â”€â”€ Exames laboratoriais â€” catÃ¡logo + entrada manual â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _EXAMES_CATALOG = {
     "Hemograma": [
         {"codigo":"HEM-01","nome":"Hemoglobina","unidade":"g/dL","ref_m_min":13.5,"ref_m_max":17.5,"ref_f_min":12.0,"ref_f_max":16.0},
-        {"codigo":"HEM-02","nome":"Hematócrito","unidade":"%","ref_m_min":41,"ref_m_max":53,"ref_f_min":36,"ref_f_max":46},
+        {"codigo":"HEM-02","nome":"HematÃ³crito","unidade":"%","ref_m_min":41,"ref_m_max":53,"ref_f_min":36,"ref_f_max":46},
         {"codigo":"HEM-03","nome":"VCM","unidade":"fL","ref_m_min":80,"ref_m_max":100,"ref_f_min":80,"ref_f_max":100},
         {"codigo":"HEM-04","nome":"HCM","unidade":"pg","ref_m_min":27,"ref_m_max":33,"ref_f_min":27,"ref_f_max":33},
-        {"codigo":"HEM-05","nome":"Leucócitos totais","unidade":"mil/mm³","ref_m_min":4.5,"ref_m_max":11.0,"ref_f_min":4.5,"ref_f_max":11.0},
-        {"codigo":"HEM-06","nome":"Plaquetas","unidade":"mil/mm³","ref_m_min":150,"ref_m_max":400,"ref_f_min":150,"ref_f_max":400},
-        {"codigo":"HEM-07","nome":"Neutrófilos","unidade":"%","ref_m_min":45,"ref_m_max":75,"ref_f_min":45,"ref_f_max":75},
-        {"codigo":"HEM-08","nome":"Linfócitos","unidade":"%","ref_m_min":20,"ref_m_max":40,"ref_f_min":20,"ref_f_max":40},
+        {"codigo":"HEM-05","nome":"LeucÃ³citos totais","unidade":"mil/mmÂ³","ref_m_min":4.5,"ref_m_max":11.0,"ref_f_min":4.5,"ref_f_max":11.0},
+        {"codigo":"HEM-06","nome":"Plaquetas","unidade":"mil/mmÂ³","ref_m_min":150,"ref_m_max":400,"ref_f_min":150,"ref_f_max":400},
+        {"codigo":"HEM-07","nome":"NeutrÃ³filos","unidade":"%","ref_m_min":45,"ref_m_max":75,"ref_f_min":45,"ref_f_max":75},
+        {"codigo":"HEM-08","nome":"LinfÃ³citos","unidade":"%","ref_m_min":20,"ref_m_max":40,"ref_f_min":20,"ref_f_max":40},
     ],
     "Glicemia e Diabetes": [
         {"codigo":"GLI-01","nome":"Glicemia em jejum","unidade":"mg/dL","ref_m_min":70,"ref_m_max":99,"ref_f_min":70,"ref_f_max":99},
         {"codigo":"GLI-02","nome":"Hemoglobina glicada (HbA1c)","unidade":"%","ref_m_min":None,"ref_m_max":5.7,"ref_f_min":None,"ref_f_max":5.7},
-        {"codigo":"GLI-03","nome":"Insulina em jejum","unidade":"µUI/mL","ref_m_min":2.6,"ref_m_max":24.9,"ref_f_min":2.6,"ref_f_max":24.9},
+        {"codigo":"GLI-03","nome":"Insulina em jejum","unidade":"ÂµUI/mL","ref_m_min":2.6,"ref_m_max":24.9,"ref_f_min":2.6,"ref_f_max":24.9},
         {"codigo":"GLI-04","nome":"HOMA-IR","unidade":"","ref_m_min":None,"ref_m_max":2.7,"ref_f_min":None,"ref_f_max":2.7},
     ],
     "Lipidograma": [
@@ -3939,15 +4808,15 @@ _EXAMES_CATALOG = {
         {"codigo":"LIP-02","nome":"LDL","unidade":"mg/dL","ref_m_min":None,"ref_m_max":130,"ref_f_min":None,"ref_f_max":130},
         {"codigo":"LIP-03","nome":"HDL","unidade":"mg/dL","ref_m_min":40,"ref_m_max":None,"ref_f_min":50,"ref_f_max":None},
         {"codigo":"LIP-04","nome":"VLDL","unidade":"mg/dL","ref_m_min":None,"ref_m_max":40,"ref_f_min":None,"ref_f_max":40},
-        {"codigo":"LIP-05","nome":"Triglicerídeos","unidade":"mg/dL","ref_m_min":None,"ref_m_max":150,"ref_f_min":None,"ref_f_max":150},
+        {"codigo":"LIP-05","nome":"TriglicerÃ­deos","unidade":"mg/dL","ref_m_min":None,"ref_m_max":150,"ref_f_min":None,"ref_f_max":150},
     ],
-    "Função Renal": [
-        {"codigo":"REN-01","nome":"Creatinina sérica","unidade":"mg/dL","ref_m_min":0.7,"ref_m_max":1.3,"ref_f_min":0.5,"ref_f_max":1.1},
+    "FunÃ§Ã£o Renal": [
+        {"codigo":"REN-01","nome":"Creatinina sÃ©rica","unidade":"mg/dL","ref_m_min":0.7,"ref_m_max":1.3,"ref_f_min":0.5,"ref_f_max":1.1},
         {"codigo":"REN-02","nome":"Ureia","unidade":"mg/dL","ref_m_min":15,"ref_m_max":45,"ref_f_min":15,"ref_f_max":45},
-        {"codigo":"REN-03","nome":"Ácido úrico","unidade":"mg/dL","ref_m_min":3.5,"ref_m_max":7.2,"ref_f_min":2.6,"ref_f_max":6.0},
-        {"codigo":"REN-04","nome":"TFG (CKD-EPI)","unidade":"mL/min/1,73m²","ref_m_min":60,"ref_m_max":None,"ref_f_min":60,"ref_f_max":None},
+        {"codigo":"REN-03","nome":"Ãcido Ãºrico","unidade":"mg/dL","ref_m_min":3.5,"ref_m_max":7.2,"ref_f_min":2.6,"ref_f_max":6.0},
+        {"codigo":"REN-04","nome":"TFG (CKD-EPI)","unidade":"mL/min/1,73mÂ²","ref_m_min":60,"ref_m_max":None,"ref_f_min":60,"ref_f_max":None},
     ],
-    "Função Hepática": [
+    "FunÃ§Ã£o HepÃ¡tica": [
         {"codigo":"HEP-01","nome":"TGO (AST)","unidade":"U/L","ref_m_min":None,"ref_m_max":40,"ref_f_min":None,"ref_f_max":32},
         {"codigo":"HEP-02","nome":"TGP (ALT)","unidade":"U/L","ref_m_min":None,"ref_m_max":41,"ref_f_min":None,"ref_f_max":31},
         {"codigo":"HEP-03","nome":"GGT","unidade":"U/L","ref_m_min":None,"ref_m_max":61,"ref_f_min":None,"ref_f_max":36},
@@ -3956,45 +4825,45 @@ _EXAMES_CATALOG = {
         {"codigo":"HEP-06","nome":"Albumina","unidade":"g/dL","ref_m_min":3.5,"ref_m_max":5.0,"ref_f_min":3.5,"ref_f_max":5.0},
     ],
     "Tireoide": [
-        {"codigo":"TIR-01","nome":"TSH","unidade":"µUI/mL","ref_m_min":0.4,"ref_m_max":4.0,"ref_f_min":0.4,"ref_f_max":4.0},
+        {"codigo":"TIR-01","nome":"TSH","unidade":"ÂµUI/mL","ref_m_min":0.4,"ref_m_max":4.0,"ref_f_min":0.4,"ref_f_max":4.0},
         {"codigo":"TIR-02","nome":"T4 livre","unidade":"ng/dL","ref_m_min":0.8,"ref_m_max":1.9,"ref_f_min":0.8,"ref_f_max":1.9},
         {"codigo":"TIR-03","nome":"T3 livre","unidade":"pg/mL","ref_m_min":2.3,"ref_m_max":4.2,"ref_f_min":2.3,"ref_f_max":4.2},
         {"codigo":"TIR-04","nome":"Anti-TPO","unidade":"UI/mL","ref_m_min":None,"ref_m_max":35,"ref_f_min":None,"ref_f_max":35},
     ],
     "Minerais e Vitaminas": [
-        {"codigo":"MIN-01","nome":"Ferro sérico","unidade":"µg/dL","ref_m_min":65,"ref_m_max":175,"ref_f_min":50,"ref_f_max":170},
+        {"codigo":"MIN-01","nome":"Ferro sÃ©rico","unidade":"Âµg/dL","ref_m_min":65,"ref_m_max":175,"ref_f_min":50,"ref_f_max":170},
         {"codigo":"MIN-02","nome":"Ferritina","unidade":"ng/mL","ref_m_min":22,"ref_m_max":322,"ref_f_min":10,"ref_f_max":291},
         {"codigo":"MIN-03","nome":"Vitamina B12","unidade":"pg/mL","ref_m_min":200,"ref_m_max":900,"ref_f_min":200,"ref_f_max":900},
         {"codigo":"MIN-04","nome":"Vitamina D (25-OH)","unidade":"ng/mL","ref_m_min":30,"ref_m_max":100,"ref_f_min":30,"ref_f_max":100},
-        {"codigo":"MIN-05","nome":"Zinco","unidade":"µg/dL","ref_m_min":70,"ref_m_max":150,"ref_f_min":70,"ref_f_max":150},
-        {"codigo":"MIN-06","nome":"Magnésio sérico","unidade":"mg/dL","ref_m_min":1.6,"ref_m_max":2.6,"ref_f_min":1.6,"ref_f_max":2.6},
-        {"codigo":"MIN-07","nome":"Cálcio total","unidade":"mg/dL","ref_m_min":8.5,"ref_m_max":10.5,"ref_f_min":8.5,"ref_f_max":10.5},
-        {"codigo":"MIN-08","nome":"Fósforo","unidade":"mg/dL","ref_m_min":2.5,"ref_m_max":4.5,"ref_f_min":2.5,"ref_f_max":4.5},
-        {"codigo":"MIN-09","nome":"Potássio","unidade":"mEq/L","ref_m_min":3.5,"ref_m_max":5.0,"ref_f_min":3.5,"ref_f_max":5.0},
-        {"codigo":"MIN-10","nome":"Sódio","unidade":"mEq/L","ref_m_min":135,"ref_m_max":145,"ref_f_min":135,"ref_f_max":145},
+        {"codigo":"MIN-05","nome":"Zinco","unidade":"Âµg/dL","ref_m_min":70,"ref_m_max":150,"ref_f_min":70,"ref_f_max":150},
+        {"codigo":"MIN-06","nome":"MagnÃ©sio sÃ©rico","unidade":"mg/dL","ref_m_min":1.6,"ref_m_max":2.6,"ref_f_min":1.6,"ref_f_max":2.6},
+        {"codigo":"MIN-07","nome":"CÃ¡lcio total","unidade":"mg/dL","ref_m_min":8.5,"ref_m_max":10.5,"ref_f_min":8.5,"ref_f_max":10.5},
+        {"codigo":"MIN-08","nome":"FÃ³sforo","unidade":"mg/dL","ref_m_min":2.5,"ref_m_max":4.5,"ref_f_min":2.5,"ref_f_max":4.5},
+        {"codigo":"MIN-09","nome":"PotÃ¡ssio","unidade":"mEq/L","ref_m_min":3.5,"ref_m_max":5.0,"ref_f_min":3.5,"ref_f_max":5.0},
+        {"codigo":"MIN-10","nome":"SÃ³dio","unidade":"mEq/L","ref_m_min":135,"ref_m_max":145,"ref_f_min":135,"ref_f_max":145},
     ],
-    "Inflamatórios": [
-        {"codigo":"INF-01","nome":"PCR ultra-sensível","unidade":"mg/L","ref_m_min":None,"ref_m_max":1.0,"ref_f_min":None,"ref_f_max":1.0},
-        {"codigo":"INF-02","nome":"VHS (Eritrossedimentação)","unidade":"mm/h","ref_m_min":None,"ref_m_max":20,"ref_f_min":None,"ref_f_max":30},
-        {"codigo":"INF-03","nome":"Homocisteína","unidade":"µmol/L","ref_m_min":None,"ref_m_max":15,"ref_f_min":None,"ref_f_max":12},
+    "InflamatÃ³rios": [
+        {"codigo":"INF-01","nome":"PCR ultra-sensÃ­vel","unidade":"mg/L","ref_m_min":None,"ref_m_max":1.0,"ref_f_min":None,"ref_f_max":1.0},
+        {"codigo":"INF-02","nome":"VHS (EritrossedimentaÃ§Ã£o)","unidade":"mm/h","ref_m_min":None,"ref_m_max":20,"ref_f_min":None,"ref_f_max":30},
+        {"codigo":"INF-03","nome":"HomocisteÃ­na","unidade":"Âµmol/L","ref_m_min":None,"ref_m_max":15,"ref_f_min":None,"ref_f_max":12},
     ],
-    "Proteínas Séricas": [
-        {"codigo":"PRO-01","nome":"Proteína total","unidade":"g/dL","ref_m_min":6.4,"ref_m_max":8.3,"ref_f_min":6.4,"ref_f_max":8.3},
-        {"codigo":"PRO-02","nome":"Pré-albumina","unidade":"mg/dL","ref_m_min":16,"ref_m_max":35,"ref_f_min":16,"ref_f_max":35},
+    "ProteÃ­nas SÃ©ricas": [
+        {"codigo":"PRO-01","nome":"ProteÃ­na total","unidade":"g/dL","ref_m_min":6.4,"ref_m_max":8.3,"ref_f_min":6.4,"ref_f_max":8.3},
+        {"codigo":"PRO-02","nome":"PrÃ©-albumina","unidade":"mg/dL","ref_m_min":16,"ref_m_max":35,"ref_f_min":16,"ref_f_max":35},
         {"codigo":"PRO-03","nome":"Transferrina","unidade":"mg/dL","ref_m_min":200,"ref_m_max":360,"ref_f_min":200,"ref_f_max":360},
     ],
-    "Hormônios": [
-        {"codigo":"HOR-01","nome":"Insulina pós-prandial (2h)","unidade":"µUI/mL","ref_m_min":None,"ref_m_max":30,"ref_f_min":None,"ref_f_max":30},
-        {"codigo":"HOR-02","nome":"Cortisol (manhã)","unidade":"µg/dL","ref_m_min":5,"ref_m_max":25,"ref_f_min":5,"ref_f_max":25},
-        {"codigo":"HOR-03","nome":"DHEA-S","unidade":"µg/dL","ref_m_min":85,"ref_m_max":690,"ref_f_min":45,"ref_f_max":430},
+    "HormÃ´nios": [
+        {"codigo":"HOR-01","nome":"Insulina pÃ³s-prandial (2h)","unidade":"ÂµUI/mL","ref_m_min":None,"ref_m_max":30,"ref_f_min":None,"ref_f_max":30},
+        {"codigo":"HOR-02","nome":"Cortisol (manhÃ£)","unidade":"Âµg/dL","ref_m_min":5,"ref_m_max":25,"ref_f_min":5,"ref_f_max":25},
+        {"codigo":"HOR-03","nome":"DHEA-S","unidade":"Âµg/dL","ref_m_min":85,"ref_m_max":690,"ref_f_min":45,"ref_f_max":430},
         {"codigo":"HOR-04","nome":"Testosterona total","unidade":"ng/dL","ref_m_min":270,"ref_m_max":1070,"ref_f_min":15,"ref_f_max":70},
         {"codigo":"HOR-05","nome":"Estradiol","unidade":"pg/mL","ref_m_min":None,"ref_m_max":40,"ref_f_min":30,"ref_f_max":400},
         {"codigo":"HOR-06","nome":"FSH","unidade":"mUI/mL","ref_m_min":1.5,"ref_m_max":12.4,"ref_f_min":2.5,"ref_f_max":10.2},
         {"codigo":"HOR-07","nome":"LH","unidade":"mUI/mL","ref_m_min":1.7,"ref_m_max":8.6,"ref_f_min":2.4,"ref_f_max":12.6},
     ],
     "Urina": [
-        {"codigo":"URI-01","nome":"Creatinina urinária","unidade":"mg/24h","ref_m_min":800,"ref_m_max":2000,"ref_f_min":600,"ref_f_max":1800},
-        {"codigo":"URI-02","nome":"Microalbuminúria","unidade":"mg/24h","ref_m_min":None,"ref_m_max":30,"ref_f_min":None,"ref_f_max":30},
+        {"codigo":"URI-01","nome":"Creatinina urinÃ¡ria","unidade":"mg/24h","ref_m_min":800,"ref_m_max":2000,"ref_f_min":600,"ref_f_max":1800},
+        {"codigo":"URI-02","nome":"MicroalbuminÃºria","unidade":"mg/24h","ref_m_min":None,"ref_m_max":30,"ref_f_min":None,"ref_f_max":30},
     ],
 }
 
@@ -4106,6 +4975,29 @@ def _build_exames_longitudinal_payload(lotes: list[dict]) -> dict:
     }
     return {"resumo": resumo, "timeline": timeline, "grupos": grupos_out, "marcadores": markers_out}
 
+async def ai_drhouse_manual_exam_analysis(patient: dict, lotes: list[dict], longitudinal: dict, pergunta: Optional[str] = None) -> str:
+    await ensure_agents_seeded()
+    system_prompt = await build_agent_system_prompt("drhouse")
+    patient_ctx = {
+        "nome": patient.get("nome"),
+        "sexo": patient.get("sexo"),
+        "peso": patient.get("peso"),
+        "altura": patient.get("altura"),
+        "data_nascimento": patient.get("data_nascimento"),
+        "objetivo": patient.get("objetivo"),
+    }
+    prompt = (
+        "Analise os exames laboratoriais manuais deste paciente para suporte ao nutricionista.\n\n"
+        f"PACIENTE:\n{json.dumps(patient_ctx, ensure_ascii=False, default=str)}\n\n"
+        f"LOTES DE EXAMES:\n{json.dumps(lotes, ensure_ascii=False, default=str)[:16000]}\n\n"
+        f"COMPARATIVO LONGITUDINAL:\n{json.dumps(longitudinal, ensure_ascii=False, default=str)[:10000]}\n\n"
+        f"PERGUNTA DO NUTRICIONISTA:\n{pergunta or 'Gere analise integrada completa.'}\n\n"
+        "Responda em Markdown curto com: resumo executivo, marcadores alterados, correlacoes prioritarias, "
+        "hipoteses nutricionais provaveis, dados faltantes e pontos para discutir/encaminhar. "
+        "Nao diagnostique, nao prescreva medicamentos e nao defina doses."
+    )
+    return await _ai_chat(f"drhouse-manual-{patient.get('id')}-{uuid.uuid4().hex[:8]}", system_prompt, prompt)
+
 class ExameManualItem(BaseModel):
     codigo: str
     nome: str
@@ -4117,6 +5009,10 @@ class ExamesManualIn(BaseModel):
     data_coleta: str
     laboratorio: Optional[str] = None
     exames: List[ExameManualItem]
+
+class DrHouseExamAnalysisIn(BaseModel):
+    lote_id: Optional[str] = None
+    pergunta: Optional[str] = None
 
 @api.get("/referencias/exames-catalog")
 async def get_exames_catalog(q: str = "", grupo: str = "", user=Depends(require_nutritionist)):
@@ -4138,7 +5034,7 @@ async def get_exames_grupos(user=Depends(require_nutritionist)):
 async def create_exame_manual(pid: str, payload: ExamesManualIn, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     sexo = p.get("sexo", "M")
     catalog_flat = {item["codigo"]: item for itens in _EXAMES_CATALOG.values() for item in itens}
     exames_enrich = []
@@ -4163,10 +5059,10 @@ async def create_exame_manual(pid: str, payload: ExamesManualIn, user=Depends(re
 async def update_exame_manual(pid: str, emid: str, payload: ExamesManualIn, user=Depends(require_nutritionist)):
     patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not patient:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     existing = await db.exames_manuais.find_one({"id": emid, "paciente_id": pid})
     if not existing:
-        raise HTTPException(404, "Registro de exames não encontrado")
+        raise HTTPException(404, "Registro de exames nÃ£o encontrado")
     catalog_flat = {item["codigo"]: item for items in _EXAMES_CATALOG.values() for item in items}
     exams = []
     for exam in payload.exames:
@@ -4186,50 +5082,91 @@ async def update_exame_manual(pid: str, emid: str, payload: ExamesManualIn, user
 async def list_exames_manuais(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     return [d async for d in db.exames_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("data_coleta", -1)]
 
 @api.get("/patients/{pid}/exames-manuais/longitudinal")
 async def get_exames_manuais_longitudinal(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     lotes = [d async for d in db.exames_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("data_coleta", 1)]
     return _build_exames_longitudinal_payload(lotes)
+
+@api.post("/patients/{pid}/exames-manuais/drhouse-analysis", status_code=201)
+async def create_drhouse_exames_analysis(pid: str, payload: DrHouseExamAnalysisIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Paciente nao encontrado")
+    query = {"paciente_id": pid}
+    if payload.lote_id:
+        query["id"] = payload.lote_id
+    lotes = [d async for d in db.exames_manuais.find(query, {"_id": 0}).sort("data_coleta", 1)]
+    if not lotes:
+        raise HTTPException(400, "Nenhum exame manual encontrado para analisar")
+    longitudinal = _build_exames_longitudinal_payload(lotes)
+    try:
+        content = await ai_drhouse_manual_exam_analysis(p, lotes, longitudinal, payload.pergunta)
+    except Exception as exc:
+        logging.exception("Dr. House manual exam analysis failed")
+        raise HTTPException(503, f"Falha no Dr. House: {str(exc)[:140]}")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "paciente_id": pid,
+        "nutricionista_id": user["id"],
+        "agent_code": "drhouse",
+        "lote_id": payload.lote_id,
+        "pergunta": payload.pergunta,
+        "content": content,
+        "resumo_longitudinal": longitudinal.get("resumo"),
+        "created_at": iso(now_utc()),
+    }
+    await db.drhouse_exam_analyses.insert_one(doc)
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+@api.get("/patients/{pid}/exames-manuais/drhouse-analysis")
+async def list_drhouse_exames_analysis(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente nao encontrado")
+    return await db.drhouse_exam_analyses.find(
+        {"paciente_id": pid, "nutricionista_id": user["id"]},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(20)
 
 @api.delete("/patients/{pid}/exames-manuais/{emid}")
 async def delete_exame_manual(pid: str, emid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     res = await db.exames_manuais.delete_one({"id": emid, "paciente_id": pid})
     if res.deleted_count == 0:
-        raise HTTPException(404, "Exame não encontrado")
+        raise HTTPException(404, "Exame nÃ£o encontrado")
     return {"ok": True}
 
-# ── Configurações — logo upload ──────────────────────────────────
+# â”€â”€ ConfiguraÃ§Ãµes â€” logo upload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api.post("/configuracoes/logo")
 async def upload_logo(file: UploadFile = File(...), user=Depends(require_nutritionist)):
     if file.content_type not in ("image/png", "image/jpeg", "image/jpg", "image/webp"):
-        raise HTTPException(400, "Formato inválido. Use PNG, JPEG ou WebP.")
+        raise HTTPException(400, "Formato invÃ¡lido. Use PNG, JPEG ou WebP.")
     data = await file.read()
     if len(data) > 2 * 1024 * 1024:
-        raise HTTPException(400, "Arquivo muito grande. Máximo 2MB.")
+        raise HTTPException(400, "Arquivo muito grande. MÃ¡ximo 2MB.")
     import base64
     b64 = base64.b64encode(data).decode("utf-8")
     logo_uri = f"data:{file.content_type};base64,{b64}"
     await db.users.update_one({"id": user["id"]}, {"$set": {"logo_url": logo_uri, "atualizado_em": iso(now_utc())}})
     return {"logo_url": logo_uri}
 
-# ── PDF Reports ──────────────────────────────────────────────────
+# â”€â”€ PDF Reports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _pdf_html_base(titulo: str, paciente: dict, nutri: dict, conteudo: str) -> str:
     logo = nutri.get("logo_url", "")
     logo_html = f'<img src="{logo}" style="height:56px;object-fit:contain;" />' if logo else ""
     nome_nutri = nutri.get("name", "") or nutri.get("nome", "")
     crn = nutri.get("crn", "")
-    crn_txt = f" — CRN: {crn}" if crn else ""
+    crn_txt = f" â€” CRN: {crn}" if crn else ""
     return f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8"/>
 <style>
@@ -4255,7 +5192,7 @@ tr:nth-child(even) td{{background:#faf9ff;}}
   <div>{logo_html}</div>
 </div>
 {conteudo}
-<div class="ftr">RCTEAM — Sistema Nutricional {datetime.now(TZ_BR).strftime('%Y')} | {nome_nutri} {('CRN ' + crn) if crn else ''}</div>
+<div class="ftr">RCTEAM â€” Sistema Nutricional {datetime.now(TZ_BR).strftime('%Y')} | {nome_nutri} {('CRN ' + crn) if crn else ''}</div>
 </body></html>"""
 
 def _pdf_escape(value: Any) -> str:
@@ -4268,7 +5205,7 @@ def _pdf_nl2br(value: Any) -> str:
 
 def _pdf_fmt_num(value: Any, unit: str = "") -> str:
     if value in (None, ""):
-        return "—"
+        return "â€”"
     num = _coerce_float(value)
     if num is None:
         return f"{_pdf_escape(value)}{unit}"
@@ -4347,22 +5284,22 @@ tr:nth-child(even) td{{background:#f8fafc;}}
 async def relatorio_antropometria(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
     evals = [e async for e in db.evaluations.find({"paciente_id": pid}, {"_id": 0}).sort("data", -1).limit(5)]
     rows = ""
     for e in evals:
         r = e.get("resultado", {})
         rows += (f"<tr><td>{str(e.get('data',''))[:10]}</td>"
-                 f"<td>{r.get('peso_kg', e.get('peso','—'))}</td>"
-                 f"<td>{r.get('imc','—')}</td><td>{r.get('imc_classificacao','—')}</td>"
-                 f"<td>{r.get('pct_gordura','—')}</td>"
-                 f"<td>{r.get('tmb','—')}</td><td>{r.get('get_kcal','—')}</td></tr>")
-    conteudo = f"""<div class="sec"><div class="sec-title">Avaliações Antropométricas (últimas 5)</div>
-      <table><tr><th>Data</th><th>Peso (kg)</th><th>IMC</th><th>Classificação</th><th>%Gordura</th><th>TMB (kcal)</th><th>GET (kcal)</th></tr>
-      {rows or '<tr><td colspan="7" style="text-align:center;color:#888">Nenhuma avaliação registrada</td></tr>'}
+                 f"<td>{r.get('peso_kg', e.get('peso','â€”'))}</td>"
+                 f"<td>{r.get('imc','â€”')}</td><td>{r.get('imc_classificacao','â€”')}</td>"
+                 f"<td>{r.get('pct_gordura','â€”')}</td>"
+                 f"<td>{r.get('tmb','â€”')}</td><td>{r.get('get_kcal','â€”')}</td></tr>")
+    conteudo = f"""<div class="sec"><div class="sec-title">AvaliaÃ§Ãµes AntropomÃ©tricas (Ãºltimas 5)</div>
+      <table><tr><th>Data</th><th>Peso (kg)</th><th>IMC</th><th>ClassificaÃ§Ã£o</th><th>%Gordura</th><th>TMB (kcal)</th><th>GET (kcal)</th></tr>
+      {rows or '<tr><td colspan="7" style="text-align:center;color:#888">Nenhuma avaliaÃ§Ã£o registrada</td></tr>'}
       </table></div>"""
-    html = _pdf_html_base("Relatório Antropométrico", p, nutri, conteudo)
+    html = _pdf_html_base("RelatÃ³rio AntropomÃ©trico", p, nutri, conteudo)
     pdf_bytes = HTML(string=html).write_pdf()
     fname = f"antropometria_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
@@ -4372,32 +5309,32 @@ async def relatorio_antropometria(pid: str, user=Depends(require_nutritionist)):
 async def relatorio_anamnese(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
     anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
     secoes_html = ""
     label_map = {
         "dados_sociais": "Dados Sociais",
-        "habitos_vida": "Hábitos de Vida",
-        "patologias": "Patologias e Histórico",
-        "avaliacao_clinica": "Avaliação Clínica",
-        "alimentacao": "Alimentação",
-        "atividade_fisica": "Atividade Física",
+        "habitos_vida": "HÃ¡bitos de Vida",
+        "patologias": "Patologias e HistÃ³rico",
+        "avaliacao_clinica": "AvaliaÃ§Ã£o ClÃ­nica",
+        "alimentacao": "AlimentaÃ§Ã£o",
+        "atividade_fisica": "Atividade FÃ­sica",
         "mulheres": "Dados Femininos",
     }
     if anam:
         for sec_key, sec_label in label_map.items():
             fields = SECOES_ANAMNESE.get(sec_key, [])
             rows = "".join(
-                f"<tr><td><strong>{f.replace('_',' ').title()}</strong></td><td>{anam.get(f) or '—'}</td></tr>"
+                f"<tr><td><strong>{f.replace('_',' ').title()}</strong></td><td>{anam.get(f) or 'â€”'}</td></tr>"
                 for f in fields if anam.get(f)
             )
             if rows:
                 secoes_html += f'<div class="sec"><div class="sec-title">{sec_label}</div><table>{rows}</table></div>'
         for obs_key, obs_label in [
-            ("observacoes_medicas","Observações Médicas"),
-            ("observacoes_nutricionais","Observações Nutricionais"),
-            ("observacoes_evolucao","Observações de Evolução"),
+            ("observacoes_medicas","ObservaÃ§Ãµes MÃ©dicas"),
+            ("observacoes_nutricionais","ObservaÃ§Ãµes Nutricionais"),
+            ("observacoes_evolucao","ObservaÃ§Ãµes de EvoluÃ§Ã£o"),
         ]:
             obs_list = anam.get(obs_key, [])
             if obs_list:
@@ -4406,10 +5343,10 @@ async def relatorio_anamnese(pid: str, user=Depends(require_nutritionist)):
                     for o in obs_list
                 )
                 secoes_html += (f'<div class="sec"><div class="sec-title">{obs_label}</div>'
-                                f'<table><tr><th>Data</th><th>Observação</th></tr>{items}</table></div>')
+                                f'<table><tr><th>Data</th><th>ObservaÃ§Ã£o</th></tr>{items}</table></div>')
     if not secoes_html:
-        secoes_html = '<p style="color:#888">Anamnese não preenchida.</p>'
-    html = _pdf_html_base("Relatório de Anamnese", p, nutri, secoes_html)
+        secoes_html = '<p style="color:#888">Anamnese nÃ£o preenchida.</p>'
+    html = _pdf_html_base("RelatÃ³rio de Anamnese", p, nutri, secoes_html)
     pdf_bytes = HTML(string=html).write_pdf()
     fname = f"anamnese_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
@@ -4419,7 +5356,7 @@ async def relatorio_anamnese(pid: str, user=Depends(require_nutritionist)):
 async def relatorio_exames(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
     lotes = [e async for e in db.exames_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("data_coleta", -1)]
     conteudo = ""
@@ -4431,23 +5368,23 @@ async def relatorio_exames(pid: str, user=Depends(require_nutritionist)):
             rows = ""
             for e in lote.get("exames", []):
                 cls = e.get("classificacao", "sem_referencia")
-                badge = f'<span class="{cls}">{cls.upper()}</span>' if cls != "sem_referencia" else "—"
+                badge = f'<span class="{cls}">{cls.upper()}</span>' if cls != "sem_referencia" else "â€”"
                 ref = e.get("referencia", {})
                 mn = ref.get("ref_f_min") if sexo == "F" else ref.get("ref_m_min")
                 mx = ref.get("ref_f_max") if sexo == "F" else ref.get("ref_m_max")
                 parts = []
-                if mn is not None: parts.append(f"≥{mn}")
-                if mx is not None: parts.append(f"≤{mx}")
-                ref_txt = " — ".join(parts) if parts else "—"
+                if mn is not None: parts.append(f"â‰¥{mn}")
+                if mx is not None: parts.append(f"â‰¤{mx}")
+                ref_txt = " â€” ".join(parts) if parts else "â€”"
                 rows += (f"<tr><td>{e.get('grupo','')}</td><td>{e.get('nome','')}</td>"
                          f"<td><strong>{e.get('valor','')}</strong> {e.get('unidade','')}</td>"
                          f"<td>{ref_txt}</td><td>{badge}</td></tr>")
-            lab = lote.get("laboratorio") or "Laboratório não informado"
+            lab = lote.get("laboratorio") or "LaboratÃ³rio nÃ£o informado"
             conteudo += (f'<div class="sec"><div class="sec-title">Exames de '
-                         f'{str(lote.get("data_coleta",""))[:10]} — {lab}</div>'
+                         f'{str(lote.get("data_coleta",""))[:10]} â€” {lab}</div>'
                          f'<table><tr><th>Grupo</th><th>Exame</th><th>Resultado</th>'
-                         f'<th>Referência</th><th>Status</th></tr>{rows}</table></div>')
-    html = _pdf_html_base("Relatório de Exames Laboratoriais", p, nutri, conteudo)
+                         f'<th>ReferÃªncia</th><th>Status</th></tr>{rows}</table></div>')
+    html = _pdf_html_base("RelatÃ³rio de Exames Laboratoriais", p, nutri, conteudo)
     pdf_bytes = HTML(string=html).write_pdf()
     fname = f"exames_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
@@ -4457,11 +5394,11 @@ async def relatorio_exames(pid: str, user=Depends(require_nutritionist)):
 async def relatorio_plano_alimentar(pid: str, pmid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
-        raise HTTPException(404, "Paciente não encontrado")
+        raise HTTPException(404, "Paciente nÃ£o encontrado")
     nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
     doc = await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Plano não encontrado")
+        raise HTTPException(404, "Plano nÃ£o encontrado")
     plano = await _enrich_plano(doc)
     badges = []
     if plano.get("versao") is not None:
@@ -4511,7 +5448,7 @@ async def relatorio_plano_alimentar(pid: str, pmid: str, user=Depends(require_nu
             + f"<p style='white-space:pre-wrap;margin-bottom:0;margin-top:8px'>{_pdf_nl2br(o.get('conteudo',''))}</p></div>"
             for o in plano.get("orientacoes", [])
         )
-        conteudo_v2 += f'<div class="sec"><div class="sec-title">OrientaÃ§Ãµes Nutricionais</div>{cards}</div>'
+        conteudo_v2 += f'<div class="sec"><div class="sec-title">OrientaÃƒÂ§ÃƒÂµes Nutricionais</div>{cards}</div>'
     for ref in plano.get("refeicoes", []):
         rows = ""
         for a in ref.get("alimentos", []):
@@ -4538,17 +5475,17 @@ async def relatorio_plano_alimentar(pid: str, pmid: str, user=Depends(require_nu
                         f'<table><tr><th>Alimento</th><th>Qtd</th><th>Energia (kcal)</th>'
                         f'<th>Prot (g)</th><th>CHO (g)</th><th>Lip (g)</th></tr>'
                         f'{rows}<tr class="tot-row">'
-                        f'<td colspan="2">Total da refeiÃ§Ã£o</td>'
+                        f'<td colspan="2">Total da refeiÃƒÂ§ÃƒÂ£o</td>'
                         f'<td class="right">{_pdf_fmt_num(tot.get("energia_kcal",0))}</td><td class="right">{_pdf_fmt_num(tot.get("proteinas_g",0))}</td>'
                         f'<td class="right">{_pdf_fmt_num(tot.get("carboidratos_g",0))}</td><td class="right">{_pdf_fmt_num(tot.get("lipidios_g",0))}</td>'
                         f'</tr></table></div>')
     conteudo_v2 += (f'<div class="sec"><div class="sec-title">Total do Dia</div>'
-                    f'<table><tr><th>Energia</th><th>ProteÃ­nas</th><th>Carboidratos</th><th>LipÃ­dios</th><th>Fibras</th><th>SÃ³dio</th></tr>'
+                    f'<table><tr><th>Energia</th><th>ProteÃƒÂ­nas</th><th>Carboidratos</th><th>LipÃƒÂ­dios</th><th>Fibras</th><th>SÃƒÂ³dio</th></tr>'
                     f'<tr><td>{_pdf_fmt_num(totais_dia.get("energia_kcal",0), " kcal")}</td><td>{_pdf_fmt_num(totais_dia.get("proteinas_g",0), " g")}</td>'
                     f'<td>{_pdf_fmt_num(totais_dia.get("carboidratos_g",0), " g")}</td><td>{_pdf_fmt_num(totais_dia.get("lipidios_g",0), " g")}</td>'
                     f'<td>{_pdf_fmt_num(totais_dia.get("fibras_g",0), " g")}</td><td>{_pdf_fmt_num(totais_dia.get("sodio_mg",0), " mg")}</td></tr></table></div>')
     if plano.get("observacoes"):
-        conteudo_v2 += f'<div class="sec"><div class="sec-title">ObservaÃ§Ãµes</div><div class="card"><p style="white-space:pre-wrap;margin:0">{_pdf_nl2br(plano["observacoes"])}</p></div></div>'
+        conteudo_v2 += f'<div class="sec"><div class="sec-title">ObservaÃƒÂ§ÃƒÂµes</div><div class="card"><p style="white-space:pre-wrap;margin:0">{_pdf_nl2br(plano["observacoes"])}</p></div></div>'
     html = _pdf_html_base_plano(plano.get("titulo", "Plano Alimentar"), p, nutri, conteudo_v2)
     pdf_bytes = HTML(string=html).write_pdf()
     fname = f"plano_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
@@ -4557,19 +5494,19 @@ async def relatorio_plano_alimentar(pid: str, pmid: str, user=Depends(require_nu
     conteudo = ""
     metas = []
     if plano.get("meta_kcal"): metas.append(f"Energia: {plano['meta_kcal']} kcal")
-    if plano.get("meta_proteina_g"): metas.append(f"Proteínas: {plano['meta_proteina_g']}g")
+    if plano.get("meta_proteina_g"): metas.append(f"ProteÃ­nas: {plano['meta_proteina_g']}g")
     if plano.get("meta_carboidrato_g"): metas.append(f"Carboidratos: {plano['meta_carboidrato_g']}g")
-    if plano.get("meta_lipidio_g"): metas.append(f"Lipídios: {plano['meta_lipidio_g']}g")
+    if plano.get("meta_lipidio_g"): metas.append(f"LipÃ­dios: {plano['meta_lipidio_g']}g")
     if metas:
         conteudo += f'<div class="sec"><div class="sec-title">Metas Nutricionais</div><p>{" &nbsp;|&nbsp; ".join(metas)}</p></div>'
     if plano.get("orientacoes"):
         cards = "".join(
-            f"<div style='margin-bottom:14px'><strong>{o.get('titulo','Orientação')}</strong>"
+            f"<div style='margin-bottom:14px'><strong>{o.get('titulo','OrientaÃ§Ã£o')}</strong>"
             + (f"<div style='color:#666;font-size:11px;margin-top:2px'>{o.get('categoria')}</div>" if o.get("categoria") else "")
             + f"<p style='white-space:pre-wrap'>{o.get('conteudo','')}</p></div>"
             for o in plano.get("orientacoes", [])
         )
-        conteudo += f'<div class="sec"><div class="sec-title">Orientações Nutricionais</div>{cards}</div>'
+        conteudo += f'<div class="sec"><div class="sec-title">OrientaÃ§Ãµes Nutricionais</div>{cards}</div>'
     for ref in plano.get("refeicoes", []):
         rows = ""
         for a in ref.get("alimentos", []):
@@ -4578,23 +5515,23 @@ async def relatorio_plano_alimentar(pid: str, pmid: str, user=Depends(require_nu
                      f"<td>{n.get('energia_kcal',0)}</td><td>{n.get('proteinas_g',0)}</td>"
                      f"<td>{n.get('carboidratos_g',0)}</td><td>{n.get('lipidios_g',0)}</td></tr>")
         tot = ref.get("totais", {})
-        horario = f" — {ref.get('horario')}" if ref.get("horario") else ""
+        horario = f" â€” {ref.get('horario')}" if ref.get("horario") else ""
         conteudo += (f'<div class="sec"><div class="sec-title">{ref.get("nome","")}{horario}</div>'
                      f'<table><tr><th>Alimento</th><th>Qtd</th><th>Energia (kcal)</th>'
                      f'<th>Prot (g)</th><th>CHO (g)</th><th>Lip (g)</th></tr>'
                      f'{rows}<tr style="font-weight:bold;background:#ede9fe">'
-                     f'<td colspan="2">Total da refeição</td>'
+                     f'<td colspan="2">Total da refeiÃ§Ã£o</td>'
                      f'<td>{tot.get("energia_kcal",0)}</td><td>{tot.get("proteinas_g",0)}</td>'
                      f'<td>{tot.get("carboidratos_g",0)}</td><td>{tot.get("lipidios_g",0)}</td>'
                      f'</tr></table></div>')
     t = plano.get("totais_dia", {})
     conteudo += (f'<div class="sec"><div class="sec-title">Total do Dia</div>'
-                 f'<table><tr><th>Energia</th><th>Proteínas</th><th>Carboidratos</th><th>Lipídios</th><th>Fibras</th><th>Sódio</th></tr>'
+                 f'<table><tr><th>Energia</th><th>ProteÃ­nas</th><th>Carboidratos</th><th>LipÃ­dios</th><th>Fibras</th><th>SÃ³dio</th></tr>'
                  f'<tr><td>{t.get("energia_kcal",0)} kcal</td><td>{t.get("proteinas_g",0)}g</td>'
                  f'<td>{t.get("carboidratos_g",0)}g</td><td>{t.get("lipidios_g",0)}g</td>'
                  f'<td>{t.get("fibras_g",0)}g</td><td>{t.get("sodio_mg",0)}mg</td></tr></table></div>')
     if plano.get("observacoes"):
-        conteudo += f'<div class="sec"><div class="sec-title">Observações</div><p>{plano["observacoes"]}</p></div>'
+        conteudo += f'<div class="sec"><div class="sec-title">ObservaÃ§Ãµes</div><p>{plano["observacoes"]}</p></div>'
     html = _pdf_html_base(plano.get("titulo","Plano Alimentar"), p, nutri, conteudo)
     pdf_bytes = HTML(string=html).write_pdf()
     fname = f"plano_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
@@ -4602,7 +5539,7 @@ async def relatorio_plano_alimentar(pid: str, pmid: str, user=Depends(require_nu
                     headers={"Content-Disposition": f"attachment; filename={fname}"})
 
 # ================================================================
-# END MOTOR CLÍNICO
+# END MOTOR CLÃNICO
 # ================================================================
 
 # ---------- Bootstrap ----------
@@ -4628,7 +5565,12 @@ async def startup():
     await db.alimentos.create_index([("fonte", 1), ("categoria", 1)])
     await db.alimentos.create_index("grupo")
     await db.alimentos.create_index([("nome", "text")])
+    await db.suplementos.create_index([("nutricionista_id", 1), ("nome", 1)])
+    await db.formulas.create_index([("nutricionista_id", 1), ("nome", 1)])
     await db.planos_manuais.create_index([("paciente_id", 1), ("criado_em", -1)])
+    await db.donato_plan_generations.create_index([("paciente_id", 1), ("created_at", -1)])
+    await db.donato_plan_generations.create_index([("nutricionista_id", 1), ("approval_status", 1)])
+    await db.drhouse_exam_analyses.create_index([("paciente_id", 1), ("created_at", -1)])
     await db.orientacoes_nutricionais.create_index([("nutricionista_id", 1), ("atualizado_em", -1)])
     await db.orientacoes_nutricionais.create_index([("nutricionista_id", 1), ("categoria", 1)])
     await db.planos_manuais_historico.create_index([("plano_id", 1), ("criado_em", -1)])
@@ -4700,3 +5642,4 @@ app.add_middleware(
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.getLogger("httpx").setLevel(logging.WARNING)

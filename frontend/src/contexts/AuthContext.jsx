@@ -3,6 +3,11 @@ import { api, formatApiError } from "../lib/evo-api";
 
 const AuthContext = createContext(null);
 
+const authErrorMessage = (e) => {
+  if (!e.response) return "API indisponível. Verifique se o backend está rodando em http://localhost:8001.";
+  return formatApiError(e.response?.data?.detail) || e.message;
+};
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null); // null=loading, false=unauth, object=auth
   const [error, setError] = useState("");
@@ -21,7 +26,7 @@ export function AuthProvider({ children }) {
       setUser(data);
       return data;
     } catch (e) {
-      setError(formatApiError(e.response?.data?.detail) || e.message);
+      setError(authErrorMessage(e));
       return null;
     }
   };
@@ -33,7 +38,7 @@ export function AuthProvider({ children }) {
       setUser(data);
       return data;
     } catch (e) {
-      setError(formatApiError(e.response?.data?.detail) || e.message);
+      setError(authErrorMessage(e));
       return null;
     }
   };
@@ -45,7 +50,7 @@ export function AuthProvider({ children }) {
       setUser(data);
       return data;
     } catch (e) {
-      setError(formatApiError(e.response?.data?.detail) || e.message);
+      setError(authErrorMessage(e));
       return null;
     }
   };
