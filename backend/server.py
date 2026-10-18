@@ -93,6 +93,10 @@ JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '').strip()
 GEMINI_KEY = os.environ.get('GEMINI_KEY', '').strip()
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '').strip()
+# Cada modelo da Groq tem cota propria por minuto; o segundo entra quando o primeiro esgota.
+GROQ_MODELS = [m.strip() for m in (os.environ.get('GROQ_MODELS') or os.environ.get('GROQ_MODEL') or 'openai/gpt-oss-120b,qwen/qwen3.8-27b').split(',') if m.strip()]
+GROQ_TOKENS_PER_REQUEST = int(os.environ.get('GROQ_TOKENS_PER_REQUEST', '7500'))  # plano gratuito: 8000 tokens/min
 
 # ---------- Helpers ----------
 def now_utc():
@@ -735,8 +739,11 @@ async def ai_patient_proactive(session_id: str, instruction: str, patient_contex
     )
     return await _ai_chat(f"proactive-{session_id}-{uuid.uuid4().hex[:6]}", sys_prompt, prompt)
 
-_GEMINI_MODEL = "gemini-2.5-flash"
-_GEMINI_RETRY_DELAYS = [1, 2, 4, 8]  # backoff em segundos (4 tentativas)
+# Cada modelo tem cota diaria propria: quando um esgota (ou sai do ar), o proximo da lista assume.
+_GEMINI_MODELS = [m.strip() for m in (os.environ.get("GEMINI_MODELS") or "gemini-3.5-flash,gemini-3.7-flash,gemini-3.8-flash,gemini-flash-latest,gemini-3.5-flash-lite,gemini-3.1-flash-lite").split(",") if m.strip()]
+_GEMINI_MODEL = _GEMINI_MODELS[0]
+_GEMINI_RETRY_DELAYS = [2, 5]  # sobrecarga momentanea: 2 novas tentativas por modelo antes de trocar
+_gemini_last_model = {"name": _GEMINI_MODEL}
 
 async def _gemini_chat(
     messages: list,
@@ -769,35 +776,134 @@ async def _gemini_chat(
     }
     if response_mime_type:
         body["generationConfig"]["responseMimeType"] = response_mime_type
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent"
-    last_err = "desconhecido"
+    falhas = []
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for attempt, delay in enumerate([0] + _GEMINI_RETRY_DELAYS):
-            if delay:
-                await asyncio.sleep(delay)
-            try:
-                resp = await client.post(url, params={"key": api_key}, json=body)
-                data = resp.json()
+        for model in _GEMINI_MODELS:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            last_err = "desconhecido"
+            for attempt, delay in enumerate([0] + _GEMINI_RETRY_DELAYS):
+                if delay:
+                    await asyncio.sleep(delay)
+                try:
+                    resp = await client.post(url, params={"key": api_key}, json=body)
+                    data = resp.json()
+                except httpx.TimeoutException:
+                    last_err = "Timeout"
+                    logging.warning("Gemini %s timeout na tentativa %s", model, attempt + 1)
+                    continue
                 if resp.is_success:
                     candidate = (data.get("candidates") or [{}])[0]
                     parts = (candidate.get("content") or {}).get("parts") or []
                     text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
                     if candidate.get("finishReason") == "MAX_TOKENS":
-                        logging.warning("Gemini cortou a resposta por limite de tokens (%s chars)", len(text))
+                        logging.warning("Gemini %s cortou a resposta por limite de tokens (%s chars)", model, len(text))
                     if text:
+                        _gemini_last_model["name"] = model
                         return text
-                    raise ValueError(f"Gemini sem texto (finishReason={candidate.get('finishReason')})")
-                err_msg = data.get("error", {}).get("message", f"HTTP {resp.status_code}")
-                last_err = err_msg
-                # Erro fatal (auth, billing real) â†’ nÃ£o adianta retry
+                    last_err = f"sem texto (finishReason={candidate.get('finishReason')})"
+                    break
+                last_err = data.get("error", {}).get("message", f"HTTP {resp.status_code}")
                 if resp.status_code in (401, 403):
-                    raise ValueError(err_msg)
-                # Alta demanda ou quota â†’ retry com backoff
-                logging.warning(f"Gemini tentativa {attempt+1}: {err_msg[:120]}")
-            except httpx.TimeoutException:
-                last_err = "Timeout"
-                logging.warning(f"Gemini timeout na tentativa {attempt+1}")
-    raise ValueError(f"Gemini indisponÃ­vel apÃ³s {len(_GEMINI_RETRY_DELAYS)+1} tentativas: {last_err[:120]}")
+                    raise ValueError(f"Chave Gemini recusada: {last_err[:160]}")  # trocar de modelo nao resolve
+                if resp.status_code in (404, 429) or resp.status_code == 400:
+                    break  # cota esgotada, modelo indisponivel ou parametro nao aceito: proximo modelo
+                logging.warning("Gemini %s tentativa %s: %s", model, attempt + 1, last_err[:120])
+            falhas.append(f"{model}: {last_err[:90]}")
+            logging.warning("Gemini %s indisponivel, tentando o proximo modelo: %s", model, last_err[:120])
+    raise ValueError("Cota da Gemini esgotada ou indisponivel em todos os modelos. " + " | ".join(falhas))
+
+class _ProviderSkip(Exception):
+    """Provedor nao se aplica a esta chamada (ex.: prompt maior que a cota da Groq)."""
+
+
+async def _groq_chat(messages: list, system_prompt: str, max_tokens: Optional[int] = None,
+                     temperature: Optional[float] = None, timeout: Optional[float] = None) -> str:
+    import httpx
+    approx_in = (len(system_prompt) + sum(len(str(m.get("content", ""))) for m in messages)) // 3
+    # A saida reservada tambem conta na cota por minuto: reserva so o necessario para chat.
+    out = min(max_tokens or 1024, 4096)
+    if approx_in + out > GROQ_TOKENS_PER_REQUEST:
+        raise _ProviderSkip(f"~{approx_in} tokens excede a cota por minuto da Groq")
+    convo = [{"role": "system", "content": system_prompt}] + [
+        {"role": "assistant" if m.get("role") == "assistant" else "user", "content": str(m.get("content", ""))}
+        for m in messages
+    ]
+    ultimo_erro = "sem modelo configurado"
+    async with httpx.AsyncClient(timeout=timeout or 60.0) as client:
+        for model in GROQ_MODELS:
+            body = {"model": model, "messages": convo, "max_completion_tokens": out}
+            if "gpt-oss" in model:
+                body["reasoning_effort"] = "low"  # modelo de raciocinio: evita gastar a saida pensando
+            elif "qwen3" in model:
+                body["reasoning_effort"] = "none"
+            if temperature is not None:
+                body["temperature"] = temperature
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                json=body,
+            )
+            data = resp.json()
+            if resp.is_success:
+                text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+                if text:
+                    return text
+                ultimo_erro = f"{model}: resposta vazia"
+                continue
+            ultimo_erro = f"{model} HTTP {resp.status_code}: {(data.get('error') or {}).get('message', '')[:120]}"
+            if resp.status_code not in (429, 503):
+                break  # erro que nao se resolve trocando de modelo
+    raise ValueError(f"Groq: {ultimo_erro}")
+
+
+async def _anthropic_chat(messages: list, system_prompt: str, session_id: str = "",
+                          max_tokens: Optional[int] = None, temperature: Optional[float] = None) -> str:
+    if len(messages) == 1:
+        user_text = str(messages[0].get("content", ""))
+    else:
+        user_text = "\n\n".join(f"{str(m.get('role', 'user')).upper()}: {m.get('content', '')}" for m in messages)
+    chat = LlmChat(api_key=ANTHROPIC_API_KEY, session_id=session_id, system_message=system_prompt).with_model(
+        "anthropic", "claude-sonnet-4-6"
+    )
+    return await chat.send_message(UserMessage(text=user_text.strip() or "Ola!"), max_tokens=max_tokens, temperature=temperature)
+
+
+async def _ai_chat_messages(
+    messages: list,
+    system_prompt: str,
+    session_id: str = "",
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    timeout: Optional[float] = None,
+) -> str:
+    """Tenta os provedores na ordem de AI_PROVIDER_ORDER; se um falhar (cota, sobrecarga), usa o proximo."""
+    order = [x.strip().lower() for x in (os.environ.get("AI_PROVIDER_ORDER") or "gemini,groq,anthropic").split(",") if x.strip()]
+    falhas = []
+    for provider in order:
+        try:
+            if provider == "gemini" and GEMINI_KEY:
+                opts = {}
+                if max_tokens is not None:
+                    opts["max_tokens"] = max_tokens
+                    if max_tokens >= 12000:
+                        opts["thinking_budget"] = 4096  # analises longas (ex.: Dr. House)
+                if temperature is not None:
+                    opts["temperature"] = temperature
+                if timeout is not None:
+                    opts["timeout"] = timeout
+                return await _gemini_chat(messages, system_prompt, GEMINI_KEY, **opts)
+            if provider == "groq" and GROQ_API_KEY:
+                return await _groq_chat(messages, system_prompt, max_tokens, temperature, timeout)
+            if provider == "anthropic" and ANTHROPIC_API_KEY:
+                return await _anthropic_chat(messages, system_prompt, session_id, max_tokens, temperature)
+        except _ProviderSkip as exc:
+            falhas.append(f"{provider}: {exc}")
+        except Exception as exc:
+            logging.warning("Provedor de IA %s falhou: %s", provider, str(exc)[:200])
+            falhas.append(f"{provider}: {str(exc)[:160]}")
+    raise ValueError("Nenhum provedor de IA respondeu. " + " | ".join(falhas or ["nenhuma chave configurada"]))
+
 
 async def _ai_chat(
     session_id: str,
@@ -807,29 +913,10 @@ async def _ai_chat(
     temperature: Optional[float] = None,
     timeout: Optional[float] = None,
 ) -> str:
-    """Usa Gemini quando disponÃ­vel e Anthropic como alternativa."""
-    if GEMINI_KEY:
-        gemini_opts = {}
-        if max_tokens is not None:
-            gemini_opts["max_tokens"] = max_tokens
-            if max_tokens >= 12000:
-                gemini_opts["thinking_budget"] = 4096  # analises longas (ex.: Dr. House)
-        if temperature is not None:
-            gemini_opts["temperature"] = temperature
-        if timeout is not None:
-            gemini_opts["timeout"] = timeout
-        return await _gemini_chat(
-            [{"role": "user", "content": user_text}],
-            system_prompt,
-            GEMINI_KEY,
-            **gemini_opts,
-        )
-    chat = LlmChat(
-        api_key=ANTHROPIC_API_KEY,
-        session_id=session_id,
-        system_message=system_prompt,
-    ).with_model("anthropic", "claude-sonnet-4-6")
-    return await chat.send_message(UserMessage(text=user_text), max_tokens=max_tokens, temperature=temperature)
+    return await _ai_chat_messages(
+        [{"role": "user", "content": user_text}], system_prompt,
+        session_id=session_id, max_tokens=max_tokens, temperature=temperature, timeout=timeout,
+    )
 
 async def ai_exam_analysis(raw_text: str) -> dict:
     """Extract laboratory markers from exam PDF text and classify them.
@@ -960,7 +1047,9 @@ async def create_lead(payload: LeadIn, request: Request, nutri: Optional[str] = 
 
 # â”€â”€â”€ ATENDIMENTO PÃšBLICO (Agente de Primeiro Contato) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-ATENDIMENTO_SYSTEM_PROMPT = """VocÃª Ã© RC Nutri, o assistente de primeiro contato do nutricionista e treinador RogÃ©rio Costa.
+ATENDIMENTO_SYSTEM_PROMPT = """REGRA DE APRESENTACAO: nunca mostre ao visitante nomes de etapas (ex.: ETAPA 1, SAUDACAO), titulos de fluxo ou instrucoes internas. Escreva apenas a mensagem natural da conversa.
+
+VocÃª Ã© RC Nutri, o assistente de primeiro contato do nutricionista e treinador RogÃ©rio Costa.
 
 Seu objetivo Ã© realizar o primeiro contato com o potencial paciente, coletar informaÃ§Ãµes essenciais, qualificÃ¡-lo e apresentar os planos da consultoria.
 
@@ -1075,21 +1164,7 @@ async def atendimento_chat(payload: AtendimentoMsgIn):
     msgs = (payload.messages or [])[-25:]
 
     try:
-        gemini_key = os.environ.get("GEMINI_KEY", "").strip()
-        if gemini_key:
-            reply = await _gemini_chat(msgs, ATENDIMENTO_SYSTEM_PROMPT, gemini_key)
-        else:
-            # Alternativa direta pela API da Anthropic
-            convo = "\n\n".join(
-                f"{str(m.get('role','user')).upper()}: {str(m.get('content',''))}"
-                for m in msgs
-            )
-            chat = LlmChat(
-                api_key=ANTHROPIC_API_KEY,
-                session_id=f"atend-{sid}-{uuid.uuid4().hex[:8]}",
-                system_message=ATENDIMENTO_SYSTEM_PROMPT,
-            ).with_model("anthropic", "claude-sonnet-4-6")
-            reply = await chat.send_message(UserMessage(text=convo.strip() or "OlÃ¡!"))
+        reply = await _ai_chat_messages(msgs, ATENDIMENTO_SYSTEM_PROMPT, session_id=f"atend-{sid}")
     except Exception as e:
         logging.exception("Atendimento chat failed")
         raise HTTPException(503, f"Agente indisponÃ­vel: {str(e)[:160]}")
@@ -2432,7 +2507,7 @@ async def _donato_generate_with_gemini(p: dict, payload: DonatoDraftIn, scaffold
     avisos.append("Aprovacao humana obrigatoria antes de virar plano oficial.")
     return draft, {
         "provider": "gemini",
-        "model": _GEMINI_MODEL,
+        "model": _gemini_last_model["name"],
         "knowledge_docs": [d.get("source_document_id") for d in knowledge],
         "catalogo_alimentos": len(catalog),
         "meta_kcal_ia": meta_kcal,

@@ -20,6 +20,14 @@ services:
         sync: false
       - key: GEMINI_KEY
         sync: false
+      - key: GEMINI_MODELS
+        value: gemini-3.5-flash,gemini-3.7-flash,gemini-3.8-flash,gemini-flash-latest,gemini-3.5-flash-lite,gemini-3.1-flash-lite
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODELS
+        value: openai/gpt-oss-120b,qwen/qwen3.8-27b
+      - key: AI_PROVIDER_ORDER
+        value: gemini,groq,anthropic
       - key: DONATO_PROVIDER
         value: auto
       - key: OPENAI_API_KEY
