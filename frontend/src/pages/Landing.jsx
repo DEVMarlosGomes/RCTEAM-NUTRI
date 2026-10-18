@@ -45,37 +45,53 @@ const ETAPAS = [
   { n: "03", t: "Ajuste contínuo", d: "Check-ins, retornos e dados reais de evolução. O plano muda quando o seu corpo responde, não quando a planilha manda." },
 ];
 
+// Mesmos planos do atendimento (Agente 1) e do checkout.
 const PLANOS = [
   {
-    id: "trimestral",
-    nome: "Trimestral",
-    tagline: "Para dar a largada com método e ver o corpo responder.",
+    id: "treino",
+    nome: "Plano Treino",
+    duracao: "2 meses",
+    tagline: "Treino personalizado no app, com método do primeiro ao último exercício.",
     itens: [
-      "Avaliação e body check completo",
-      "Plano alimentar individualizado",
+      "Avaliação física e da sua rotina",
       "Treino personalizado no app",
-      "Séries, timer e vídeos de execução",
-      "Suporte direto via WhatsApp",
-      "Retornos mensais",
+      "Vídeos de execução de cada exercício",
+      "Registro de séries, cargas e timer de descanso",
+      "Gráficos de evolução e conquistas",
     ],
-    cta: "Quero o Trimestral",
-    msg: "Olá, Rogério! Vim pelo site e tenho interesse no Plano Trimestral. Pode me passar as condições?",
+    cta: "Quero o Plano Treino",
+    msg: "Olá, Rogério! Vim pelo site e tenho interesse no Plano Treino. Pode me passar as condições?",
   },
   {
-    id: "semestral",
-    nome: "Semestral",
+    id: "gold",
+    nome: "Consultoria Gold",
+    duracao: "2 meses",
     destaque: true,
-    tagline: "Tempo para transformar e consolidar. O melhor custo por mês.",
+    tagline: "Treino e nutrição integrados pelo mesmo profissional, com suporte VIP.",
     itens: [
-      "Tudo do plano Trimestral",
-      "Maior economia por mês",
-      "Seis meses de evolução e conquistas no app",
-      "Ajustes ilimitados durante o período",
-      "Acompanhamento prioritário",
-      "Garantia de satisfação total",
+      "Tudo do Plano Treino e do Plano Nutrição",
+      "Avaliação física e consulta completa",
+      "App com vídeos de execução e seu plano nutricional",
+      "Suporte VIP e ilimitado no WhatsApp do Rogério",
+      "Feedback semanal com ajustes no planejamento",
     ],
-    cta: "Quero o Semestral",
-    msg: "Olá, Rogério! Vim pelo site e tenho interesse no Plano Semestral. Pode me passar as condições?",
+    cta: "Quero a Consultoria Gold",
+    msg: "Olá, Rogério! Vim pelo site e tenho interesse na Consultoria Gold. Pode me passar as condições?",
+  },
+  {
+    id: "nutricao",
+    nome: "Plano Nutrição",
+    duracao: "2 meses",
+    tagline: "Plano alimentar sob medida e acompanhamento para ajustar pelo resultado.",
+    itens: [
+      "Consulta e avaliação nutricional",
+      "Plano alimentar individualizado",
+      "Calorias e macros calculados para o seu objetivo",
+      "Exames laboratoriais considerados na estratégia",
+      "Acompanhamento com ajustes no plano",
+    ],
+    cta: "Quero o Plano Nutrição",
+    msg: "Olá, Rogério! Vim pelo site e tenho interesse no Plano Nutrição. Pode me passar as condições?",
   },
 ];
 
@@ -84,7 +100,7 @@ const FAQ = [
   { q: "Como funciona o app de treino?", a: "Você abre o treino do dia, vê séries, repetições e carga de cada exercício, registra o que fez e usa o timer de descanso. O app guarda seu histórico, mostra a evolução das cargas e libera conquistas pela sua constância." },
   { q: "A dieta é muito restritiva?", a: "Não. O cardápio é prático e montado em cima da sua rotina e das suas preferências, sem cortes radicais. O objetivo é algo que você consiga sustentar." },
   { q: "Vou falar direto com o Rogério?", a: "Sim. O suporte é pelo WhatsApp, direto com ele, sem intermediários. No app você também tem o plano, o histórico e um assistente para dúvidas do dia a dia." },
-  { q: "Qual a diferença entre os planos?", a: "O Trimestral é ideal para começar com método. O Semestral inclui tudo dele com mais tempo para consolidar o resultado, ajustes ilimitados, prioridade no acompanhamento e melhor custo por mês." },
+  { q: "Qual a diferença entre os planos?", a: "Todos têm 2 meses de acompanhamento. O Plano Treino cuida do treino no app, o Plano Nutrição cuida da sua alimentação e a Consultoria Gold integra os dois, com suporte VIP ilimitado e feedback semanal." },
   { q: "E se eu não ficar satisfeito?", a: "Seguindo todas as etapas da consultoria, se você não estiver 100% satisfeito com os resultados, seu investimento é devolvido integralmente." },
   { q: "Como eu começo?", a: "Clique em começar e faça o atendimento inicial, que leva menos de 5 minutos. Valores e condições de pagamento são apresentados no atendimento." },
 ];
@@ -486,25 +502,25 @@ function Planos({ onStart }) {
       <div className="relative max-w-[1240px] mx-auto px-5 sm:px-8">
         <Reveal className="text-center max-w-3xl mx-auto">
           <div className="flex justify-center"><SectionLabel n="07">Planos</SectionLabel></div>
-          <h2 className="rc-display text-[clamp(44px,5.6vw,80px)] text-white mt-6">Escolha o seu <span className="text-rc-lime">ritmo.</span></h2>
-          <p className="text-gray-400 text-[17px] mt-5">Dois formatos com o mesmo método. A diferença é o tempo que você dá para o resultado se consolidar.</p>
+          <h2 className="rc-display text-[clamp(44px,5.6vw,80px)] text-white mt-6">Escolha o seu <span className="text-rc-lime">plano.</span></h2>
+          <p className="text-gray-400 text-[17px] mt-5">Treino, nutrição ou os dois integrados. Mesmo método, 2 meses de acompanhamento com o Rogério.</p>
         </Reveal>
 
-        <div className="mt-14 grid md:grid-cols-2 gap-5 max-w-5xl mx-auto items-stretch">
+        <div className="mt-14 grid lg:grid-cols-3 gap-5 max-w-md lg:max-w-none mx-auto items-stretch">
           {PLANOS.map((p, i) => (
             <Reveal
               key={p.id}
               delay={i * 80}
-              className={`relative rounded-3xl p-8 sm:p-10 flex flex-col ${p.destaque
+              className={`relative rounded-3xl p-8 flex flex-col ${p.destaque ? "order-first lg:order-none lg:-my-3 lg:py-11 " : ""}${p.destaque
                 ? "bg-rc-raised shadow-[0_0_0_1.5px_#C3F53C,0_40px_80px_-40px_rgba(195,245,60,0.35)]"
                 : "rc-card"}`}
             >
               {p.destaque && (
-                <div className="absolute -top-3.5 left-8 sm:left-10 rounded-md bg-rc-lime text-rc-ink text-[12px] font-semibold px-3 py-1">Mais escolhido</div>
+                <div className="absolute -top-3.5 left-8 rounded-md bg-rc-lime text-rc-ink text-[12px] font-semibold px-3 py-1">Mais popular</div>
               )}
-              <div className="flex items-baseline justify-between gap-4">
-                <h3 className="rc-display text-[46px] text-white">{p.nome}</h3>
-                <span className="rc-num text-[15px] text-gray-500 whitespace-nowrap">{p.destaque ? "6 meses" : "3 meses"}</span>
+              <div className="flex items-start justify-between gap-4">
+                <h3 className="rc-display text-[38px] text-white">{p.nome}</h3>
+                <span className="rc-num text-[15px] text-gray-500 whitespace-nowrap pt-2">{p.duracao}</span>
               </div>
               <p className={`mt-3 text-[15.5px] ${p.destaque ? "text-gray-200" : "text-gray-400"}`}>{p.tagline}</p>
               <div className="h-px bg-white/[0.08] my-7" />
