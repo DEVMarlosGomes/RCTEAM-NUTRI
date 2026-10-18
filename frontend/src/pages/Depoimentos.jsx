@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
+import PageHeader from "@/components/evonut/PageHeader";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Star, Trash2, Upload, Plus, ToggleLeft, ToggleRight, Loader2, Quote, Pencil, X } from "lucide-react";
+import { Star, Trash2, Upload, Plus, ToggleLeft, ToggleRight, Loader2, Pencil, X } from "lucide-react";
 import { toast } from "sonner";
 
 const EMPTY_FORM = { name: "", stars: 5, phrase: "", quote: "", active: true, order: 0 };
@@ -99,19 +100,11 @@ export default function Depoimentos() {
   return (
     <NutriLayout>
       <div className="max-w-5xl mx-auto">
-        <header className="mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-rc-blue/15 border border-rc-blue/40 flex items-center justify-center">
-              <Quote className="w-5 h-5 text-rc-blue" />
-            </div>
-            <div>
-              <h1 className="rc-h2">Depoimentos</h1>
-              <p className="text-sm text-gray-400 mt-1">
-                Publique relatos na landing page. Cada depoimento ativo aparece automaticamente no site.
-              </p>
-            </div>
-          </div>
-        </header>
+        <PageHeader
+          eyebrow="Marca"
+          title="Depoimentos"
+          description={<>Publique relatos na landing page. Cada depoimento ativo aparece automaticamente no site.</>}
+        />
 
         <div className="grid lg:grid-cols-[1fr_380px] gap-6">
           {/* List */}

@@ -23,13 +23,20 @@ class LlmChat:
         self.model = model
         return self
 
-    async def send_message(self, message: UserMessage) -> str:
+    async def send_message(
+        self,
+        message: UserMessage,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> str:
         client = anthropic.AsyncAnthropic(api_key=self.api_key)
+        extra = {"temperature": temperature} if temperature is not None else {}
         response = await client.messages.create(
             model=self.model,
-            max_tokens=2048,
+            max_tokens=max_tokens or 2048,
             system=self.system_message,
             messages=[{"role": "user", "content": message.text}],
+            **extra,
         )
         text_blocks = [block.text for block in response.content if getattr(block, "type", None) == "text"]
         if not text_blocks:

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
+import PageHeader from "@/components/evonut/PageHeader";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Bot, CheckCircle2, Upload, FileText, Trash2, Save, Plus, Loader2, FileType2, Ban, RefreshCw } from "lucide-react";
+import { CheckCircle2, Upload, FileText, Trash2, Save, Plus, Loader2, FileType2, Ban, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 const AGENT_TINTS = {
@@ -181,19 +182,11 @@ export default function Agentes() {
   return (
     <NutriLayout>
       <div className="max-w-7xl mx-auto" data-testid="agentes-page">
-        <header className="mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-rc-blue/15 border border-rc-blue/40 flex items-center justify-center">
-              <Bot className="w-5 h-5 text-rc-blue" />
-            </div>
-            <div>
-              <h1 className="rc-h2">Agentes IA</h1>
-              <p className="text-sm text-gray-400 mt-1">
-                Treine seus agentes com documentos (PDF, DOCX, JSON ou texto). Tudo é injetado no system prompt quando aplicável.
-              </p>
-            </div>
-          </div>
-        </header>
+        <PageHeader
+          eyebrow="Inteligência"
+          title="Agentes IA"
+          description={<>Treine os agentes com documentos (PDF, DOCX, JSON ou texto). O conteúdo aprovado entra no contexto de cada agente.</>}
+        />
 
         <div className="grid lg:grid-cols-[260px_1fr] gap-6">
           {/* Sidebar of agents */}

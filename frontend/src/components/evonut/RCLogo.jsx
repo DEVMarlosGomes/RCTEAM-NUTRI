@@ -27,7 +27,7 @@ export default function RCLogo({ size = 40, variant = "blue", color, className =
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    boxShadow: isBlue ? "0 6px 22px -6px rgba(0,129,253,0.55)" : undefined,
+    boxShadow: isBlue ? "inset 0 1px 0 rgba(255,255,255,0.3)" : undefined,
   };
 
   // The mark is a stylized "P" composed of two parallelograms + a triangular cap.

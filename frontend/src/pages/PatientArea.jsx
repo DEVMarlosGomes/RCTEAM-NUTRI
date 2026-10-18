@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, formatApiError } from "@/lib/evo-api";
-import Brand from "@/components/evonut/Brand";
-import GlowOrb from "@/components/evonut/GlowOrb";
-import { LogOut, Salad, MessageCircle, Send, Loader2, Sparkles, Utensils, FlaskConical, FileText, ChevronDown, ChevronUp } from "lucide-react";
+import RCLogo from "@/components/evonut/RCLogo";
+import MacroRings from "@/components/evonut/MacroRings";
+import { LogOut, Salad, MessageCircle, Send, Loader2, Utensils, FlaskConical, FileText, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 
 // Minimal markdown render for the diet plan content (re-uses same logic as backend PDF)
@@ -105,59 +105,49 @@ export default function PatientArea() {
   };
 
   return (
-    <div className="min-h-screen bg-rc-ink text-white relative overflow-hidden">
-      <GlowOrb color="#0081FD" size={500} top="-15%" left="-10%" opacity={0.18} />
-      <GlowOrb color="#0066CC" size={400} top="60%" left="65%" opacity={0.14} />
-
-      <header className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pt-6 pb-4 flex items-center justify-between">
-        <Brand size="sm" />
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:block text-right">
-            <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold">Paciente</div>
-            <div className="text-sm font-bold truncate max-w-[180px]">{user?.name}</div>
-          </div>
-          <button data-testid="patient-logout" onClick={doLogout} className="rc-btn-ghost" title="Sair">
-            <LogOut className="w-4 h-4" />
-          </button>
+    <div className="min-h-[100dvh] text-gray-100 relative pb-24 sm:pb-12">
+      <header className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 pt-5 pb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <RCLogo size={30} variant="blue" />
+          <span className="rc-display text-[15px] text-white">Rogério Costa</span>
         </div>
+        <button data-testid="patient-logout" onClick={doLogout} className="rc-btn-ghost p-2 -mr-2" title="Sair" aria-label="Sair">
+          <LogOut className="w-4 h-4" />
+        </button>
       </header>
 
-      <main className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-12">
-        {/* Tabs */}
-        <nav className="flex items-center gap-2 mb-6" data-testid="patient-tabs">
-          <button
-            data-testid="tab-diet"
-            onClick={() => setTab("diet")}
-            className={`px-4 py-2 rounded-lg text-sm font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
-              tab === "diet"
-                ? "bg-rc-blue/15 text-rc-blue border border-rc-blue/40"
-                : "text-gray-400 hover:text-white border border-transparent"
-            }`}
-          >
-            <Salad className="w-4 h-4" /> Minha dieta
-          </button>
-          <button
-            data-testid="tab-chat"
-            onClick={() => setTab("chat")}
-            className={`px-4 py-2 rounded-lg text-sm font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
-              tab === "chat"
-                ? "bg-rc-blue/15 text-rc-blue border border-rc-blue/40"
-                : "text-gray-400 hover:text-white border border-transparent"
-            }`}
-          >
-            <MessageCircle className="w-4 h-4" /> Assistente IA
-          </button>
-          <button
-            data-testid="tab-exams"
-            onClick={() => setTab("exams")}
-            className={`px-4 py-2 rounded-lg text-sm font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
-              tab === "exams"
-                ? "bg-rc-blue/15 text-rc-blue border border-rc-blue/40"
-                : "text-gray-400 hover:text-white border border-transparent"
-            }`}
-          >
-            <FlaskConical className="w-4 h-4" /> Meus exames
-          </button>
+      <main className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6">
+        <section className="pt-6 pb-6 sm:pb-8">
+          <div className="rc-eyebrow">Área do paciente</div>
+          <h1 className="rc-h1 mt-3">Olá, <span className="text-rc-lime">{(user?.name || "").split(" ")[0]}</span></h1>
+        </section>
+
+        {/* Abas: barra inferior no celular, segmentado no desktop */}
+        <nav
+          data-testid="patient-tabs"
+          aria-label="Seções"
+          className="fixed sm:static bottom-0 inset-x-0 z-40 sm:z-auto sm:mb-6 bg-rc-ink/90 sm:bg-transparent backdrop-blur-xl sm:backdrop-blur-none border-t border-white/[0.06] sm:border-0 pb-[env(safe-area-inset-bottom)]"
+        >
+          <div className="grid grid-cols-3 sm:inline-grid sm:gap-1 sm:p-1 sm:rounded-xl sm:bg-rc-surface sm:shadow-[var(--shadow-card)]">
+            {[
+              { k: "diet", label: "Minha dieta", icon: Salad, testid: "tab-diet" },
+              { k: "chat", label: "Assistente", icon: MessageCircle, testid: "tab-chat" },
+              { k: "exams", label: "Exames", icon: FlaskConical, testid: "tab-exams" },
+            ].map((t) => (
+              <button
+                key={t.k}
+                data-testid={t.testid}
+                onClick={() => setTab(t.k)}
+                aria-current={tab === t.k ? "page" : undefined}
+                className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 h-16 sm:h-10 sm:px-4 sm:rounded-lg text-[11px] sm:text-[13.5px] transition-colors duration-150 active:scale-[0.97] ${
+                  tab === t.k ? "text-rc-lime sm:text-white sm:bg-white/[0.07] font-medium" : "text-gray-500 hover:text-gray-200"
+                }`}
+              >
+                <t.icon className={`w-5 h-5 sm:w-4 sm:h-4 ${tab === t.k ? "sm:text-rc-lime" : ""}`} strokeWidth={1.75} />
+                {t.label}
+              </button>
+            ))}
+          </div>
         </nav>
 
         {tab === "diet" && (
@@ -176,23 +166,39 @@ export default function PatientArea() {
               </div>
             ) : (
               <div className="space-y-5">
-                {/* KPIs */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="patient-diet-kpis">
-                  <Kpi label="Calorias / dia" value={diet.kcal_total} unit="kcal" highlight />
-                  <Kpi label="Proteína" value={diet.proteina_g} unit={`g · ${diet.ptn_pct}%`} />
-                  <Kpi label="Carboidrato" value={diet.carboidrato_g} unit={`g · ${diet.cho_pct}%`} />
-                  <Kpi label="Gordura" value={diet.gordura_g} unit={`g · ${diet.lip_pct}%`} />
-                </div>
+                {/* Meta do dia */}
+                <section className="relative rc-card p-5 sm:p-8 grid sm:grid-cols-[1fr_auto] gap-6 sm:gap-10 items-center" data-testid="patient-diet-kpis">
+                  <MacroRings
+                    className="sm:hidden absolute right-4 top-4 w-[92px] h-[92px]"
+                    stroke={18}
+                    values={{ ptn: (diet.ptn_pct || 0) / 100, cho: (diet.cho_pct || 0) / 100, lip: (diet.lip_pct || 0) / 100 }}
+                  />
+                  <div>
+                    <div className="text-[12px] text-gray-400">Meta diária</div>
+                    <div className="flex items-baseline gap-2 mt-1">
+                      <span className="rc-num text-[72px] sm:text-[88px] leading-none text-white">{diet.kcal_total ? Number(diet.kcal_total).toLocaleString("pt-BR") : "–"}</span>
+                      <span className="text-gray-400">kcal</span>
+                    </div>
+                    <div className="mt-6 space-y-3.5 max-w-sm">
+                      <MacroRow label="Proteína" g={diet.proteina_g} pct={diet.ptn_pct} color="bg-macro-ptn" />
+                      <MacroRow label="Carboidrato" g={diet.carboidrato_g} pct={diet.cho_pct} color="bg-macro-cho" />
+                      <MacroRow label="Gordura" g={diet.gordura_g} pct={diet.lip_pct} color="bg-macro-lip" />
+                    </div>
+                  </div>
+                  <MacroRings
+                    className="hidden sm:block w-56 h-56"
+                    values={{ ptn: (diet.ptn_pct || 0) / 100, cho: (diet.cho_pct || 0) / 100, lip: (diet.lip_pct || 0) / 100 }}
+                  />
+                </section>
 
                 <div className="rc-card p-6 sm:p-8">
                   <div className="flex items-center justify-between mb-3">
                     <div>
                       <h2 className="rc-h2">Plano alimentar</h2>
                       <p className="text-xs text-gray-500 mt-1">
-                        Versão {diet.version} · {new Date(diet.created_at).toLocaleDateString("pt-BR")} · Objetivo: <strong className="text-rc-blue">{diet.objetivo}</strong>
+                        Versão {diet.version} · {new Date(diet.created_at).toLocaleDateString("pt-BR")} · Objetivo: <strong className="text-gray-200 font-medium">{diet.objetivo}</strong>
                       </p>
                     </div>
-                    <Sparkles className="w-5 h-5 text-rc-blue" />
                   </div>
                   <div className="prose-rc">{renderMarkdown(diet.content)}</div>
                 </div>
@@ -203,7 +209,7 @@ export default function PatientArea() {
 
         {tab === "chat" && (
           <div data-testid="patient-chat-panel" className="animate-fade-up">
-            <div className="rc-card flex flex-col" style={{ minHeight: "calc(100vh - 240px)" }}>
+            <div className="rc-card flex flex-col" style={{ minHeight: "calc(100dvh - 300px)" }}>
               <header className="px-5 py-3 border-b border-white/5 flex items-center justify-between">
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold">Tire suas dúvidas</div>
@@ -212,7 +218,7 @@ export default function PatientArea() {
                 <div className="text-[10px] uppercase tracking-widest text-emerald-300 font-bold">Agente 3</div>
               </header>
 
-              <div className="flex-1 overflow-y-auto p-5 space-y-3" style={{ maxHeight: "calc(100vh - 380px)" }}>
+              <div className="flex-1 overflow-y-auto p-5 space-y-3" style={{ maxHeight: "calc(100dvh - 420px)" }}>
                 {messages.length === 0 && (
                   <p className="text-sm text-gray-500 text-center pt-12">
                     Olá, {user?.name?.split(" ")[0] || "tudo bem"}! Pergunte qualquer dúvida sobre sua dieta ou treino.
@@ -223,10 +229,10 @@ export default function PatientArea() {
                     <div
                       className={
                         m.role === "user"
-                          ? "max-w-[80%] bg-rc-blue text-black rounded-2xl rounded-tr-sm p-3.5 shadow-md text-sm font-semibold whitespace-pre-wrap"
+                          ? "max-w-[80%] bg-rc-blue text-rc-ink rounded-2xl rounded-tr-md px-4 py-3 text-[14px] font-medium whitespace-pre-wrap"
                           : m.kind === "proactive"
                           ? "max-w-[85%] bg-emerald-400/[0.08] border border-emerald-300/40 rounded-2xl rounded-tl-sm p-3.5 text-gray-100 shadow-sm text-sm whitespace-pre-wrap leading-relaxed relative"
-                          : "max-w-[85%] bg-rc-surfaceAlt border border-emerald-300/20 rounded-2xl rounded-tl-sm p-3.5 text-gray-200 shadow-sm text-sm whitespace-pre-wrap leading-relaxed"
+                          : "max-w-[85%] bg-rc-raised rounded-2xl rounded-tl-md px-4 py-3 text-gray-200 text-[14px] whitespace-pre-wrap leading-relaxed shadow-[0_0_0_1px_rgba(255,255,255,0.06)]"
                       }
                     >
                       {m.kind === "proactive" && !m.typing && (
@@ -362,12 +368,16 @@ export default function PatientArea() {
   );
 }
 
-function Kpi({ label, value, unit, highlight }) {
+function MacroRow({ label, g, pct, color }) {
+  const width = Math.max(0, Math.min(100, Number(pct) || 0));
   return (
-    <div className={`rc-card p-4 ${highlight ? "border-rc-blue/50 bg-rc-blue/5" : ""}`}>
-      <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold">{label}</div>
-      <div className="mt-1.5 font-display font-black text-xl">
-        {value ?? "—"} <span className="text-xs text-gray-400 font-bold">{unit}</span>
+    <div>
+      <div className="flex items-baseline justify-between text-[13px]">
+        <span className="text-gray-300 inline-flex items-center gap-2"><span className={`w-2 h-2 rounded-[2px] ${color}`} />{label}</span>
+        <span className="tabular text-gray-400"><span className="text-white font-medium">{g ?? "–"} g</span> · {pct ?? "–"}%</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-white/[0.05] mt-1.5 overflow-hidden">
+        <div className={`h-full rounded-full origin-left animate-bar-grow ${color}`} style={{ width: `${width}%` }} />
       </div>
     </div>
   );

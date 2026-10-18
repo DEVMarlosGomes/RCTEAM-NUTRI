@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import GlowOrb from "@/components/evonut/GlowOrb";
-import { ArrowLeft, Dumbbell, Loader2 } from "lucide-react";
+import RCLogo from "@/components/evonut/RCLogo";
+import MacroRings from "@/components/evonut/MacroRings";
+import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function PatientLogin() {
@@ -22,43 +23,35 @@ export default function PatientLogin() {
         toast.error("Esta área é exclusiva para pacientes. Use o Acesso Profissional.");
         return;
       }
-      toast.success("Bem-vindo de volta!");
+      toast.success("Bem-vindo de volta");
       navigate("/paciente");
     }
   };
 
   return (
-    <div className="min-h-screen relative overflow-hidden bg-rc-ink flex items-center justify-center px-4">
-      <GlowOrb color="#0081FD" size={500} top="-15%" left="-10%" opacity={0.22} />
-      <GlowOrb color="#0066CC" size={380} top="60%" left="70%" opacity={0.15} />
-      <div className="absolute inset-0 rc-grid-bg pointer-events-none" />
+    <div className="min-h-[100dvh] relative overflow-hidden flex flex-col px-5 py-6 sm:px-10">
+      <MacroRings className="absolute -right-24 -top-20 w-[340px] h-[340px] opacity-40 pointer-events-none" stroke={12} values={{ ptn: 0.8, cho: 0.62, lip: 0.45 }} />
 
-      {/* Voltar */}
-      <a
-        href="/landing.html"
-        data-testid="back-home"
-        className="absolute top-6 left-6 rc-btn-ghost"
-      >
+      <a href="/" data-testid="back-home" className="relative rc-btn-ghost self-start -ml-3">
         <ArrowLeft className="w-4 h-4" /> Voltar ao site
       </a>
 
-      <div className="relative z-10 w-full max-w-md rc-glass rounded-2xl p-8 shadow-2xl animate-fade-up">
-
-        {/* Ícone + título */}
-        <div className="flex flex-col items-center text-center mb-7">
-          <div className="w-14 h-14 rounded-2xl bg-emerald-400/10 border border-emerald-400/30 flex items-center justify-center mb-4">
-            <Dumbbell className="w-6 h-6 text-emerald-400" />
+      <div className="relative flex-1 flex items-center justify-center py-10">
+        <div className="w-full max-w-[380px] animate-fade-up">
+          <div className="flex items-center gap-2.5 mb-10">
+            <RCLogo size={30} variant="blue" />
+            <span className="rc-display text-[15px] text-white">Rogério Costa</span>
           </div>
-          <h1 className="rc-h2">Área do Paciente</h1>
-          <p className="text-[11px] text-gray-400 mt-1.5 uppercase tracking-[0.2em] font-bold">
-            Dieta · Exames · Assistente IA
-          </p>
-        </div>
+          <div className="rc-eyebrow">Área do paciente</div>
+          <h1 className="rc-display text-[52px] text-white mt-3">Seu plano,<br /><span className="text-rc-lime">no bolso.</span></h1>
+          <p className="text-gray-400 mt-4">Dieta, exames e assistente para tirar dúvidas entre as consultas.</p>
 
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="space-y-4 mt-8">
           <div>
-            <label className="rc-label">E-mail</label>
+            <label className="rc-label" htmlFor="patient-email">E-mail</label>
             <input
+              id="patient-email"
+              autoComplete="email"
               data-testid="patient-email-input"
               type="email"
               className="rc-input"
@@ -69,54 +62,49 @@ export default function PatientLogin() {
             />
           </div>
           <div>
-            <label className="rc-label">Senha</label>
+            <label className="rc-label" htmlFor="patient-password">Senha</label>
             <input
+              id="patient-password"
+              autoComplete="current-password"
               data-testid="patient-password-input"
               type="password"
               className="rc-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="Sua senha"
               required
               minLength={6}
             />
           </div>
 
           {error && (
-            <p data-testid="patient-auth-error" className="text-sm text-red-400">{error}</p>
+            <p data-testid="patient-auth-error" role="alert" className="text-[13px] text-rc-coral">{error}</p>
           )}
 
           <button
             data-testid="patient-submit-btn"
             type="submit"
             disabled={loading}
-            className="rc-btn-primary w-full mt-2"
+            className="rc-btn-lime w-full h-11 mt-2"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Dumbbell className="w-4 h-4" />}
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
             {loading ? "Entrando..." : "Acessar minha área"}
+            {!loading && <ArrowRight className="w-4 h-4" />}
           </button>
         </form>
 
-        {/* Separador */}
-        <div className="mt-6 pt-5 border-t border-white/[0.06] text-center space-y-1">
-          <p className="text-xs text-gray-500 leading-relaxed">
-            Ainda não tem acesso? Fale com o Rogério pelo{" "}
-            <a
-              href="https://wa.me/5511983692815"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-rc-blue hover:underline font-bold"
-            >
-              WhatsApp
-            </a>{" "}
-            e receba seu convite.
-          </p>
-          <p className="text-xs text-gray-600">
-            É profissional?{" "}
-            <a href="/login" className="text-gray-400 hover:text-white font-bold transition-colors">
-              Acesso profissional →
+          <div className="mt-10 pt-5 border-t border-white/[0.06] space-y-3 text-[13px]">
+            <p className="text-gray-500">
+              Ainda não tem acesso? Fale com o Rogério pelo{" "}
+              <a href="https://wa.me/5511983692815" target="_blank" rel="noopener noreferrer" className="text-gray-100 underline decoration-rc-lime/60 underline-offset-4 hover:decoration-rc-lime">
+                WhatsApp
+              </a>{" "}
+              e receba seu convite.
+            </p>
+            <a href="/login" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors">
+              Acesso profissional <ArrowRight className="w-3.5 h-3.5" />
             </a>
-          </p>
+          </div>
         </div>
       </div>
     </div>

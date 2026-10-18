@@ -18,6 +18,12 @@ services:
         generateValue: true
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: GEMINI_KEY
+        sync: false
+      - key: DONATO_PROVIDER
+        value: auto
+      - key: OPENAI_API_KEY
+        sync: false
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD

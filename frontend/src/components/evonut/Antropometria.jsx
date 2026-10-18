@@ -534,14 +534,14 @@ export default function Antropometria({ d, reload }) {
             {chartData.length ? (
               <ResponsiveContainer width="100%" height={280}>
                 <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="name" stroke="#9CA3AF" fontSize={11} />
-                  <YAxis stroke="#9CA3AF" fontSize={11} />
-                  <Tooltip contentStyle={{ background: "#161B22", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Line type="monotone" dataKey="peso" stroke="#0081FD" strokeWidth={2} />
-                  <Line type="monotone" dataKey="gordura" stroke="#FFB347" strokeWidth={2} />
-                  <Line type="monotone" dataKey="muscular" stroke="#3DA0FF" strokeWidth={2} />
+                  <CartesianGrid strokeDasharray="2 4" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                  <XAxis dataKey="name" stroke="#4C5766" tick={{ fill: "#8A97A6" }} tickLine={false} axisLine={false} fontSize={11} />
+                  <YAxis stroke="#4C5766" tick={{ fill: "#8A97A6" }} tickLine={false} axisLine={false} fontSize={11} width={40} />
+                  <Tooltip contentStyle={{ background: "#161C25", border: "none", boxShadow: "0 0 0 1px rgba(255,255,255,0.08), 0 16px 40px -16px rgba(0,0,0,0.8)", borderRadius: 10, fontSize: 12 }} labelStyle={{ color: "#AEB8C4" }} cursor={{ stroke: "rgba(255,255,255,0.12)" }} />
+                  <Legend iconType="plainline" wrapperStyle={{ fontSize: 12, color: "#AEB8C4" }} />
+                  <Line type="monotone" dataKey="peso" stroke="#4DA6FF" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#4DA6FF" }} activeDot={{ r: 5, strokeWidth: 0 }} />
+                  <Line type="monotone" dataKey="gordura" stroke="#FFB547" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#FFB547" }} activeDot={{ r: 5, strokeWidth: 0 }} />
+                  <Line type="monotone" dataKey="muscular" stroke="#C3F53C" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#C3F53C" }} activeDot={{ r: 5, strokeWidth: 0 }} />
                 </LineChart>
               </ResponsiveContainer>
             ) : <p className="text-sm text-gray-500">Adicione avaliações para visualizar a evolução.</p>}

@@ -205,7 +205,7 @@ export default function Atendimento() {
         <GlowOrb color="#0066CC" size={400} top="55%" left="65%" opacity={0.12} />
         <div className="absolute inset-0 rc-grid-bg pointer-events-none" />
 
-        <a href="/landing.html" className="absolute top-6 left-6 rc-btn-ghost">
+        <a href="/" className="absolute top-6 left-6 rc-btn-ghost">
           <ArrowLeft className="w-4 h-4" /> Voltar
         </a>
 
@@ -216,7 +216,7 @@ export default function Atendimento() {
             </svg>
           </div>
 
-          <div className="text-[10px] text-rc-blue uppercase tracking-[0.3em] font-bold mb-3">
+          <div className="rc-eyebrow mb-3">
             Assistente de Atendimento
           </div>
           <h1 className="rc-h1 text-3xl sm:text-4xl mb-4">RC Nutri</h1>
@@ -283,7 +283,7 @@ export default function Atendimento() {
 
       {/* Header */}
       <header className="relative z-10 flex items-center gap-3 px-4 py-3 border-b border-white/[0.06] bg-rc-surface/80 backdrop-blur-xl">
-        <a href="/landing.html" className="text-gray-500 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5">
+        <a href="/" className="text-gray-500 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5">
           <ArrowLeft className="w-4 h-4" />
         </a>
         <div className="w-9 h-9 rounded-full bg-rc-blue/15 border border-rc-blue/40 flex items-center justify-center flex-shrink-0">

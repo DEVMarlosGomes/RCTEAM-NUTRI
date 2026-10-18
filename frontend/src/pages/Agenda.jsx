@@ -28,7 +28,7 @@ function AgendaModal({ consultation, patients, onClose, onSaved }) {
   };
   return <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
     <form onSubmit={save} className="evo-card p-6 w-full max-w-2xl">
-      <div className="flex justify-between items-center mb-5"><div><div className="text-xs uppercase tracking-widest text-evo-purple font-semibold">Agenda</div><h2 className="evo-h3 mt-1">{consultation ? "Editar consulta" : "Nova consulta"}</h2></div><button type="button" className="evo-btn-ghost p-2" onClick={onClose}><X className="w-4 h-4" /></button></div>
+      <div className="flex justify-between items-center mb-5"><div><div className="rc-eyebrow">Agenda</div><h2 className="evo-h3 mt-1">{consultation ? "Editar consulta" : "Nova consulta"}</h2></div><button type="button" className="evo-btn-ghost p-2" onClick={onClose}><X className="w-4 h-4" /></button></div>
       <div className="grid md:grid-cols-2 gap-4">
         <label className="md:col-span-2"><span className="evo-label">Paciente *</span><select required disabled={Boolean(consultation)} className="evo-input" value={form.paciente_id} onChange={(e) => set("paciente_id", e.target.value)}><option value="">Selecione...</option>{patients.map((p) => <option key={p.id} value={p.id}>{p.nome} {p.email ? `— ${p.email}` : ""}</option>)}</select></label>
         <label><span className="evo-label">Data *</span><input required type="date" className="evo-input" value={form.date} onChange={(e) => set("date", e.target.value)} /></label>
@@ -61,7 +61,7 @@ export default function Agenda() {
   const groups = rows.reduce((acc, item) => { const date = item.data_hora?.split("T")[0] || "—"; (acc[date] ||= []).push(item); return acc; }, {});
   return <NutriLayout>
     {modal && <AgendaModal consultation={modal === "new" ? null : modal} patients={patients} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} />}
-    <div className="flex items-center justify-between mb-6"><div><div className="text-xs uppercase tracking-widest text-evo-purple font-semibold">Calendário</div><h1 className="evo-h2 mt-1">Agenda</h1></div><button className="evo-btn-primary" onClick={() => setModal("new")}><Plus className="w-4 h-4" /> Nova consulta</button></div>
+    <div className="flex items-center justify-between mb-6"><div><div className="rc-eyebrow">Calendário</div><h1 className="evo-h2 mt-1">Agenda</h1></div><button className="evo-btn-primary" onClick={() => setModal("new")}><Plus className="w-4 h-4" /> Nova consulta</button></div>
     <div className="space-y-4">
       {Object.keys(groups).length === 0 && <div className="evo-card p-12 text-center text-gray-500"><Sparkles className="w-6 h-6 mx-auto mb-3 text-gray-600" />Nenhuma consulta cadastrada.</div>}
       {Object.entries(groups).map(([date, list]) => <div key={date} className="evo-card p-5"><div className="flex items-center gap-2 mb-3"><CalendarDays className="w-4 h-4 text-evo-purple" /><span className="font-semibold">{new Date(`${date}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</span></div><div className="space-y-2">

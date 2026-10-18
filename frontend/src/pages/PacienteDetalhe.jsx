@@ -13,6 +13,7 @@ import Antropometria from "@/components/evonut/Antropometria";
 import GastoEnergetico from "@/components/evonut/GastoEnergetico";
 import PrescricaoDietetica from "@/components/evonut/PrescricaoDietetica";
 import AnalisesDieteticas from "@/components/evonut/AnalisesDieteticas";
+import MarkdownView from "@/components/evonut/MarkdownView";
 
 const TABS = [
   { k: "anamnese", l: "Anamnese", icon: FileText },
@@ -36,58 +37,82 @@ export default function PacienteDetalhe() {
     api.get(`/patients/${id}`).then((r) => setD(r.data));
   }, [id]);
 
-  if (!d) return <NutriLayout><div className="text-gray-400">Carregando paciente...</div></NutriLayout>;
+  if (!d) return (
+    <NutriLayout>
+      <div className="rc-card p-6 sm:p-8 animate-pulse-soft">
+        <div className="flex items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-white/[0.05]" />
+          <div className="space-y-3"><div className="h-7 w-64 rounded bg-white/[0.05]" /><div className="h-3 w-40 rounded bg-white/[0.05]" /></div>
+        </div>
+      </div>
+    </NutriLayout>
+  );
   const p = d.patient;
+  const idade = (() => {
+    if (!p.data_nascimento) return null;
+    const nasc = new Date(p.data_nascimento);
+    if (Number.isNaN(nasc.getTime())) return null;
+    const hoje = new Date();
+    return hoje.getFullYear() - nasc.getFullYear() - (hoje < new Date(hoje.getFullYear(), nasc.getMonth(), nasc.getDate()) ? 1 : 0);
+  })();
+  const imc = p.peso && p.altura ? (p.peso / ((p.altura / 100) ** 2)) : null;
+  const iniciais = (p.nome || "P").trim().split(/\s+/).filter(Boolean);
 
   return (
     <NutriLayout>
-      <div className="evo-card p-6 mb-6 relative overflow-hidden">
-        <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full bg-evo-purple/20 blur-3xl pointer-events-none" />
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-full bg-gradient-to-br from-evo-purple to-evo-teal flex items-center justify-center text-xl font-display font-semibold">
-              {(p.nome || "P").slice(0, 1).toUpperCase()}
+      <header className="rc-card mb-5 overflow-hidden">
+        <div className="p-5 sm:p-7">
+          <div className="flex items-start gap-4 sm:gap-5 min-w-0">
+            <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-2xl bg-rc-raised flex items-center justify-center rc-num text-2xl text-rc-lime uppercase shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+              {(iniciais[0]?.[0] || "P") + (iniciais.length > 1 ? iniciais[iniciais.length - 1][0] : "")}
             </div>
-            <div>
-              <h1 className="evo-h2">{p.nome}</h1>
-              <div className="flex items-center gap-3 text-sm text-gray-400 mt-1">
-                <span>{p.email || "—"}</span> · <span>{p.telefone}</span>
+            <div className="min-w-0">
+              <StatusBadge status={p.status_funil} />
+              <h1 className="rc-h2 mt-2 break-words">{p.nome}</h1>
+              <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[13px] text-gray-400 mt-2">
+                {p.email && <span className="truncate">{p.email}</span>}
+                {p.email && p.telefone && <span className="text-gray-600">·</span>}
+                {p.telefone && <span className="tabular">{p.telefone}</span>}
               </div>
-              <div className="mt-2"><StatusBadge status={p.status_funil} /></div>
             </div>
           </div>
-          <div className="flex flex-col gap-2 items-end">
-            <div className="flex gap-2">
-              <Pill l="Peso" v={p.peso ? `${p.peso} kg` : "—"} />
-              <Pill l="Altura" v={p.altura ? `${p.altura} cm` : "—"} />
-              <Pill l="Objetivo" v={p.objetivo || "—"} />
-            </div>
-            <div className="flex gap-2 flex-wrap justify-end">
-              <PdfBtn pid={p.id} tipo="anamnese" label="PDF Anamnese" />
-              <PdfBtn pid={p.id} tipo="antropometria" label="PDF Antrop." />
-              <PdfBtn pid={p.id} tipo="exames" label="PDF Exames" />
-            </div>
-          </div>
+          <dl className="grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-5 mt-6 pt-5 border-t border-white/[0.05]">
+            <Pill l="Peso" v={p.peso} u="kg" />
+            <Pill l="Altura" v={p.altura} u="cm" />
+            <Pill l="IMC" v={imc ? Math.round(imc * 10) / 10 : null} />
+            <Pill l="Idade" v={idade} u="anos" />
+            <Pill l="Objetivo" v={p.objetivo} text />
+          </dl>
         </div>
-      </div>
+        <div className="px-5 sm:px-7 py-3 border-t border-white/[0.05] bg-black/[0.15] flex items-center gap-1 flex-wrap">
+          <span className="text-[11px] uppercase tracking-[0.14em] text-gray-500 mr-2">Relatórios</span>
+          <PdfBtn pid={p.id} tipo="anamnese" label="Anamnese" />
+          <PdfBtn pid={p.id} tipo="antropometria" label="Antropometria" />
+          <PdfBtn pid={p.id} tipo="exames" label="Exames" />
+        </div>
+      </header>
 
-      <div className="flex gap-2 flex-wrap mb-5">
-        {TABS.map((t) => (
-          <button
-            key={t.k}
-            data-testid={`tab-${t.k}`}
-            onClick={() => setTab(t.k)}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all border ${
-              tab === t.k
-                ? "bg-evo-purple/15 text-white border-evo-purple/40"
-                : "border-white/[0.06] text-gray-300 hover:text-white hover:border-white/[0.15]"
-            }`}
-          >
-            <t.icon className="w-4 h-4" /> {t.l}
-          </button>
-        ))}
-      </div>
+      <nav className="sticky top-14 md:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10 mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]" aria-label="Seções do paciente">
+        <div role="tablist" className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {TABS.map((t) => (
+            <button
+              key={t.k}
+              role="tab"
+              aria-selected={tab === t.k}
+              data-testid={`tab-${t.k}`}
+              onClick={() => setTab(t.k)}
+              className={`relative shrink-0 inline-flex items-center gap-2 h-12 px-3 text-[13.5px] transition-colors duration-150 ${
+                tab === t.k ? "text-white font-medium" : "text-gray-400 hover:text-gray-100"
+              }`}
+            >
+              <t.icon className={`w-4 h-4 ${tab === t.k ? "text-rc-lime" : ""}`} strokeWidth={1.75} /> {t.l}
+              <span aria-hidden className={`absolute left-2 right-2 -bottom-px h-[2px] rounded-full bg-rc-lime transition-transform duration-200 ease-out origin-center ${tab === t.k ? "scale-x-100" : "scale-x-0"}`} />
+            </button>
+          ))}
+        </div>
+      </nav>
 
+      <div key={tab} className="animate-fade-up">
       {tab === "anamnese" && <Anamnese d={d} reload={reload} />}
       {tab === "ia" && <IATab d={d} reload={reload} />}
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
@@ -98,15 +123,20 @@ export default function PacienteDetalhe() {
       {tab === "recordatorio" && <Recordatorio d={d} reload={reload} />}
       {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
       {tab === "comparativo" && <Comparativo id={d.patient.id} />}
+      </div>
     </NutriLayout>
   );
 }
 
-function Pill({ l, v }) {
+function Pill({ l, v, u, text }) {
+  const empty = v === null || v === undefined || v === "";
   return (
-    <div className="px-3 py-2 rounded-lg bg-evo-bg border border-white/[0.06] min-w-[100px]">
-      <div className="text-[10px] uppercase tracking-wider text-gray-500">{l}</div>
-      <div className="text-sm font-semibold mt-0.5">{v}</div>
+    <div className="min-w-0">
+      <dt className="text-[11px] uppercase tracking-[0.12em] text-gray-500">{l}</dt>
+      <dd className={`mt-1 truncate ${text ? "text-[15px] font-medium text-gray-100 first-letter:uppercase pt-1.5" : "rc-num text-[28px] leading-none text-white"}`}>
+        {empty ? <span className="text-gray-600">–</span> : typeof v === "number" ? v.toLocaleString("pt-BR", { maximumFractionDigits: 1 }) : v}
+        {!empty && u && <span className="text-[12px] font-sans font-normal not-italic text-gray-500 ml-1">{u}</span>}
+      </dd>
     </div>
   );
 }
@@ -124,8 +154,8 @@ function PdfBtn({ pid, tipo, label }) {
     finally { setLoading(false); }
   };
   return (
-    <button onClick={download} disabled={loading} className="evo-btn-ghost text-xs flex items-center gap-1 px-2 py-1">
-      <Download className="w-3 h-3" /> {loading ? "..." : label}
+    <button onClick={download} disabled={loading} className="rc-btn-ghost text-[12.5px] px-2.5 py-1.5">
+      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" strokeWidth={1.75} />} {label}
     </button>
   );
 }
@@ -691,14 +721,14 @@ export function AntropometriaLegado({ d, reload }) {
           ) : (
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="name" stroke="#9CA3AF" fontSize={11} />
-                <YAxis stroke="#9CA3AF" fontSize={11} />
-                <Tooltip contentStyle={{ background: "#161B22", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12 }} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Line type="monotone" dataKey="peso" stroke="#7B61FF" strokeWidth={2} dot={{ r: 3 }} />
-                <Line type="monotone" dataKey="pct_gordura" stroke="#EF9F27" strokeWidth={2} dot={{ r: 3 }} />
-                <Line type="monotone" dataKey="massa_magra" stroke="#1DB97E" strokeWidth={2} dot={{ r: 3 }} />
+                <CartesianGrid strokeDasharray="2 4" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                <XAxis dataKey="name" stroke="#4C5766" tick={{ fill: "#8A97A6" }} tickLine={false} axisLine={false} fontSize={11} />
+                <YAxis stroke="#4C5766" tick={{ fill: "#8A97A6" }} tickLine={false} axisLine={false} fontSize={11} width={40} />
+                <Tooltip contentStyle={{ background: "#161C25", border: "none", boxShadow: "0 0 0 1px rgba(255,255,255,0.08), 0 16px 40px -16px rgba(0,0,0,0.8)", borderRadius: 10, fontSize: 12 }} labelStyle={{ color: "#AEB8C4" }} cursor={{ stroke: "rgba(255,255,255,0.12)" }} />
+                <Legend iconType="plainline" wrapperStyle={{ fontSize: 12, color: "#AEB8C4" }} />
+                <Line type="monotone" dataKey="peso" stroke="#4DA6FF" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#4DA6FF" }} activeDot={{ r: 5, strokeWidth: 0 }} />
+                <Line type="monotone" dataKey="pct_gordura" stroke="#FFB547" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#FFB547" }} activeDot={{ r: 5, strokeWidth: 0 }} />
+                <Line type="monotone" dataKey="massa_magra" stroke="#C3F53C" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#C3F53C" }} activeDot={{ r: 5, strokeWidth: 0 }} />
               </LineChart>
             </ResponsiveContainer>
           )}
@@ -2749,6 +2779,7 @@ function ExamesManuais({ d }) {
   const [markerOpen, setMarkerOpen] = useState(null);
   const [houseAnalysis, setHouseAnalysis] = useState(null);
   const [analyzingHouse, setAnalyzingHouse] = useState(false);
+  const [housePergunta, setHousePergunta] = useState("");
 
   const load = async () => {
     try {
@@ -2781,6 +2812,9 @@ function ExamesManuais({ d }) {
         setLongitudinal(long || { resumo: {}, grupos: [], marcadores: [], timeline: [] });
         setMarkerOpen((current) => current || long?.marcadores?.[0] || null);
       })
+      .catch(() => {});
+    api.get(`/patients/${pid}/exames-manuais/drhouse-analysis`)
+      .then(({ data }) => { if (active && data?.length) setHouseAnalysis(data[0]); })
       .catch(() => {});
     return () => { active = false; };
   }, [pid]);
@@ -2849,6 +2883,7 @@ function ExamesManuais({ d }) {
     try {
       const { data } = await api.post(`/patients/${pid}/exames-manuais/drhouse-analysis`, {
         lote_id: open?.id || null,
+        pergunta: housePergunta.trim() || null,
       });
       setHouseAnalysis(data);
       toast.success("Dr. House analisou os exames");
@@ -2871,10 +2906,19 @@ function ExamesManuais({ d }) {
           <button onClick={() => showForm ? (setShowForm(false), setEditingId(null)) : startNewExam()} className="evo-btn-primary w-full"><Plus className="w-4 h-4" /> {showForm ? "Cancelar" : "Registrar exames"}</button>
           {lotes.length > 0 && <button onClick={downloadPdf} className="evo-btn-secondary w-full"><Download className="w-4 h-4" /> PDF completo</button>}
           {lotes.length > 0 && (
-            <button onClick={runDrHouse} disabled={analyzingHouse} className="evo-btn-secondary w-full">
-              {analyzingHouse ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
-              Dr. House
-            </button>
+            <>
+              <textarea
+                value={housePergunta}
+                onChange={(e) => setHousePergunta(e.target.value)}
+                rows={2}
+                placeholder="Pergunta para o Dr. House (opcional)"
+                className="evo-input w-full text-sm resize-none"
+              />
+              <button onClick={runDrHouse} disabled={analyzingHouse} className="evo-btn-secondary w-full">
+                {analyzingHouse ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+                {analyzingHouse ? "Dr. House analisando..." : open ? "Dr. House (coleta selecionada)" : "Dr. House (todas as coletas)"}
+              </button>
+            </>
           )}
         </div>
         <div className="evo-card p-4">
@@ -2954,7 +2998,10 @@ function ExamesManuais({ d }) {
                       </div>
                       <div className="text-[11px] text-gray-500">{new Date(houseAnalysis.created_at).toLocaleString("pt-BR")}</div>
                     </div>
-                    <div className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{houseAnalysis.content}</div>
+                    {houseAnalysis.pergunta && (
+                      <div className="text-xs text-gray-400 mb-2">Pergunta: {houseAnalysis.pergunta}</div>
+                    )}
+                    <MarkdownView content={houseAnalysis.content} />
                   </div>
                 )}
 

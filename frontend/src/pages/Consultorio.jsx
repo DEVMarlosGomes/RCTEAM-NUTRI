@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
+import PageHeader from "@/components/evonut/PageHeader";
 import { api, formatApiError } from "@/lib/evo-api";
 import {
-  Stethoscope,
   Send,
   Loader2,
   User,
@@ -94,19 +94,11 @@ export default function Consultorio() {
   return (
     <NutriLayout>
       <div className="max-w-7xl mx-auto" data-testid="consultorio-page">
-        <header className="mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-cyan-400/15 border border-cyan-400/30 flex items-center justify-center">
-              <Stethoscope className="w-5 h-5 text-cyan-300" />
-            </div>
-            <div>
-              <h1 className="rc-h2">Consultorio</h1>
-              <p className="text-sm text-gray-400 mt-1">
-                Apoio do <strong className="text-rc-blue">Agente 2</strong> durante a consulta. Selecione o paciente para comecar.
-              </p>
-            </div>
-          </div>
-        </header>
+        <PageHeader
+          eyebrow="Em consulta"
+          title="Consultório"
+          description={<>Apoio do <strong className="text-gray-100 font-medium">Agente 2</strong> durante a consulta. Selecione o paciente para começar.</>}
+        />
 
         <div className="grid lg:grid-cols-[320px_1fr] gap-6">
           <aside className="rc-card p-3 flex flex-col" style={{ maxHeight: "calc(100vh - 200px)" }} data-testid="consultorio-patient-list">

@@ -32,11 +32,13 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
 from ai.donato.agent import generate_donato_plan_with_openai
-from ai.donato.knowledge_sync import sync_approved_documents
+from ai.donato.knowledge_sync import prepare_manifest_documents, sync_approved_documents
+from ai.donato import gemini_agent as donato_gemini
 from ai.donato.manifest import DONATO_KNOWLEDGE_MANIFEST
 from ai.donato.openai_client import DonatoProviderUnavailable
 from ai.donato.settings import get_donato_settings
 from ai.drhouse.knowledge_sync import sync_drhouse_documents
+from ai.drhouse.prompt import DRHOUSE_KNOWLEDGE_HEADER, DRHOUSE_PROMPT_VERSION, DRHOUSE_SYSTEM_PROMPT
 from llm_chat import LlmChat, UserMessage
 import json
 import io
@@ -270,6 +272,11 @@ class MealPlanRequest(BaseModel):
 # ---------- Agents / Patient ----------
 AGENT_CODES = ("agent1", "agent2", "agent3", "donato", "drhouse")
 AGENT_PROMPT_MAX_CHARS = 50_000  # cap full system prompt length
+# Dr. House carrega o prompt mestre + toda a base de biomarcadores (~65k chars)
+AGENT_PROMPT_MAX_CHARS_BY_CODE = {"drhouse": 120_000, "agent2": 120_000}
+
+def _agent_prompt_max_chars(agent_code: str) -> int:
+    return AGENT_PROMPT_MAX_CHARS_BY_CODE.get(agent_code, AGENT_PROMPT_MAX_CHARS)
 DONATO_SETTINGS = get_donato_settings()
 DONATO_SCHEMA_VERSION = DONATO_SETTINGS.schema_version
 DONATO_ENABLED = DONATO_SETTINGS.enabled
@@ -497,17 +504,8 @@ AGENT_DEFAULTS = {
             "Agente especialista em interpretaÃ§Ã£o integrada de exames laboratoriais aplicados "
             "Ã  nutriÃ§Ã£o clÃ­nica, com base em biomarcadores e raciocÃ­nio funcional."
         ),
-        "base_prompt": (
-            "VocÃª Ã© o Dr. House AI, especialista interno em interpretaÃ§Ã£o de exames laboratoriais "
-            "aplicados Ã  nutriÃ§Ã£o clÃ­nica. Atua como suporte tÃ©cnico para nutricionistas, correlacionando "
-            "biomarcadores, padrÃµes metabÃ³licos, nutricionais, hormonais e inflamatÃ³rios. "
-            "Use prioritariamente a base interna do Dr. House enviada pelo nutricionista. "
-            "Nunca realize diagnÃ³stico mÃ©dico, nunca prescreva medicamentos, nunca defina doses de "
-            "suplementos e nunca afirme doenÃ§as como fato. Use linguagem probabilÃ­stica: pode estar "
-            "associado a, pode indicar, Ã© compatÃ­vel com, sugere possÃ­vel, merece investigaÃ§Ã£o complementar. "
-            "Sempre correlacione marcadores entre si, informe limitaÃ§Ãµes por dados ausentes e destaque "
-            "implicaÃ§Ãµes nutricionais para revisÃ£o do nutricionista."
-        ),
+        "base_prompt": DRHOUSE_SYSTEM_PROMPT,
+        "prompt_version": DRHOUSE_PROMPT_VERSION,
         "provider": "prompt_context",
         "knowledge_mode": "agent_documents",
         "schema_version": "1.0",
@@ -531,9 +529,21 @@ async def ensure_agents_seeded():
                 "schema_version": cfg.get("schema_version"),
                 "requires_human_approval": cfg.get("requires_human_approval"),
                 "active": cfg.get("active", True),
+                "prompt_version": cfg.get("prompt_version"),
                 "created_at": iso(now_utc()),
                 "updated_at": iso(now_utc()),
             })
+        elif (
+            cfg.get("prompt_version")
+            and existing.get("prompt_version") != cfg["prompt_version"]
+            and not existing.get("prompt_customized")
+        ):
+            # Prompt versionado no codigo: atualiza o salvo, salvo se o nutricionista personalizou
+            await db.agents.update_one({"code": code}, {"$set": {
+                "base_prompt": cfg["base_prompt"],
+                "prompt_version": cfg["prompt_version"],
+                "updated_at": iso(now_utc()),
+            }})
 
 def extract_text_from_upload(filename: str, content_type: str, raw: bytes) -> str:
     """Best-effort text extraction from PDF / JSON / TXT/MD uploads."""
@@ -578,7 +588,7 @@ def extract_text_from_upload(filename: str, content_type: str, raw: bytes) -> st
 
 async def build_agent_system_prompt(agent_code: str, extra_context: str = "") -> str:
     """Concatenate the agent's base_prompt + uploaded training docs + extra_context.
-    Caps at AGENT_PROMPT_MAX_CHARS to stay within model context.
+    Caps at the agent's max chars (_agent_prompt_max_chars) to stay within model context.
     """
     agent = await db.agents.find_one({"code": agent_code}, {"_id": 0})
     if not agent:
@@ -589,29 +599,34 @@ async def build_agent_system_prompt(agent_code: str, extra_context: str = "") ->
         {
             "agent_code": agent_code,
             "$or": [{"status": "approved"}, {"status": {"$exists": False}}],
+            # o documento do prompt mestre ja e o proprio base_prompt; nao duplicar
+            "document_type": {"$ne": "base_prompt"},
         },
         {"_id": 0},
     ).sort("created_at", 1).to_list(50)
 
     parts = [base.strip()]
-    if docs:
+    if docs and agent_code == "drhouse":
+        parts.append("\n\n" + DRHOUSE_KNOWLEDGE_HEADER)
+    elif docs:
         parts.append(
             "\n\n--- MATERIAL DE TREINAMENTO ENVIADO PELO NUTRICIONISTA ---\n"
             "Use estes documentos como referÃªncia ao responder. NÃ£o invente conteÃºdo fora deles."
         )
-        for d in docs:
-            title = d.get("title", "documento")
-            body = (d.get("content") or "").strip()
-            if not body:
-                continue
-            parts.append(f"\n### DOC: {title}\n{body}")
+    for d in docs:
+        title = d.get("title", "documento")
+        body = (d.get("content") or "").strip()
+        if not body:
+            continue
+        parts.append(f"\n### DOC: {title}\n{body}")
 
     if extra_context:
         parts.append(f"\n\n--- CONTEXTO DESTA INTERAÃ‡ÃƒO ---\n{extra_context.strip()}")
 
     full = "\n".join(parts).strip()
-    if len(full) > AGENT_PROMPT_MAX_CHARS:
-        full = full[:AGENT_PROMPT_MAX_CHARS] + "\n\n[...material truncado por limite de contexto...]"
+    max_chars = _agent_prompt_max_chars(agent_code)
+    if len(full) > max_chars:
+        full = full[:max_chars] + "\n\n[...material truncado por limite de contexto...]"
     return full
 
 # ---------- AI ----------
@@ -654,7 +669,7 @@ async def ai_adaptive_chat(token: str, message: str, anamnesis: dict, history: l
 async def ai_consultorio_chat(session_id: str, message: str, patient_context: dict, history: list) -> str:
     extra = (
         "DADOS DO PACIENTE EM CONSULTA (use para fundamentar a resposta):\n"
-        f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:18000]}"
+        f"{json.dumps(patient_context, ensure_ascii=False, default=str)[:60000]}"
     )
     sys_prompt = await build_agent_system_prompt("agent2", extra_context=extra)
     convo = "".join(f"{m['role']}: {m['content']}\n" for m in history[-10:])
@@ -723,7 +738,16 @@ async def ai_patient_proactive(session_id: str, instruction: str, patient_contex
 _GEMINI_MODEL = "gemini-2.5-flash"
 _GEMINI_RETRY_DELAYS = [1, 2, 4, 8]  # backoff em segundos (4 tentativas)
 
-async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
+async def _gemini_chat(
+    messages: list,
+    system_prompt: str,
+    api_key: str,
+    max_tokens: int = 8192,
+    temperature: float = 0.9,
+    timeout: float = 90.0,
+    thinking_budget: int = 1024,
+    response_mime_type: Optional[str] = None,
+) -> str:
     """Chama a Gemini 2.5 Flash com retry exponencial em caso de alta demanda."""
     import httpx, asyncio
     contents = []
@@ -735,11 +759,19 @@ async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
     body = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
-        "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.9},
+        # No Gemini 2.5 o raciocinio interno consome o mesmo limite de saida;
+        # o orcamento separado garante espaco para a resposta em si.
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+            "thinkingConfig": {"thinkingBudget": thinking_budget},
+        },
     }
+    if response_mime_type:
+        body["generationConfig"]["responseMimeType"] = response_mime_type
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent"
     last_err = "desconhecido"
-    async with httpx.AsyncClient(timeout=50.0) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt, delay in enumerate([0] + _GEMINI_RETRY_DELAYS):
             if delay:
                 await asyncio.sleep(delay)
@@ -747,7 +779,14 @@ async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
                 resp = await client.post(url, params={"key": api_key}, json=body)
                 data = resp.json()
                 if resp.is_success:
-                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                    candidate = (data.get("candidates") or [{}])[0]
+                    parts = (candidate.get("content") or {}).get("parts") or []
+                    text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+                    if candidate.get("finishReason") == "MAX_TOKENS":
+                        logging.warning("Gemini cortou a resposta por limite de tokens (%s chars)", len(text))
+                    if text:
+                        return text
+                    raise ValueError(f"Gemini sem texto (finishReason={candidate.get('finishReason')})")
                 err_msg = data.get("error", {}).get("message", f"HTTP {resp.status_code}")
                 last_err = err_msg
                 # Erro fatal (auth, billing real) â†’ nÃ£o adianta retry
@@ -760,20 +799,37 @@ async def _gemini_chat(messages: list, system_prompt: str, api_key: str) -> str:
                 logging.warning(f"Gemini timeout na tentativa {attempt+1}")
     raise ValueError(f"Gemini indisponÃ­vel apÃ³s {len(_GEMINI_RETRY_DELAYS)+1} tentativas: {last_err[:120]}")
 
-async def _ai_chat(session_id: str, system_prompt: str, user_text: str) -> str:
+async def _ai_chat(
+    session_id: str,
+    system_prompt: str,
+    user_text: str,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    timeout: Optional[float] = None,
+) -> str:
     """Usa Gemini quando disponÃ­vel e Anthropic como alternativa."""
     if GEMINI_KEY:
+        gemini_opts = {}
+        if max_tokens is not None:
+            gemini_opts["max_tokens"] = max_tokens
+            if max_tokens >= 12000:
+                gemini_opts["thinking_budget"] = 4096  # analises longas (ex.: Dr. House)
+        if temperature is not None:
+            gemini_opts["temperature"] = temperature
+        if timeout is not None:
+            gemini_opts["timeout"] = timeout
         return await _gemini_chat(
             [{"role": "user", "content": user_text}],
             system_prompt,
             GEMINI_KEY,
+            **gemini_opts,
         )
     chat = LlmChat(
         api_key=ANTHROPIC_API_KEY,
         session_id=session_id,
         system_message=system_prompt,
     ).with_model("anthropic", "claude-sonnet-4-6")
-    return await chat.send_message(UserMessage(text=user_text))
+    return await chat.send_message(UserMessage(text=user_text), max_tokens=max_tokens, temperature=temperature)
 
 async def ai_exam_analysis(raw_text: str) -> dict:
     """Extract laboratory markers from exam PDF text and classify them.
@@ -784,6 +840,8 @@ async def ai_exam_analysis(raw_text: str) -> dict:
         "drhouse",
         extra_context=(
             "Tarefa desta chamada: extrair e interpretar exames laboratoriais em JSON para a tela de exames. "
+            "Nesta chamada IGNORE o FORMATO OBRIGATORIO DA RESPOSTA em Markdown; mantenha as regras "
+            "fundamentais e a linguagem probabilistica. "
             "Devolva APENAS JSON valido, sem markdown e sem comentarios."
         ),
     )
@@ -796,7 +854,10 @@ async def ai_exam_analysis(raw_text: str) -> dict:
         "Status: normal para dentro da referencia, atencao para limitrofe/leve, prioridade para alteracao relevante. "
         "Nao diagnostique e nao prescreva."
     )
-    raw = await _ai_chat(f"drhouse-exame-{uuid.uuid4()}", system_prompt, prompt)
+    raw = await _ai_chat(
+        f"drhouse-exame-{uuid.uuid4()}", system_prompt, prompt,
+        max_tokens=8192, temperature=0.2, timeout=120.0,
+    )
     # Try to parse JSON; fallback on first valid {...} block
     try:
         return json.loads(raw)
@@ -1816,7 +1877,7 @@ async def get_agent(code: str, user=Depends(require_nutritionist)):
     view = _agent_view(a)
     view["documents"] = docs
     view["prompt_chars"] = len(full_prompt)
-    view["prompt_max_chars"] = AGENT_PROMPT_MAX_CHARS
+    view["prompt_max_chars"] = _agent_prompt_max_chars(code)
     return view
 
 @api.patch("/agents/{code}")
@@ -1826,7 +1887,7 @@ async def update_agent_prompt(code: str, payload: AgentPromptUpdate, user=Depend
     await ensure_agents_seeded()
     await db.agents.update_one(
         {"code": code},
-        {"$set": {"base_prompt": payload.base_prompt, "updated_at": iso(now_utc())}},
+        {"$set": {"base_prompt": payload.base_prompt, "prompt_customized": True, "updated_at": iso(now_utc())}},
     )
     a = await db.agents.find_one({"code": code}, {"_id": 0})
     return _agent_view(a)
@@ -1959,7 +2020,8 @@ def _donato_split_terms(value: Any) -> list[str]:
     if not value:
         return []
     raw = value if isinstance(value, list) else (value.values() if isinstance(value, dict) else re.split(r"[,;\n|]+", str(value)))
-    return [str(item).strip() for item in raw if str(item).strip()]
+    vazios = {"nenhuma", "nenhum", "nao", "não", "n/a", "-", "sem"}
+    return [str(item).strip() for item in raw if str(item).strip() and str(item).strip().lower() not in vazios]
 
 def _donato_select_protocols(patient: dict, anam: dict, objective: str) -> list[dict]:
     respostas = (anam or {}).get("respostas") or anam or {}
@@ -2170,13 +2232,17 @@ async def _build_donato_draft(patient: dict, payload: DonatoDraftIn) -> dict:
             "altura_cm": altura,
             "percentual_gordura": ((aval or {}).get("composicao") or {}).get("pct_gordura"),
             "objetivo_nutricional": objetivo,
-            "condicoes_clinicas": _donato_split_terms((anam or {}).get("condicoes_clinicas")),
+            # Campos antigos (pre-consulta) com fallback para as secoes da anamnese do painel
+            "condicoes_clinicas": _donato_split_terms((anam or {}).get("condicoes_clinicas") or (anam or {}).get("patologias")),
             "medicamentos": _donato_split_terms((anam or {}).get("medicamentos")),
-            "nivel_atividade_fisica": str((aval or {}).get("nivel_atividade") or "") or None,
-            "alergias": _donato_split_terms((anam or {}).get("alergias")),
-            "intolerancias": _donato_split_terms((anam or {}).get("intolerancias")),
-            "restricoes_alimentares": _donato_split_terms((anam or {}).get("restricoes")),
-            "preferencias_alimentares": _donato_split_terms((anam or {}).get("preferencias")),
+            "nivel_atividade_fisica": str((aval or {}).get("nivel_atividade") or (aval or {}).get("naf_codigo") or "") or None,
+            "alergias": _donato_split_terms((anam or {}).get("alergias") or (anam or {}).get("alergia_alimentar")),
+            "intolerancias": _donato_split_terms((anam or {}).get("intolerancias") or (anam or {}).get("intolerancia_alimentar")),
+            "restricoes_alimentares": _donato_split_terms(
+                (anam or {}).get("restricoes")
+                or ", ".join(filter(None, [(anam or {}).get("restricao_alimentar"), (anam or {}).get("aversao_alimentar")]))
+            ),
+            "preferencias_alimentares": _donato_split_terms((anam or {}).get("preferencias") or (anam or {}).get("preferencia_alimentar")),
         },
         "estrategia_nutricional": {
             "tipo_plano": "rascunho_evonut",
@@ -2251,6 +2317,20 @@ async def sync_donato_knowledge(user=Depends(require_nutritionist)):
         raise HTTPException(503, {"code": "DONATO_KNOWLEDGE_UNAVAILABLE", "message": str(exc)[:180]})
     return result
 
+@api.post("/agents/donato/knowledge/prepare")
+async def prepare_donato_knowledge(user=Depends(require_nutritionist)):
+    """Carrega a base do Donatto no banco (sem OpenAI). Usada pelo provedor Gemini."""
+    try:
+        return await prepare_manifest_documents(
+            db,
+            os.environ.get("DONATO_KNOWLEDGE_SOURCE_DIR") or None,
+            iso(now_utc()),
+            include_non_indexed=True,
+        )
+    except Exception as exc:
+        logging.exception("DONATO knowledge prepare failed")
+        raise HTTPException(503, {"code": "DONATO_KNOWLEDGE_UNAVAILABLE", "message": str(exc)[:180]})
+
 @api.get("/agents/drhouse/knowledge")
 async def drhouse_knowledge_status(user=Depends(require_nutritionist)):
     await ensure_agents_seeded()
@@ -2284,6 +2364,84 @@ async def list_donato_plans(pid: str, user=Depends(require_nutritionist)):
         raise HTTPException(404, "Paciente nao encontrado")
     return [d async for d in db.donato_plan_generations.find({"paciente_id": pid, "nutricionista_id": user["id"]}, {"_id": 0}).sort("created_at", -1)]
 
+async def _donato_clinical_context(p: dict, payload: DonatoDraftIn, scaffold: dict) -> dict:
+    anam = await db.anamneses.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    aval = await db.evaluations.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    lote = await db.exames_manuais.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("data_coleta", -1)])
+    anamnese = {
+        campo: (anam or {}).get(campo)
+        for campos in SECOES_ANAMNESE.values() for campo in campos
+        if (anam or {}).get(campo) not in (None, "", [], {})
+    }
+    comp = (aval or {}).get("composicao") or {}
+    return {
+        "paciente": scaffold.get("paciente"),
+        "estrategia_solicitada": payload.model_dump(),
+        "gasto_energetico": {
+            "tmb_kcal": comp.get("tmb"), "protocolo_tmb": comp.get("tmb_protocolo"),
+            "naf": comp.get("naf"), "fator_injuria": comp.get("fi"), "get_kcal": comp.get("get_kcal"),
+        },
+        "antropometria": {k: comp.get(k) for k in ("imc", "imc_classificacao", "pct_gordura", "massa_magra", "ic", "rcq", "peso_ideal_min", "peso_ideal_max")},
+        "perimetria_cm": (aval or {}).get("perimetria"),
+        "anamnese": (anam or {}).get("respostas") or None,
+        "anamnese_detalhada": anamnese or None,
+        "exames_laboratoriais": _drhouse_lotes_payload([lote]) if lote else None,
+        "protocolos_sugeridos_pelo_sistema": scaffold.get("protocolos_aplicados"),
+        "dados_pendentes": scaffold.get("dados_pendentes"),
+    }
+
+
+async def _donato_generate_with_gemini(p: dict, payload: DonatoDraftIn, scaffold: dict) -> tuple[dict, dict]:
+    knowledge = await donato_gemini.load_knowledge(db)
+    if not knowledge:
+        raise HTTPException(503, {
+            "code": "DONATO_KNOWLEDGE_MISSING",
+            "message": "Base do Dr. Donatto vazia. Carregue os documentos em POST /agents/donato/knowledge/prepare.",
+        })
+    catalog = await donato_gemini.build_food_catalog(db)
+    context = await _donato_clinical_context(p, payload, scaffold)
+    system_prompt, user_prompt = donato_gemini.build_prompt(context, knowledge, catalog)
+    opts = dict(max_tokens=32768, temperature=0.4, timeout=300.0, thinking_budget=4096, response_mime_type="application/json")
+    messages = [{"role": "user", "content": user_prompt}]
+    raw = await _gemini_chat(messages, system_prompt, GEMINI_KEY, **opts)
+    draft = donato_gemini.parse_json(raw)
+    meta_kcal = _coerce_float((draft.get("resumo_nutricional") or {}).get("valor_energetico_total_kcal"))
+    draft = await _donato_recalculate_evonut(draft)
+    real_kcal = _coerce_float((draft.get("resumo_nutricional") or {}).get("valor_energetico_total_kcal"))
+    def problemas_do(plano: dict, total: Optional[float]) -> list[str]:
+        lista = []
+        if meta_kcal and total and abs(total - meta_kcal) / meta_kcal > 0.10:
+            lista.append(f"Total recalculado de {round(total)} kcal difere mais de 10% da meta de {round(meta_kcal)} kcal.")
+        return lista + donato_gemini.quality_warnings(plano)
+
+    correcoes = 0
+    problemas = problemas_do(draft, real_kcal)
+    if problemas:  # uma rodada de correcao guiada pelas checagens do backend
+        messages += [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": donato_gemini.build_correction_prompt(draft, problemas)},
+        ]
+        raw = await _gemini_chat(messages, system_prompt, GEMINI_KEY, **opts)
+        draft = await _donato_recalculate_evonut(donato_gemini.parse_json(raw))
+        real_kcal = _coerce_float((draft.get("resumo_nutricional") or {}).get("valor_energetico_total_kcal"))
+        correcoes = 1
+    validacao = draft.setdefault("validacao", {})
+    validacao["erros"] = (validacao.get("erros") or []) + donato_gemini.schema_errors(draft)
+    avisos = validacao.setdefault("avisos", [])
+    avisos.extend(problemas_do(draft, real_kcal))
+    avisos.append("Aprovacao humana obrigatoria antes de virar plano oficial.")
+    return draft, {
+        "provider": "gemini",
+        "model": _GEMINI_MODEL,
+        "knowledge_docs": [d.get("source_document_id") for d in knowledge],
+        "catalogo_alimentos": len(catalog),
+        "meta_kcal_ia": meta_kcal,
+        "total_kcal_evonut": real_kcal,
+        "rodadas_correcao": correcoes,
+        "problemas_corrigidos": problemas,
+    }
+
+
 @api.post("/patients/{pid}/donato/plan/draft", status_code=201)
 async def create_donato_plan_draft(pid: str, payload: DonatoDraftIn, user=Depends(require_nutritionist)):
     if not DONATO_ENABLED:
@@ -2303,7 +2461,19 @@ async def create_donato_plan_draft(pid: str, payload: DonatoDraftIn, user=Depend
         "indexed": True,
         "vector_store_id": vector_store_id,
     }) if vector_store_id else 0
-    if settings.openai_api_key and vector_store_id and indexed_docs > 0:
+    provider_pref = (os.environ.get("DONATO_PROVIDER") or "auto").strip().lower()
+    use_openai = bool(settings.openai_api_key and vector_store_id and indexed_docs > 0) and provider_pref in ("auto", "openai")
+    use_gemini = bool(GEMINI_KEY) and not use_openai and provider_pref in ("auto", "gemini")
+    if use_gemini:
+        try:
+            draft, provider_meta = await _donato_generate_with_gemini(p, payload, scaffold)
+            provider = "gemini_knowledge_in_prompt"
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logging.exception("DONATO Gemini generation failed")
+            raise HTTPException(503, {"code": "DONATO_GENERATION_FAILED", "message": str(exc)[:180]})
+    elif use_openai:
         try:
             context = {
                 "paciente": scaffold.get("paciente"),
@@ -2328,7 +2498,12 @@ async def create_donato_plan_draft(pid: str, payload: DonatoDraftIn, user=Depend
             logging.exception("DONATO draft generation failed")
             raise HTTPException(503, {"code": "DONATO_GENERATION_FAILED", "message": str(exc)[:180]})
     else:
+        # Sem IA disponivel: rascunho automatico, marcado como tal para nao parecer gerado por IA
         draft = scaffold
+        draft["status"] = "needs_review"
+        draft.setdefault("validacao", {}).setdefault("erros", []).insert(
+            0, "Rascunho automatico SEM IA (nenhum provedor configurado). Nao use como plano sem reescrever."
+        )
     now = iso(now_utc())
     doc = {
         "id": str(uuid.uuid4()),
@@ -2427,14 +2602,27 @@ async def consultorio_chat(payload: ConsultorioChatIn, user=Depends(require_nutr
         {"paciente_id": p["id"]}, {"_id": 0, "raw_text": 0, "content": 0}
     ).sort("created_at", -1).to_list(5)
     plan = await db.meal_plans.find_one({"paciente_id": p["id"]}, {"_id": 0}, sort=[("version", -1)])
+    # Exames lancados manualmente (2 coletas mais recentes, em ordem cronologica)
+    lotes_manuais = await db.exames_manuais.find(
+        {"paciente_id": p["id"]}, {"_id": 0}
+    ).sort("data_coleta", -1).to_list(2)
+    lotes_manuais.reverse()
+    # Anamnese: formato antigo da pre-consulta (respostas) + secoes preenchidas no painel
+    anamnese_secoes = {
+        campo: (anam or {}).get(campo)
+        for campos in SECOES_ANAMNESE.values() for campo in campos
+        if (anam or {}).get(campo) not in (None, "", [], {})
+    }
     patient_ctx = {
         "nome": p.get("nome"), "sexo": p.get("sexo"),
+        "idade_anos": _patient_age_years(p),
         "peso": p.get("peso"), "altura": p.get("altura"),
-        "data_nascimento": p.get("data_nascimento"),
         "objetivo": p.get("objetivo"),
         "anamnese": (anam or {}).get("respostas"),
+        "anamnese_detalhada": anamnese_secoes or None,
         "avaliacao": (aval or {}).get("composicao"),
         "exames_recentes": exams,
+        "exames_laboratoriais": _drhouse_lotes_payload(lotes_manuais) if lotes_manuais else None,
         "plano_alimentar_ativo": (plan or {}).get("content"),
     }
     # Persist & load chat history
@@ -4975,28 +5163,123 @@ def _build_exames_longitudinal_payload(lotes: list[dict]) -> dict:
     }
     return {"resumo": resumo, "timeline": timeline, "grupos": grupos_out, "marcadores": markers_out}
 
-async def ai_drhouse_manual_exam_analysis(patient: dict, lotes: list[dict], longitudinal: dict, pergunta: Optional[str] = None) -> str:
-    await ensure_agents_seeded()
-    system_prompt = await build_agent_system_prompt("drhouse")
-    patient_ctx = {
-        "nome": patient.get("nome"),
+DRHOUSE_ANAMNESE_CAMPOS = {
+    "sintomas_gerais": "Sintomas gerais",
+    "outros_sintomas": "Outros sintomas/queixas",
+    "patologias": "Diagnosticos previos/patologias",
+    "cirurgias": "Cirurgias",
+    "lesoes": "Lesoes",
+    "medicamentos": "Medicamentos em uso",
+    "suplementos": "Suplementos em uso",
+    "historico_familiar": "Historico familiar",
+    "alcool": "Alcool",
+    "tabagismo": "Tabagismo",
+    "habitos_sono": "Sono",
+    "restricao_alimentar": "Restricao alimentar",
+    "dieta_especial": "Dieta especial",
+    "alergia_alimentar": "Alergia alimentar",
+    "intolerancia_alimentar": "Intolerancia alimentar",
+    "habito_intestinal": "Habito intestinal",
+    "ingestao_hidrica": "Ingestao hidrica",
+    "atividades_praticadas": "Atividades fisicas",
+    "intensidade_atividades": "Intensidade do treino",
+    "frequencia_semana": "Frequencia de treino/semana",
+    "ciclo_menstrual": "Ciclo menstrual",
+    "contraceptivo": "Contraceptivo",
+    "menopausa": "Menopausa",
+    "lactante": "Lactante",
+}
+
+def _drhouse_patient_context(patient: dict, anam: Optional[dict], evaluation: Optional[dict]) -> dict:
+    evaluation = evaluation or {}
+    perimetria = evaluation.get("perimetria") or {}
+    composicao = evaluation.get("composicao") or {}
+    cintura = perimetria.get("cintura") or evaluation.get("cintura")
+    abdominal = perimetria.get("abdomen") or perimetria.get("abdominal")
+    ctx = {
         "sexo": patient.get("sexo"),
-        "peso": patient.get("peso"),
-        "altura": patient.get("altura"),
-        "data_nascimento": patient.get("data_nascimento"),
+        "idade_anos": _patient_age_years(patient),
+        "peso_kg": evaluation.get("peso") or patient.get("peso"),
+        "altura_cm": evaluation.get("altura") or patient.get("altura"),
+        "imc": composicao.get("imc"),
+        "percentual_gordura": composicao.get("pct_gordura") or composicao.get("percentual_gordura"),
+        "circunferencia_cintura_cm": cintura,
+        "circunferencia_abdominal_cm": abdominal,
+        "data_ultima_avaliacao_fisica": evaluation.get("created_at"),
         "objetivo": patient.get("objetivo"),
     }
+    historico = {}
+    for campo, rotulo in DRHOUSE_ANAMNESE_CAMPOS.items():
+        valor = (anam or {}).get(campo)
+        if valor not in (None, "", [], {}):
+            historico[rotulo] = valor
+    ctx["anamnese"] = historico or None
+    return {k: v for k, v in ctx.items() if v not in (None, "", [], {})}
+
+def _drhouse_lotes_payload(lotes: list[dict]) -> list[dict]:
+    out = []
+    for lote in lotes:
+        exames = []
+        for exame in lote.get("exames") or []:
+            exames.append({
+                "exame": exame.get("nome"),
+                "grupo": exame.get("grupo"),
+                "valor": exame.get("valor"),
+                "unidade": exame.get("unidade"),
+                "classificacao_automatica": exame.get("classificacao"),
+                "referencia": exame.get("referencia") or None,
+            })
+        out.append({
+            "data_coleta": lote.get("data_coleta"),
+            "laboratorio": lote.get("laboratorio"),
+            "exames": exames,
+        })
+    return out
+
+async def ai_drhouse_manual_exam_analysis(
+    patient: dict,
+    lotes: list[dict],
+    longitudinal: dict,
+    pergunta: Optional[str] = None,
+    anam: Optional[dict] = None,
+    evaluation: Optional[dict] = None,
+) -> str:
+    await ensure_agents_seeded()
+    system_prompt = await build_agent_system_prompt("drhouse")
+    patient_ctx = _drhouse_patient_context(patient, anam, evaluation)
+    lotes_ctx = _drhouse_lotes_payload(lotes)
+    tem_historico = len(lotes) > 1
     prompt = (
-        "Analise os exames laboratoriais manuais deste paciente para suporte ao nutricionista.\n\n"
-        f"PACIENTE:\n{json.dumps(patient_ctx, ensure_ascii=False, default=str)}\n\n"
-        f"LOTES DE EXAMES:\n{json.dumps(lotes, ensure_ascii=False, default=str)[:16000]}\n\n"
-        f"COMPARATIVO LONGITUDINAL:\n{json.dumps(longitudinal, ensure_ascii=False, default=str)[:10000]}\n\n"
-        f"PERGUNTA DO NUTRICIONISTA:\n{pergunta or 'Gere analise integrada completa.'}\n\n"
-        "Responda em Markdown curto com: resumo executivo, marcadores alterados, correlacoes prioritarias, "
-        "hipoteses nutricionais provaveis, dados faltantes e pontos para discutir/encaminhar. "
-        "Nao diagnostique, nao prescreva medicamentos e nao defina doses."
+        "Analise os exames laboratoriais abaixo para suporte ao nutricionista.\n\n"
+        f"CONTEXTO DO PACIENTE (campos ausentes nao foram informados):\n"
+        f"{json.dumps(patient_ctx, ensure_ascii=False, default=str)}\n\n"
+        "Estado de jejum na coleta: nao informado.\n\n"
+        f"EXAMES ({len(lotes)} coleta(s), em ordem cronologica). O campo 'referencia' traz a faixa "
+        "cadastrada no sistema; 'classificacao_automatica' e apenas uma triagem por faixa:\n"
+        f"{json.dumps(lotes_ctx, ensure_ascii=False, default=str)[:30000]}\n\n"
     )
-    return await _ai_chat(f"drhouse-manual-{patient.get('id')}-{uuid.uuid4().hex[:8]}", system_prompt, prompt)
+    if tem_historico:
+        prompt += (
+            "COMPARATIVO LONGITUDINAL (variacao entre a ultima coleta e a anterior):\n"
+            f"{json.dumps(longitudinal.get('marcadores') or [], ensure_ascii=False, default=str)[:15000]}\n\n"
+        )
+    prompt += (
+        f"PERGUNTA DO NUTRICIONISTA:\n{(pergunta or '').strip() or 'Gere a analise integrada completa.'}\n\n"
+        "Siga o PROTOCOLO DE ANALISE e responda exatamente no FORMATO OBRIGATORIO DA RESPOSTA definido "
+        "nas suas instrucoes, com todas as secoes na ordem. Na tabela VISAO GERAL DOS EXAMES use os exames "
+        "da coleta mais recente"
+        + (" e cite a evolucao em relacao as coletas anteriores nas secoes de alteracoes e correlacoes" if tem_historico else "")
+        + ". Se a pergunta do nutricionista for especifica, responda-a dentro do RESUMO EXECUTIVO sem "
+        "omitir as demais secoes."
+    )
+    return await _ai_chat(
+        f"drhouse-manual-{patient.get('id')}-{uuid.uuid4().hex[:8]}",
+        system_prompt,
+        prompt,
+        max_tokens=16384,
+        temperature=0.3,
+        timeout=180.0,
+    )
 
 class ExameManualItem(BaseModel):
     codigo: str
@@ -5106,7 +5389,11 @@ async def create_drhouse_exames_analysis(pid: str, payload: DrHouseExamAnalysisI
         raise HTTPException(400, "Nenhum exame manual encontrado para analisar")
     longitudinal = _build_exames_longitudinal_payload(lotes)
     try:
-        content = await ai_drhouse_manual_exam_analysis(p, lotes, longitudinal, payload.pergunta)
+        anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
+        evaluation = await db.evaluations.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
+        content = await ai_drhouse_manual_exam_analysis(
+            p, lotes, longitudinal, payload.pergunta, anam=anam, evaluation=evaluation,
+        )
     except Exception as exc:
         logging.exception("Dr. House manual exam analysis failed")
         raise HTTPException(503, f"Falha no Dr. House: {str(exc)[:140]}")

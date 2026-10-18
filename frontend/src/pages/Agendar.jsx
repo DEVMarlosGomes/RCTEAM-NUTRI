@@ -61,7 +61,7 @@ export default function Agendar() {
       </header>
 
       <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 pb-16">
-        <div className="text-xs uppercase tracking-[0.25em] text-rc-blue font-bold mb-2">Agendamento</div>
+        <div className="rc-eyebrow mb-2">Agendamento</div>
         <h1 className="rc-h2">Escolha seu horário</h1>
         <p className="text-sm text-gray-400 mt-1">Slots em tempo real, em horário de Brasília. Escolha o melhor para você.</p>
 

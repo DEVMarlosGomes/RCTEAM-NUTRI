@@ -56,14 +56,17 @@ def extract_source_text(path: Path) -> str:
     return raw.decode("utf-8-sig", errors="ignore")
 
 
-async def prepare_manifest_documents(db, source_dir: str | Path | None, now_iso: str) -> dict[str, Any]:
+async def prepare_manifest_documents(
+    db, source_dir: str | Path | None, now_iso: str, include_non_indexed: bool = False,
+) -> dict[str, Any]:
     base = Path(source_dir) if source_dir else default_source_dir()
     manifest = load_manifest(base)
     prepared = []
     missing = []
     skipped = []
     for item in manifest.get("documents", []):
-        if not item.get("index_in_vector_store", True):
+        # Para a Gemini (base no prompt) os documentos de saida tambem entram.
+        if not item.get("index_in_vector_store", True) and not include_non_indexed:
             skipped.append({"source_document_id": item.get("source_document_id"), "reason": "index_in_vector_store=false"})
             continue
         source_filename = item.get("source_filename")

@@ -50,7 +50,7 @@ function PatientModal({ patient, onClose, onSaved }) {
       <form onSubmit={save} className="evo-card p-6 w-full max-w-3xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <div className="text-xs uppercase tracking-widest text-evo-purple font-semibold">Cadastro</div>
+            <div className="rc-eyebrow">Cadastro</div>
             <h2 className="evo-h3 mt-1">{patient ? "Editar paciente" : "Novo paciente"}</h2>
           </div>
           <button type="button" onClick={onClose} className="evo-btn-ghost p-2" aria-label="Fechar"><X className="w-4 h-4" /></button>
@@ -112,7 +112,7 @@ export default function Pacientes() {
     <NutriLayout>
       {modal && <PatientModal patient={modal === "new" ? null : modal} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} />}
       <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
-        <div><div className="text-xs uppercase tracking-widest text-evo-purple font-semibold">CRM clínico</div><h1 className="evo-h2 mt-1">Pacientes</h1><p className="text-sm text-gray-400 mt-1">{rows.length} cadastrados</p></div>
+        <div><div className="rc-eyebrow">CRM clínico</div><h1 className="evo-h2 mt-1">Pacientes</h1><p className="text-sm text-gray-400 mt-1">{rows.length} cadastrados</p></div>
         <div className="flex items-center gap-3">
           <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" /><input placeholder="Buscar paciente..." value={q} onChange={(e) => setQ(e.target.value)} className="evo-input pl-10 w-64" /></div>
           <button onClick={() => setModal("new")} className="evo-btn-primary"><Plus className="w-4 h-4" /> Novo paciente</button>

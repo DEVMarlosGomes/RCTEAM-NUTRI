@@ -238,7 +238,7 @@ export default function CadastroInsumos() {
         <section className="rc-card p-6">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <div className="text-xs uppercase tracking-[0.32em] text-rc-blue font-bold">Cadastros</div>
+              <div className="rc-eyebrow">Cadastros</div>
               <h1 className="rc-h2 mt-2">Insumos nutricionais</h1>
               <p className="text-sm text-gray-300 mt-3 max-w-3xl">Base propria para alimentos importados, suplementos e formulas, integrada ao fluxo de dieta e prescricao sem copiar bancos privados.</p>
             </div>

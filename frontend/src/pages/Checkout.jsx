@@ -109,7 +109,7 @@ export default function Checkout() {
       <div className="relative z-10 max-w-lg mx-auto px-4 py-10">
         {/* Header */}
         <div className="text-center mb-8 animate-fade-up">
-          <div className="text-[10px] text-rc-blue uppercase tracking-[0.3em] font-bold mb-3">Finalizar inscrição</div>
+          <div className="rc-eyebrow mb-3">Finalizar inscrição</div>
           <h1 className="rc-h2 text-2xl sm:text-3xl mb-1">
             {nome ? `Quase lá, ${nome.split(" ")[0]}!` : "Quase lá!"}
           </h1>

@@ -104,7 +104,7 @@ export default function CadastroAlimentos() {
           <div className="absolute inset-y-0 right-0 w-1/3 bg-[radial-gradient(circle_at_top_right,rgba(0,129,253,0.28),transparent_60%)] pointer-events-none" />
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="max-w-2xl">
-              <div className="text-xs uppercase tracking-[0.32em] text-rc-blue font-bold">Base interna</div>
+              <div className="rc-eyebrow">Base interna</div>
               <h1 className="rc-h2 mt-2">Cadastro de alimentos</h1>
               <p className="text-sm text-gray-300 mt-3">
                 Base alimentar real do sistema, combinando banco padrao e alimentos customizados do nutricionista.
