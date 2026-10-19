@@ -73,7 +73,9 @@ def calcular_item(alimento_nutrientes: dict, quantidade_g: float) -> dict:
     Se nao, tenta usar o proprio dict como nutrientes (formato legado).
     Retorna dict com todos os 37 nutrientes calculados para a porcao.
     """
-    ref = alimento_nutrientes.get("quantidade_referencia_g", 100) or 100
+    # Formato EVONUT: nutrientes sempre por 100 g. quantidade_referencia_g pode guardar a porcao
+    # (ex.: whey 30 g) e usa-lo como base inflava os valores.
+    ref = 100 if "nutrientes" in alimento_nutrientes else (alimento_nutrientes.get("quantidade_referencia_g", 100) or 100)
     fator = quantidade_g / ref
     nuts = alimento_nutrientes.get("nutrientes", alimento_nutrientes)
     result = {}

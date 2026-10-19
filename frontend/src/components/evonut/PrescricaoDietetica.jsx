@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Bot, CheckCircle2, Download, Edit2, Plus, Save, Search, Trash2, Utensils, X } from "lucide-react";
+import React, { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, Bot, CheckCircle2, Download, Edit2, Plus, Trash2, Utensils, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
+import EditorDieta, { PainelTotais, REFEICOES_PADRAO, m100DoItemSalvo } from "./dieta/EditorDieta";
 
 const EMPTY_PLANS = [];
 const STRATEGIES = [
@@ -9,19 +10,6 @@ const STRATEGIES = [
   ["carbo_medio", "Carbo médio", "PLANO ALIMENTAR - CARBO MÉDIO"],
   ["carbo_baixo", "Carbo baixo", "PLANO ALIMENTAR - CARBO BAIXO"],
 ];
-const MEAL_NAMES = Array.from({ length: 10 }, (_, index) => `Refeição ${index + 1}`);
-const FOOD_COLUMNS = [
-  ["preferencia", "Alimentos de preferência"],
-  ["sub1", "Alimentos substitutos 1"],
-  ["sub2", "Alimentos substitutos 2"],
-];
-const MACROS = [
-  ["energia_kcal", "Kcal", "kcal"],
-  ["proteinas_g", "Prot", "g"],
-  ["carboidratos_g", "Carb", "g"],
-  ["lipidios_g", "Lip", "g"],
-];
-const numberFmt = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
 
 const patientAge = (patient) => {
   const birth = patient?.data_nascimento ? new Date(`${patient.data_nascimento}T12:00:00`) : null;
@@ -37,46 +25,9 @@ const lastEvaluation = (data) => {
   return [...rows].sort((a, b) => String(b.data_avaliacao || b.created_at || "").localeCompare(String(a.data_avaliacao || a.created_at || "")))[0];
 };
 
-const toNumber = (value) => {
-  if (value === null || value === undefined || value === "") return 0;
-  const parsed = Number(String(value).replace(",", "."));
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
 const round = (value) => Math.round((Number(value || 0)) * 100) / 100;
 
-const fmt = (value, unit = "") => {
-  if (value === null || value === undefined || value === "") return "-";
-  return `${numberFmt.format(Number(value) || 0)}${unit ? ` ${unit}` : ""}`;
-};
-
-const strategyTitle = (strategy) => STRATEGIES.find(([key]) => key === strategy)?.[2] || STRATEGIES[0][2];
-
-const getItemName = (item) => item?.alimento_nome || item?._nome || item?.nome || "";
-
-const getItemMacro = (item, key) => {
-  const n = item?.nutrientes || {};
-  if (n[key] != null) return Number(n[key]) || 0;
-  if (key === "energia_kcal" && item?._kcal100g) return round((item._kcal100g / 100) * toNumber(item.quantidade_g));
-  return 0;
-};
-
-const sumMeal = (meal) => {
-  const totals = { energia_kcal: 0, proteinas_g: 0, carboidratos_g: 0, lipidios_g: 0 };
-  for (const item of meal.alimentos || []) {
-    for (const [key] of MACROS) totals[key] = round(totals[key] + getItemMacro(item, key));
-  }
-  return totals;
-};
-
-const sumDay = (meals) => {
-  const totals = { energia_kcal: 0, proteinas_g: 0, carboidratos_g: 0, lipidios_g: 0 };
-  for (const meal of meals || []) {
-    const mealTotals = meal.totais || sumMeal(meal);
-    for (const [key] of MACROS) totals[key] = round(totals[key] + (Number(mealTotals[key]) || 0));
-  }
-  return totals;
-};
+const refeicoesPadrao = () => REFEICOES_PADRAO.map((r) => ({ ...r, alimentos: [{ substitutos: [] }] }));
 
 const defaultDraft = (d) => {
   const patient = d.patient || {};
@@ -92,28 +43,38 @@ const defaultDraft = (d) => {
     peso,
     altura,
     idade: patientAge(patient) || evaluation?.idade || "",
-    get,
+    get: get ? Math.round(get) : "",
     agua_max_ml: peso ? Math.round(Number(peso) * 50) : "",
     agua_min_ml: peso ? Math.round(Number(peso) * 35) : "",
     kcal_kg: peso && get ? round(Number(get) / Number(peso)) : "",
-    meta_kcal: get || "",
+    meta_kcal: get ? Math.round(get) : "",
     meta_proteina_g: "",
     meta_carboidrato_g: "",
     meta_lipidio_g: "",
     observacoes: "",
-    refeicoes: MEAL_NAMES.map((nome) => ({
-      nome,
-      horario: "",
-      meta_kcal: "",
-      alimentos: [],
-      observacao: "",
-    })),
+    refeicoes: refeicoesPadrao(),
   };
 };
 
+// Planos antigos tinham 10 refeicoes fixas ("Refeicao 1..10"); as vazias sem nome proprio sao descartadas.
 const draftFromPlan = (plan, d) => {
   const base = defaultDraft(d);
   const meta = plan.prescricao_dietetica || {};
+  const refeicoes = (plan.refeicoes || [])
+    .filter((r) => (r.alimentos || []).length > 0 || !/^Refeição \d+$/.test(r.nome || ""))
+    .map((r) => ({
+      nome: r.nome,
+      horario: r.horario || "",
+      meta_kcal: r.meta_kcal || "",
+      observacao: r.observacao || "",
+      alimentos: (r.alimentos || []).map((item) => ({
+        ...item,
+        alimento_nome: item.alimento_nome || item.nome,
+        _m100: m100DoItemSalvo(item),
+        _medidas: item.medidas || [],
+        substitutos: item.substitutos || [],
+      })),
+    }));
   return {
     ...base,
     ...meta,
@@ -125,11 +86,7 @@ const draftFromPlan = (plan, d) => {
     meta_carboidrato_g: plan.meta_carboidrato_g ?? "",
     meta_lipidio_g: plan.meta_lipidio_g ?? "",
     observacoes: plan.observacoes || "",
-    refeicoes: MEAL_NAMES.map((name, index) => ({
-      ...base.refeicoes[index],
-      ...(plan.refeicoes?.[index] || {}),
-      alimentos: plan.refeicoes?.[index]?.alimentos || [],
-    })),
+    refeicoes: refeicoes.length ? refeicoes : base.refeicoes,
   };
 };
 
@@ -176,112 +133,15 @@ const sanitize = (draft) => ({
   })),
 });
 
-function FoodSearchModal({ title, onSelect, onClose }) {
-  const [q, setQ] = useState("");
-  const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const inputRef = useRef(null);
-
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 50); }, []);
-  useEffect(() => {
-    if (q.trim().length < 2) {
-      setResults([]);
-      return undefined;
-    }
-    const timer = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const { data } = await api.get(`/alimentos?q=${encodeURIComponent(q)}&limit=30`);
-        setResults(data.items || []);
-      } catch {
-        setResults([]);
-      } finally {
-        setLoading(false);
-      }
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [q]);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-6">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative flex max-h-[86vh] w-full flex-col rounded-t-2xl border border-white/[0.1] bg-[#0C1018] shadow-2xl sm:max-w-xl sm:rounded-2xl">
-        <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
-          <div>
-            <div className="text-sm font-bold text-white">{title}</div>
-            <div className="text-[11px] text-gray-500">Buscar alimento do cadastro</div>
-          </div>
-          <button type="button" onClick={onClose} className="evo-btn-ghost p-2"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="p-4">
-          <div className="flex items-center gap-3 rounded-lg border border-white/[0.08] bg-white/[0.05] px-3 py-2">
-            <Search className="h-4 w-4 text-gray-500" />
-            <input ref={inputRef} value={q} onChange={(event) => setQ(event.target.value)} className="flex-1 bg-transparent text-sm text-white outline-none" placeholder="Digite ao menos 2 letras" />
-          </div>
-        </div>
-        <div className="min-h-[260px] flex-1 overflow-y-auto">
-          {!loading && results.length === 0 && <div className="px-5 py-10 text-center text-sm text-gray-500">Nenhum alimento selecionado.</div>}
-          {results.map((food) => (
-            <button
-              key={food.id}
-              type="button"
-              onClick={() => onSelect(food)}
-              className="flex w-full items-center justify-between gap-3 border-b border-white/[0.04] px-5 py-3 text-left hover:bg-white/[0.04]"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-white">{food.nome}</div>
-                <div className="mt-0.5 truncate text-[11px] text-gray-500">{food.grupo_display || food.grupo || food.categoria || "-"}</div>
-              </div>
-              <div className="shrink-0 text-right">
-                <div className="text-sm font-bold text-white">{Math.round(food.energia_kcal_100g || 0)}</div>
-                <div className="text-[10px] text-gray-600">kcal/100g</div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function Input({ label, value, onChange, type = "text", unit }) {
   return (
     <label className="block">
       <span className="evo-label">{label}</span>
       <div className="relative">
-        <input type={type} className={`evo-input h-10 ${unit ? "pr-16" : ""}`} value={value ?? ""} onChange={(event) => onChange(event.target.value)} />
-        {unit && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-500">{unit}</span>}
+        <input type={type} className={`evo-input h-10 ${unit ? "pr-14" : ""}`} value={value ?? ""} onChange={(event) => onChange(event.target.value)} />
+        {unit && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-gray-500">{unit}</span>}
       </div>
     </label>
-  );
-}
-
-function MacroBox({ label, grams, kcal, pct, gkg }) {
-  return (
-    <div className="rounded-lg border border-white/[0.08] bg-white/[0.035] p-3">
-      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{label}</div>
-      <div className="mt-2 grid grid-cols-4 gap-2 text-center text-xs">
-        <div><div className="text-gray-500">g</div><div className="font-semibold text-white">{fmt(grams)}</div></div>
-        <div><div className="text-gray-500">%</div><div className="font-semibold text-white">{fmt(pct)}</div></div>
-        <div><div className="text-gray-500">Kcal</div><div className="font-semibold text-white">{fmt(kcal)}</div></div>
-        <div><div className="text-gray-500">g/kg</div><div className="font-semibold text-white">{fmt(gkg)}</div></div>
-      </div>
-    </div>
-  );
-}
-
-function FoodCell({ item, label, onPick, onQty, onMeasure }) {
-  return (
-    <div className="min-w-[220px]">
-      <button type="button" onClick={onPick} className="w-full rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-left hover:border-rc-blue/40">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{label}</div>
-        <div className="mt-1 min-h-[20px] truncate text-sm font-semibold text-white">{getItemName(item) || "Selecionar alimento"}</div>
-      </button>
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <input className="evo-input h-9" type="number" value={item?.quantidade || ""} onChange={(event) => onQty(event.target.value)} placeholder="Qtd" />
-        <input className="evo-input h-9" value={item?.medida_nome || "Gramas"} onChange={(event) => onMeasure(event.target.value)} placeholder="Medida" />
-      </div>
-    </div>
   );
 }
 
@@ -557,7 +417,6 @@ export default function PrescricaoDietetica({ d }) {
   const [draft, setDraft] = useState(() => defaultDraft(d));
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [picker, setPicker] = useState(null);
 
   const loadPlans = useCallback(async () => {
     const { data } = await api.get(`/patients/${pid}/planos-manuais`);
@@ -568,60 +427,7 @@ export default function PrescricaoDietetica({ d }) {
 
   useEffect(() => { loadPlans().catch(() => {}); }, [loadPlans]);
 
-  const display = draft;
-  const dayTotals = sumDay(display.refeicoes);
-  const peso = toNumber(display.peso);
-  const kcal = toNumber(dayTotals.energia_kcal || display.meta_kcal);
-  const macroPct = (value, factor) => kcal ? round((toNumber(value) * factor / kcal) * 100) : 0;
-
   const setDraftValue = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
-  const updateMeal = (mealIndex, updater) => setDraft((current) => {
-    const meals = [...current.refeicoes];
-    meals[mealIndex] = updater(meals[mealIndex]);
-    return { ...current, refeicoes: meals };
-  });
-
-  const upsertFood = (mealIndex, itemIndex, slot, food) => {
-    const quantity = food.porcao_padrao_g || food.quantidade_referencia_g || 100;
-    const nextFood = {
-      alimento_id: food.id,
-      alimento_nome: food.nome,
-      nome: food.nome,
-      medida_nome: food.medida_caseira || "Gramas",
-      quantidade: quantity,
-      quantidade_g: quantity,
-      _nome: food.nome,
-      _kcal100g: food.energia_kcal_100g || 0,
-      _grupo: food.grupo_display || food.grupo || food.categoria,
-    };
-
-    updateMeal(mealIndex, (meal) => {
-      const foods = [...(meal.alimentos || [])];
-      const base = foods[itemIndex] || { quantidade: quantity, quantidade_g: quantity, medida_nome: "Gramas", substitutos: [] };
-      if (slot === "preferencia") foods[itemIndex] = { ...base, ...nextFood, substitutos: base.substitutos || [] };
-      if (slot === "sub1" || slot === "sub2") {
-        const subIndex = slot === "sub1" ? 0 : 1;
-        const subs = [...(base.substitutos || [])];
-        subs[subIndex] = nextFood;
-        foods[itemIndex] = { ...base, substitutos: subs };
-      }
-      return { ...meal, alimentos: foods };
-    });
-    setPicker(null);
-  };
-
-  const updateFood = (mealIndex, itemIndex, slot, patch) => updateMeal(mealIndex, (meal) => {
-    const foods = [...(meal.alimentos || [])];
-    const item = foods[itemIndex] || { substitutos: [] };
-    if (slot === "preferencia") foods[itemIndex] = { ...item, ...patch };
-    else {
-      const subIndex = slot === "sub1" ? 0 : 1;
-      const subs = [...(item.substitutos || [])];
-      subs[subIndex] = { ...(subs[subIndex] || {}), ...patch };
-      foods[itemIndex] = { ...item, substitutos: subs };
-    }
-    return { ...meal, alimentos: foods };
-  });
 
   const save = async () => {
     setSaving(true);
@@ -678,14 +484,6 @@ export default function PrescricaoDietetica({ d }) {
 
   return (
     <div className="space-y-4" data-testid="prescricao-dietetica-workspace">
-      {picker && (
-        <FoodSearchModal
-          title={`${display.refeicoes[picker.mealIndex]?.nome || "Refeição"} · ${FOOD_COLUMNS.find(([key]) => key === picker.slot)?.[1]}`}
-          onSelect={(food) => upsertFood(picker.mealIndex, picker.itemIndex, picker.slot, food)}
-          onClose={() => setPicker(null)}
-        />
-      )}
-
       <PlanSelector
         plans={plans}
         selectedId={selected?.id}
@@ -698,127 +496,52 @@ export default function PrescricaoDietetica({ d }) {
 
       <DonatoPanel d={d} onApproved={loadPlans} />
 
-      <div className="evo-card overflow-hidden">
-        <div className="grid gap-4 border-b border-white/[0.08] bg-white/[0.035] p-5 xl:grid-cols-[1fr_520px]">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              {STRATEGIES.map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setDraftValue("estrategia", key)}
-                  className={`rounded-lg border px-3 py-2 text-xs font-bold ${display.estrategia === key ? "border-rc-blue bg-rc-blue text-black" : "border-white/[0.08] text-gray-400 hover:text-white"}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <h2 className="mt-5 font-display text-xl font-black uppercase text-white">{strategyTitle(display.estrategia)}</h2>
-            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <Input label="Nome" value={display.nome} onChange={(value) => setDraftValue("nome", value)} />
-              <Input label="Objetivo" value={display.objetivo} onChange={(value) => setDraftValue("objetivo", value)} />
-              <Input label="Peso" type="number" unit="kg" value={display.peso} onChange={(value) => setDraftValue("peso", value)} />
-              <Input label="GET" type="number" unit="kcal" value={display.get} onChange={(value) => setDraftValue("get", value)} />
-              <Input label="Altura" type="number" unit="cm" value={display.altura} onChange={(value) => setDraftValue("altura", value)} />
-              <Input label="Idade" type="number" unit="anos" value={display.idade} onChange={(value) => setDraftValue("idade", value)} />
-              <Input label="Ingestão máxima de água" type="number" unit="ml" value={display.agua_max_ml} onChange={(value) => setDraftValue("agua_max_ml", value)} />
-              <Input label="Ingestão mínima de água" type="number" unit="ml" value={display.agua_min_ml} onChange={(value) => setDraftValue("agua_min_ml", value)} />
-            </div>
+      {/* Dados do plano */}
+      <section className="rc-card p-5">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="grid gap-3 sm:grid-cols-2 flex-1 min-w-[280px]">
+            <Input label="Título" value={draft.titulo} onChange={(value) => setDraftValue("titulo", value)} />
+            <Input label="Objetivo" value={draft.objetivo} onChange={(value) => setDraftValue("objetivo", value)} />
           </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Macros</div>
-              <div className="text-xs text-gray-500">Total: <span className="font-semibold text-white">{fmt(dayTotals.energia_kcal, "kcal")}</span></div>
-            </div>
-            <div className="grid gap-2">
-              <MacroBox label="Proteína total" grams={dayTotals.proteinas_g} kcal={round(dayTotals.proteinas_g * 4)} pct={macroPct(dayTotals.proteinas_g, 4)} gkg={peso ? round(dayTotals.proteinas_g / peso) : 0} />
-              <MacroBox label="Carboidratos" grams={dayTotals.carboidratos_g} kcal={round(dayTotals.carboidratos_g * 4)} pct={macroPct(dayTotals.carboidratos_g, 4)} gkg={peso ? round(dayTotals.carboidratos_g / peso) : 0} />
-              <MacroBox label="Lipídios" grams={dayTotals.lipidios_g} kcal={round(dayTotals.lipidios_g * 9)} pct={macroPct(dayTotals.lipidios_g, 9)} gkg={peso ? round(dayTotals.lipidios_g / peso) : 0} />
-            </div>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Estratégia">
+            {STRATEGIES.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setDraftValue("estrategia", key)}
+                className={`rounded-lg px-3 h-9 text-[13px] transition-colors ${draft.estrategia === key ? "bg-rc-lime text-rc-ink font-medium" : "bg-white/[0.04] text-gray-400 hover:text-white"}`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
-
-        <div className="overflow-x-auto p-5">
-          <div className="min-w-[1180px] space-y-5">
-            <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-4 py-3">
-              <div className="text-sm font-bold text-white">TOTAL: {fmt(dayTotals.energia_kcal, "kcal")} · PTN {fmt(dayTotals.proteinas_g, "g")} · CHO {fmt(dayTotals.carboidratos_g, "g")} · LIP {fmt(dayTotals.lipidios_g, "g")}</div>
-            </div>
-
-            {display.refeicoes.map((meal, mealIndex) => {
-              const totals = meal.totais || sumMeal(meal);
-              const rows = [...(meal.alimentos || [])];
-              rows.push({ substitutos: [] });
-              return (
-                <section key={`${meal.nome}-${mealIndex}`} className="rounded-lg border border-white/[0.08]">
-                  <div className="grid grid-cols-[140px_1fr_96px_96px_96px_96px_110px_110px] items-center gap-3 border-b border-white/[0.08] bg-white/[0.05] px-3 py-3 text-xs">
-                    <div className="font-bold text-rc-blue">{meal.nome}</div>
-                    <div className="grid grid-cols-3 gap-3 text-center text-[11px] font-bold uppercase tracking-wider text-gray-500">
-                      {FOOD_COLUMNS.map(([, label]) => <div key={label}>{label}</div>)}
-                    </div>
-                    {MACROS.map(([key, label]) => <div key={key} className="text-center font-bold text-gray-500">{label}</div>)}
-                    <div className="text-center font-bold text-gray-500">Prot (A)</div>
-                    <div className="text-center font-bold text-gray-500">Prot (V)</div>
-                  </div>
-                  {rows.map((item, itemIndex) => (
-                    <div key={`${mealIndex}-${itemIndex}`} className="grid grid-cols-[140px_1fr_96px_96px_96px_96px_110px_110px] items-start gap-3 border-b border-white/[0.04] px-3 py-3 last:border-b-0">
-                      <div className="pt-2 text-xs text-gray-500">Linha {itemIndex + 1}</div>
-                      <div className="grid grid-cols-3 gap-3">
-                        <FoodCell
-                          item={item}
-                          label="Qtd (g/ml)"
-                          onPick={() => setPicker({ mealIndex, itemIndex, slot: "preferencia" })}
-                          onQty={(value) => updateFood(mealIndex, itemIndex, "preferencia", { quantidade: value, quantidade_g: value })}
-                          onMeasure={(value) => updateFood(mealIndex, itemIndex, "preferencia", { medida_nome: value })}
-                        />
-                        <FoodCell
-                          item={item.substitutos?.[0]}
-                          label="Qtd (g/ml)"
-                          onPick={() => setPicker({ mealIndex, itemIndex, slot: "sub1" })}
-                          onQty={(value) => updateFood(mealIndex, itemIndex, "sub1", { quantidade: value, quantidade_g: value })}
-                          onMeasure={(value) => updateFood(mealIndex, itemIndex, "sub1", { medida_nome: value })}
-                        />
-                        <FoodCell
-                          item={item.substitutos?.[1]}
-                          label="Qtd (g/ml)"
-                          onPick={() => setPicker({ mealIndex, itemIndex, slot: "sub2" })}
-                          onQty={(value) => updateFood(mealIndex, itemIndex, "sub2", { quantidade: value, quantidade_g: value })}
-                          onMeasure={(value) => updateFood(mealIndex, itemIndex, "sub2", { medida_nome: value })}
-                        />
-                      </div>
-                      {MACROS.map(([key, , unit]) => (
-                        <div key={key} className="pt-8 text-center text-xs font-semibold tabular-nums text-white">{fmt(getItemMacro(item, key), unit)}</div>
-                      ))}
-                      <div className="pt-8 text-center text-xs text-gray-400">-</div>
-                      <div className="pt-8 text-center text-xs text-gray-400">-</div>
-                    </div>
-                  ))}
-                  <div className="grid grid-cols-[140px_1fr_96px_96px_96px_96px_110px_110px] gap-3 bg-white/[0.025] px-3 py-3 text-xs">
-                    <div className="font-bold text-white">Metas da refeição:</div>
-                    <div className="grid grid-cols-4 gap-2">
-                      <Input label="Kcal" type="number" value={meal.meta_kcal || ""} onChange={(value) => updateMeal(mealIndex, (current) => ({ ...current, meta_kcal: value }))} />
-                      <Input label="Observações da refeição" value={meal.observacao || ""} onChange={(value) => updateMeal(mealIndex, (current) => ({ ...current, observacao: value }))} />
-                    </div>
-                    {MACROS.map(([key, label, unit]) => <div key={key} className="pt-7 text-center font-semibold text-rc-blue">{label}: {fmt(totals[key], unit)}</div>)}
-                    <div />
-                    <div />
-                  </div>
-                </section>
-              );
-            })}
-          </div>
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+          <Input label="Peso" type="number" unit="kg" value={draft.peso} onChange={(value) => setDraftValue("peso", value)} />
+          <Input label="Altura" type="number" unit="cm" value={draft.altura} onChange={(value) => setDraftValue("altura", value)} />
+          <Input label="Idade" type="number" unit="anos" value={draft.idade} onChange={(value) => setDraftValue("idade", value)} />
+          <Input label="GET" type="number" unit="kcal" value={draft.get} onChange={(value) => setDraftValue("get", value)} />
+          <Input label="Meta" type="number" unit="kcal" value={draft.meta_kcal} onChange={(value) => setDraftValue("meta_kcal", value)} />
+          <Input label="Água mín." type="number" unit="ml" value={draft.agua_min_ml} onChange={(value) => setDraftValue("agua_min_ml", value)} />
+          <Input label="Água máx." type="number" unit="ml" value={draft.agua_max_ml} onChange={(value) => setDraftValue("agua_max_ml", value)} />
         </div>
+      </section>
 
-        <div className="border-t border-white/[0.08] p-5">
-          <label className="block">
-            <span className="evo-label">Orientações</span>
-            <textarea className="evo-input min-h-[130px]" value={display.observacoes || ""} onChange={(event) => setDraftValue("observacoes", event.target.value)} placeholder="Orientações complementares da prescrição" />
-          </label>
-          <button type="button" onClick={save} disabled={saving} className="evo-btn-primary mt-4 w-full">
-            <Utensils className="h-4 w-4" />{saving ? "Salvando..." : (editingId || selected?.id) ? "Atualizar prescrição" : "Salvar prescrição dietética"}
-          </button>
-        </div>
+      {/* Editor de refeicoes + total da dieta */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_272px] items-start">
+        <EditorDieta refeicoes={draft.refeicoes} onChange={(refeicoes) => setDraftValue("refeicoes", refeicoes)} />
+        <PainelTotais refeicoes={draft.refeicoes} peso={draft.peso} metaKcal={draft.meta_kcal} />
       </div>
+
+      <section className="rc-card p-5">
+        <label className="block">
+          <span className="evo-label">Orientações</span>
+          <textarea className="evo-input min-h-[120px]" value={draft.observacoes || ""} onChange={(event) => setDraftValue("observacoes", event.target.value)} placeholder="Orientações complementares da prescrição" />
+        </label>
+        <button type="button" onClick={save} disabled={saving} className="evo-btn-primary mt-4 w-full h-11">
+          <Utensils className="h-4 w-4" />{saving ? "Salvando..." : (editingId || selected?.id) ? "Atualizar prescrição" : "Salvar prescrição dietética"}
+        </button>
+      </section>
     </div>
   );
 }

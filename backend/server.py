@@ -4252,14 +4252,12 @@ async def search_alimentos(
     items = []
     async for a in cursor:
         # Normaliza campos de display para ambos os formatos (evonut e legado TACO/CUSTOM)
-        if "nutrientes" in a:
-            n = a.pop("nutrientes") or {}
-            a["energia_kcal_100g"] = n.get("energia_kcal")
-            a["grupo_display"] = a.get("grupo")
-        else:
-            p = a.get("por_100g") or {}
-            a["energia_kcal_100g"] = p.get("energia_kcal")
-            a["grupo_display"] = a.get("grupo") or a.get("categoria")
+        m100 = _macros_100g(a)
+        a.pop("nutrientes", None)
+        a.pop("por_100g", None)
+        a["energia_kcal_100g"] = m100["kcal"]
+        a["macros_100g"] = m100
+        a["grupo_display"] = a.get("grupo") or a.get("categoria")
         items.append(a)
     return {"total": total, "page": page, "limit": limit, "items": items}
 
@@ -4325,6 +4323,229 @@ async def get_alimento_equivalentes(aid: str, user=Depends(require_nutritionist)
         "descricao": entry.get("descricao"),
         "equivalentes": options,
     }
+
+# ---------- Motor de equivalentes (substituicoes calculadas) ----------
+_FRUTA_PREFIXOS = (
+    "abacaxi", "acerola", "amora", "ameixa", "banana", "caju", "caqui", "carambola", "cereja", "cupua", "damasco",
+    "figo", "framboesa", "goiaba", "graviola", "jabuticaba", "jaca", "kiwi", "laranja", "lichia", "lima", "limao",
+    "maca", "mamao", "manga", "maracuja", "melancia", "melao", "mexerica", "mirtilo", "morango", "nectarina",
+    "pera", "pessego", "pitanga", "pitaya", "roma", "tamara", "tangerina", "uva", "acai", "atemoia", "pinha",
+    "caja", "seriguela", "umbu", "buriti", "mangaba", "bacuri", "jambo", "sapoti", "cacau",
+)
+_EQUIV_KIND_POR_GRUPO = {
+    "Carnes e Proteínas": "proteina",
+    "Leite e Derivados": "laticinio",
+    "Frutas": "fruta",
+    "Frutas Oleosas": "gordura",
+    "Vegetais A (livres para o consumo)": "vegetal",
+    "Vegetais B": "vegetal",
+    "Livre": "vegetal",
+    "Livres": "vegetal",
+    "Óleos e Gorduras": "gordura",
+    "Oleaginosas e Sementes": "oleaginosa",
+    "Pães e Variedades": "carbo",
+    "Feijão e Leguminosas": "leguminosa",
+    "Sucos Naturais e Integrais": "suco",
+    "Fibras A": "fibra",
+    "Fibras B": "fibra",
+}
+_EQUIV_KIND_POR_PAPEL = {"ptn": ["proteina", "laticinio"], "cho": ["carbo", "fruta"], "lip": ["gordura", "oleaginosa"]}
+_EQUIV_FONTE_PESO = {"TACO": 0.0, "TBCA": 0.3, "IBGE": 0.5, "Tucunduva": 0.9}
+_EQUIV_PROCESSADO = re.compile(r"industrializ|frit[oa]|empanad|com a[cç][uú]car|em calda|ao molho|recheado|doce de|refrigerante|bisnaguinha|salgadinho|biscoito recheado")
+_equiv_cache: dict = {"ts": 0.0, "foods": []}
+
+
+def _macros_100g(doc: dict) -> dict:
+    """Macros por 100 g nos dois formatos (EVONUT e legado TACO/CUSTOM)."""
+    fator = 1.0  # EVONUT: nutrientes ja por 100 g
+    if "nutrientes" in doc:
+        n = doc.get("nutrientes") or {}
+        vals = (n.get("energia_kcal"), n.get("proteina_g"), n.get("carboidrato_g"), n.get("lipideos_g"), n.get("fibra_g"))
+    else:
+        p = doc.get("por_100g") or {}
+        fator = 1.0
+        vals = (p.get("energia_kcal"), p.get("proteinas_g"), p.get("carboidratos_g"), p.get("lipidios_g"), p.get("fibras_g"))
+    out = {}
+    for key, value in zip(("kcal", "ptn", "cho", "lip", "fib"), vals):
+        num = _coerce_float(value)
+        out[key] = round(num * fator, 2) if num is not None else None
+    return out
+
+
+def _equiv_papel(m: dict) -> Optional[str]:
+    kcal = (m.get("ptn") or 0) * 4 + (m.get("cho") or 0) * 4 + (m.get("lip") or 0) * 9
+    if kcal <= 0:
+        return None
+    shares = {"ptn": (m.get("ptn") or 0) * 4 / kcal, "cho": (m.get("cho") or 0) * 4 / kcal, "lip": (m.get("lip") or 0) * 9 / kcal}
+    return max(shares, key=shares.get)
+
+
+def _equiv_shares(m: dict) -> tuple:
+    kcal = (m.get("ptn") or 0) * 4 + (m.get("cho") or 0) * 4 + (m.get("lip") or 0) * 9
+    if kcal <= 0:
+        return (0.0, 0.0, 0.0)
+    return ((m.get("ptn") or 0) * 4 / kcal, (m.get("cho") or 0) * 4 / kcal, (m.get("lip") or 0) * 9 / kcal)
+
+
+_EQUIV_KIND_POR_NOME = [
+    ("vegetal", ("abobrinha", "alface", "agriao", "acelga", "almeirao", "berinjela", "beterraba", "brocolis", "cebola",
+                 "cenoura", "chicoria", "chuchu", "couve", "espinafre", "jilo", "maxixe", "palmito", "pepino", "pimentao",
+                 "quiabo", "rabanete", "repolho", "rucula", "tomate", "vagem", "aspargo", "cogumelo", "champignon",
+                 "alcachofra", "abobora", "moranga", "salsa", "cebolinha", "coentro", "nabo", "seleta de legumes")),
+    ("leguminosa", ("feijao", "lentilha", "grao de bico", "ervilha", "soja", "tremoco", "fava")),
+    ("laticinio", ("leite", "iogurte", "queijo", "requeijao", "ricota", "cottage", "coalhada", "kefir", "mussarela", "muçarela")),
+    ("proteina", ("frango", "carne", "bovin", "peixe", "file", "atum", "sardinha", "tilapia", "salmao", "ovo", "peru",
+                  "porco", "suin", "lombo", "camarao", "presunto", "patinho", "alcatra", "fraldinha", "acem", "whey",
+                  "tofu", "pescada", "merluza", "bacalhau", "corvina", "linguado", "cacao", "lagarto", "musculo")),
+    ("gordura", ("azeite", "oleo", "manteiga", "margarina", "banha", "abacate", "coco")),
+    ("oleaginosa", ("castanha", "amendoim", "noz", "nozes", "amendoa", "avela", "pistache", "macadamia", "linhaca",
+                    "chia", "gergelim", "semente", "pasta de amendoim")),
+    ("carbo", ("arroz", "macarrao", "massa", "batata", "mandioca", "aipim", "macaxeira", "inhame", "cara ", "cuscuz",
+               "tapioca", "aveia", "milho", "quinoa", "pao", "farinha", "cereal", "granola", "torrada", "biscoito",
+               "bolacha", "polenta", "nhoque", "cevada", "rap10", "wrap")),
+]
+
+
+def _equiv_kind_por_nome(nome_norm: str) -> Optional[str]:
+    cabeca = " ".join(nome_norm.split()[:3])
+    if nome_norm.startswith(_FRUTA_PREFIXOS):
+        return "fruta"
+    for kind, chaves in _EQUIV_KIND_POR_NOME:
+        if any(cabeca.startswith(k) or f" {k}" in f" {cabeca}" for k in chaves):
+            return kind
+    return None
+
+
+def _equiv_kind(doc: dict, m: dict) -> Optional[str]:
+    grupo = doc.get("grupo") or doc.get("categoria")
+    nome = _normalize_food_lookup(doc.get("nome", ""))
+    if grupo in (None, "", "Outros", "Cereais, Raízes, Tubérculos e Frutos"):
+        por_nome = _equiv_kind_por_nome(nome)
+        if por_nome:
+            return por_nome
+        if grupo == "Cereais, Raízes, Tubérculos e Frutos":
+            return "carbo"
+        return None  # sem pista: classificado so pelo papel do macro predominante
+    return _EQUIV_KIND_POR_GRUPO.get(grupo) or _equiv_kind_por_nome(nome)
+
+
+async def _equiv_foods() -> list[dict]:
+    """Catalogo leve em memoria (recarrega a cada 1h). Exclui marcas e alimentos customizados."""
+    import time as _time
+    if _equiv_cache["foods"] and _time.time() - _equiv_cache["ts"] < 3600:
+        return _equiv_cache["foods"]
+    foods = []
+    async for doc in db.alimentos.find({"nutricionista_id": {"$exists": False}}, {"_id": 0}):
+        nome = doc.get("nome") or ""
+        if "®" in nome or doc.get("fonte") in ("Danone", "Essential"):
+            continue
+        m = _macros_100g(doc)
+        if not m.get("kcal"):
+            continue
+        foods.append({
+            "id": doc.get("id"), "nome": nome, "grupo": doc.get("grupo") or doc.get("categoria"),
+            "fonte": doc.get("fonte"), "m": m, "kind": _equiv_kind(doc, m), "papel": _equiv_papel(m),
+            "shares": _equiv_shares(m), "norm": _normalize_food_lookup(nome),
+        })
+    _equiv_cache.update(ts=_time.time(), foods=foods)
+    return foods
+
+
+def _equiv_medida(nome: str, gramas: float) -> Optional[dict]:
+    """Escolhe a medida caseira que da um numero 'redondo' (0,5 a 6 unidades) para a quantidade."""
+    melhor = None
+    for med in _get_measures_for_food_name(nome):
+        g = _coerce_float(med.get("gramas"))
+        if not g or g <= 0:
+            continue
+        qtd = round((gramas / g) * 2) / 2
+        if qtd < 0.5 or qtd > 6:
+            continue
+        erro = abs(qtd * g - gramas) / gramas
+        if melhor is None or erro < melhor[0]:
+            melhor = (erro, {"nome": med["nome"], "quantidade": qtd, "gramas": round(qtd * g, 1)})
+    return melhor[1] if melhor else None
+
+
+async def _compute_equivalentes(base: dict, quantidade_g: float, q: str = "", limit: int = 15) -> dict:
+    mb = _macros_100g(base)
+    base_kcal = (mb.get("kcal") or 0) * quantidade_g / 100
+    papel = _equiv_papel(mb)
+    kind = _equiv_kind(base, mb)
+    if not kind and papel:
+        kinds = _EQUIV_KIND_POR_PAPEL.get(papel, [])
+    else:
+        kinds = [kind] if kind else []
+    por_peso = kind == "vegetal" or (mb.get("kcal") or 0) <= 40  # vegetais trocam por peso, nao por kcal
+    base_norm = _normalize_food_lookup(base.get("nome", ""))
+    base_misto = " com " in f" {base_norm} "
+    base_shares = _equiv_shares(mb)
+    filtro = _normalize_food_lookup(q) if q else ""
+    candidatos = []
+    for f in await _equiv_foods():
+        if f["id"] == base.get("id") or f["norm"] == base_norm:
+            continue
+        if filtro:
+            if filtro not in f["norm"]:
+                continue
+        elif f["kind"] not in kinds:
+            continue
+        distancia = sum(abs(a - b) for a, b in zip(base_shares, f["shares"]))
+        if not filtro and f["papel"] != papel and distancia > 0.35:
+            continue
+        kcal100 = f["m"]["kcal"] or 0
+        gramas = quantidade_g if por_peso else (base_kcal / kcal100 * 100 if kcal100 else 0)
+        gramas = round(gramas / 5) * 5 if gramas >= 20 else round(gramas, 1)
+        if gramas <= 0 or gramas > 600:
+            continue
+        score = distancia * 10 + _EQUIV_FONTE_PESO.get(f["fonte"], 1.2) + len(f["nome"]) / 45
+        if _EQUIV_PROCESSADO.search(f["norm"]):
+            score += 1.2
+        if not base_misto and (" com " in f" {f['norm']} " or f["norm"] in ("tabule", "salpicao", "farofa")):
+            score += 1.5  # prato pronto como troca de alimento simples
+        if re.match(r"(farinha|amido|fecula|polvilho)", f["norm"]) and not re.match(r"(farinha|amido|fecula|polvilho)", base_norm):
+            score += 2.0  # ingrediente de preparo, nao alimento pronto
+        if f["kind"] in ("proteina", "carbo", "leguminosa") and re.search(r"\bcru[a]?\b", f["norm"]):
+            score += 1.0  # prefere a forma pronta para consumo
+        candidatos.append((score, f, gramas))
+    candidatos.sort(key=lambda c: c[0])
+    vistos, saida = set(), []
+    for score, f, gramas in candidatos:
+        chave = " ".join(f["norm"].split()[:2])  # evita 10 variacoes do mesmo alimento
+        if chave in vistos and not filtro:
+            continue
+        vistos.add(chave)
+        fator = gramas / 100
+        macros = {k: round((f["m"].get(k) or 0) * fator, 1) for k in ("kcal", "ptn", "cho", "lip", "fib")}
+        base_q = {k: round((mb.get(k) or 0) * quantidade_g / 100, 1) for k in ("kcal", "ptn", "cho", "lip")}
+        saida.append({
+            "alimento_id": f["id"], "nome": f["nome"], "grupo": f["grupo"], "fonte": f["fonte"],
+            "quantidade_g": gramas, "medida": _equiv_medida(f["nome"], gramas), "macros": macros,
+            "macros_100g": f["m"],
+            "diferenca": {k: round(macros[k] - base_q[k], 1) for k in ("ptn", "cho", "lip")},
+            "similaridade": max(0, round(100 - score * 8)),
+        })
+        if len(saida) >= limit:
+            break
+    return {
+        "base": {
+            "alimento_id": base.get("id"), "nome": base.get("nome"), "quantidade_g": quantidade_g,
+            "grupo": base.get("grupo") or base.get("categoria"), "tipo": kind or (f"papel_{papel}" if papel else None),
+            "macros": {k: round((mb.get(k) or 0) * quantidade_g / 100, 1) for k in ("kcal", "ptn", "cho", "lip", "fib")},
+        },
+        "criterio": "mesmo peso" if por_peso else "mesmas calorias",
+        "equivalentes": saida,
+    }
+
+
+@api.get("/alimentos/{aid}/equivalentes-calculados")
+async def get_equivalentes_calculados(
+    aid: str, quantidade_g: float = 100, q: str = "", limit: int = 15, user=Depends(require_nutritionist),
+):
+    doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Alimento nao encontrado")
+    return await _compute_equivalentes(doc, max(1.0, float(quantidade_g)), q.strip(), max(1, min(limit, 40)))
 
 class AlimentoCalcIn(BaseModel):
     alimento_id: str
@@ -4563,7 +4784,9 @@ async def importar_cadastros_csv(tipo: str = Query(...), file: UploadFile = File
 # â”€â”€ Plano Alimentar Manual â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _nutrientes_por_porcao(alimento: dict, quantidade_g: float) -> dict:
-    ref_g = alimento.get("quantidade_referencia_g", 100.0) or 100.0
+    # No formato EVONUT os nutrientes estao sempre por 100 g. Em alguns itens ("Meus Alimentos")
+    # quantidade_referencia_g guarda a porcao (ex.: whey 30 g), e usa-lo como base inflava os valores.
+    ref_g = 100.0 if "nutrientes" in alimento else (alimento.get("quantidade_referencia_g", 100.0) or 100.0)
     f = quantidade_g / ref_g
     # Formato EVONUT: campo "nutrientes" com nomes diferentes
     if "nutrientes" in alimento:
