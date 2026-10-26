@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api } from "@/lib/evo-api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link } from "react-router-dom";
-import { ArrowUpRight, ChevronRight, Stethoscope, UserPlus, CalendarDays } from "lucide-react";
+import { ArrowUpRight, ChevronRight, Stethoscope, UserPlus, CalendarDays, Wallet } from "lucide-react";
 import StatusBadge, { STATUS_LABELS } from "@/components/evonut/StatusBadge";
+import { CobrarButton, PagamentoModal, PlanoStatusBadge, dataBR, moeda } from "@/components/evonut/Financeiro";
 
 const FUNIL_ORDEM = [
   "LEAD_INICIADO",
@@ -56,6 +57,62 @@ function Initials({ nome }) {
     <div className="w-9 h-9 shrink-0 rounded-[10px] bg-rc-raised text-gray-200 flex items-center justify-center text-[12px] font-semibold uppercase shadow-[0_0_0_1px_rgba(255,255,255,0.07)]">
       {ini}
     </div>
+  );
+}
+
+function PlanosVencendo() {
+  const [resumo, setResumo] = useState(null);
+  const [pagando, setPagando] = useState(null);
+  const load = useCallback(() => {
+    api.get("/financeiro/resumo", { params: { janela: 7 } }).then((r) => setResumo(r.data)).catch(() => setResumo({ cobrar: [] }));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const lista = resumo?.cobrar || [];
+  const vencidos = lista.filter((a) => a.status === "vencido").length;
+  return (
+    <section className="rc-card mt-5" data-testid="planos-vencendo">
+      <div className="flex items-center justify-between gap-3 px-5 sm:px-6 pt-5 pb-3">
+        <div>
+          <h2 className="rc-h3">Planos vencendo</h2>
+          <p className="text-[12.5px] text-gray-500 mt-1">
+            {resumo === null ? "Carregando..." : lista.length
+              ? `${lista.length} ${lista.length === 1 ? "aluno" : "alunos"} para cobrar${vencidos ? `, ${vencidos} já ${vencidos === 1 ? "vencido" : "vencidos"}` : ""}`
+              : "Nenhum plano vence nos próximos 7 dias"}
+          </p>
+        </div>
+        <Link to="/pagamentos" className="rc-btn-ghost -mr-2"><Wallet className="w-3.5 h-3.5" /> Pagamentos</Link>
+      </div>
+      {resumo === null && <div className="px-5 sm:px-6 pb-5 space-y-3">{[0, 1].map((i) => <Skeleton key={i} className="h-10" />)}</div>}
+      {lista.length > 0 && (
+        <ul className="pb-2">
+          {lista.slice(0, 8).map((a) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 sm:px-6 py-3 border-t border-white/[0.04]">
+              <Initials nome={a.nome} />
+              <Link to={`/pacientes/${a.id}`} className="flex-1 min-w-[160px]">
+                <div className="text-[14px] font-medium text-gray-100 truncate">{a.nome}</div>
+                <div className="text-[12px] text-gray-500 truncate">
+                  {a.assinatura?.plano} · {moeda(a.assinatura?.valor)} · vence {dataBR(a.assinatura?.vencimento)}
+                </div>
+              </Link>
+              <PlanoStatusBadge aluno={a} />
+              <div className="flex gap-1.5">
+                <CobrarButton aluno={a} onDone={load} compact />
+                <button type="button" onClick={() => setPagando(a)} className="rc-btn-primary px-2.5 py-1.5 text-[12.5px]">
+                  <Wallet className="w-3.5 h-3.5" strokeWidth={1.75} /> Pago
+                </button>
+              </div>
+            </li>
+          ))}
+          {lista.length > 8 && (
+            <li className="px-5 sm:px-6 py-3 border-t border-white/[0.04]">
+              <Link to="/pagamentos" className="text-[13px] text-rc-blueLight hover:text-white">Ver mais {lista.length - 8} na tela de pagamentos</Link>
+            </li>
+          )}
+        </ul>
+      )}
+      {pagando && <PagamentoModal aluno={pagando} onClose={() => setPagando(null)} onSaved={load} />}
+    </section>
   );
 }
 
@@ -125,6 +182,8 @@ export default function Dashboard() {
           delay={120}
         />
       </section>
+
+      <PlanosVencendo />
 
       <div className="grid lg:grid-cols-3 gap-5 mt-5">
         <div className="lg:col-span-2 space-y-5">

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import {
-  Baby, CalendarDays, HeartPulse, Pencil, Ruler, Save, ScanLine,
+  Baby, CalendarDays, ChevronLeft, ChevronRight, Eraser, HeartPulse, Pencil, Ruler, Save, ScanLine,
   Trash2, UserRound, X,
 } from "lucide-react";
 import {
@@ -73,10 +73,18 @@ const BIOIMPEDANCIA = [
 ];
 
 const PROTOCOLOS = [
-  ["pollock7", "Jackson & Pollock - 7 dobras"],
-  ["pollock3", "Jackson & Pollock - 3 dobras"],
-  ["faulkner", "Faulkner - 4 dobras"],
+  ["pollock7", "Jackson, Pollock e Ward 7D (1980)"],
+  ["pollock3", "Jackson e Pollock 3D (1978/1980)"],
+  ["faulkner", "Faulkner 4D (1968)"],
 ];
+
+// Dobras que entram na fórmula de cada protocolo (ficam em vermelho na grade).
+const dobrasExigidas = (protocolo, sexo) => {
+  if (protocolo === "pollock7") return ["subescapular", "tricipital", "peitoral", "axilar", "suprailiaca", "abdominal", "coxa"];
+  if (protocolo === "pollock3") return sexo === "M" ? ["peitoral", "abdominal", "coxa"] : ["tricipital", "suprailiaca", "coxa"];
+  if (protocolo === "faulkner") return ["tricipital", "subescapular", "suprailiaca", "abdominal"];
+  return [];
+};
 
 const numberFmt = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
 
@@ -115,17 +123,17 @@ const emptyForm = (patient) => ({
   gestacional: { peso_pre_gestacional: "", dum: "", idade_gestacional: "", dpp: "" },
 });
 
-const numericObject = (source = {}) => Object.fromEntries(
-  Object.entries(source)
-    .map(([key, value]) => [key, value === "" || value == null ? null : Number(value)])
-    .filter(([, value]) => Number.isFinite(value)),
-);
-
 const toNumber = (value) => {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(String(value).replace(",", ".").replace(/[^\d.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+const numericObject = (source = {}) => Object.fromEntries(
+  Object.entries(source)
+    .map(([key, value]) => [key, toNumber(value)])
+    .filter(([, value]) => value !== null),
+);
 
 const valueOrBlank = (value, unit) => {
   if (value === null || value === undefined || value === "") return "-";
@@ -295,9 +303,9 @@ const BIO_ROWS = [
   { label: "Massa Magra (kg)", unit: "kg", get: (e, c) => getBio(e, "massa_magra_kg") ?? c.massa_magra },
   { label: "% Água Corporal", unit: "%", get: (e) => getBio(e, "agua_corporal_pct") },
   { label: "Água Corporal (L)", unit: "L", get: (e) => getBio(e, "agua_corporal_l") },
-  { label: "Peso Ósseo (kg)", unit: "kg", get: (e) => getBio(e, "peso_osseo_kg") },
+  { label: "Peso Ósseo (kg)", unit: "kg", get: (e, c) => getBio(e, "peso_osseo_kg") ?? c.peso_osseo },
   { label: "Peso Residual (kg)", unit: "kg", get: (e, c) => getBio(e, "peso_residual_kg") ?? c.peso_residual },
-  { label: "Peso Muscular (kg)", unit: "kg", get: (e) => getBio(e, "peso_muscular_kg") },
+  { label: "Peso Muscular (kg)", unit: "kg", get: (e, c) => getBio(e, "peso_muscular_kg") ?? c.peso_muscular },
   { label: "Nível de Gordura Visceral", get: (e) => getBio(e, "gordura_visceral"), recommendation: () => "<= 9" },
   { label: "Idade Metabólica (anos)", unit: "anos", get: (e) => getBio(e, "idade_metabolica") },
 ];
@@ -309,9 +317,9 @@ const ADULT_ROWS = [
   { label: "% Massa magra", unit: "%", get: (e, c) => c.pct_massa_magra },
   { label: "Massa gorda", unit: "kg", get: (e, c) => c.massa_gorda },
   { label: "Massa magra", unit: "kg", get: (e, c) => c.massa_magra },
-  { label: "* Peso ósseo", unit: "kg", get: (e) => getBio(e, "peso_osseo_kg") },
+  { label: "* Peso ósseo", unit: "kg", get: (e, c) => getBio(e, "peso_osseo_kg") ?? c.peso_osseo },
   { label: "* Peso residual", unit: "kg", get: (e, c) => c.peso_residual },
-  { label: "* Peso muscular", unit: "kg", get: (e) => getBio(e, "peso_muscular_kg") },
+  { label: "* Peso muscular", unit: "kg", get: (e, c) => getBio(e, "peso_muscular_kg") ?? c.peso_muscular },
   { label: "Densidade corporal", get: (e, c) => c.densidade_corporal },
   { label: "Razão cintura / quadril", get: (e, c) => c.rcq, status: (e, c) => c.rcq == null ? null : c.rcq_risco ? "Risco" : "Normal" },
   { label: "Índice de conicidade", get: (e, c) => c.ic, recommendation: () => "M < 1,25 / F < 1,18", status: (e, c) => c.ic_classificacao },
@@ -339,6 +347,174 @@ const GESTATIONAL_ROWS = [
   { label: "Ganho de peso", unit: "kg", get: (e) => gestationalGain(e), status: (e, c) => c.imc_gestacional_classificacao },
 ];
 
+const fmtMedida = (value) => {
+  const n = toNumber(value);
+  return n === null ? "" : n.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+};
+
+function GridCell({ editable, value, onChange, destaque, apagada, label }) {
+  if (!editable) {
+    return <span className={`block text-center tabular ${destaque ? "text-rc-coral/80" : apagada ? "text-gray-600" : "text-gray-300"}`}>{fmtMedida(value)}</span>;
+  }
+  return (
+    <input
+      aria-label={label}
+      inputMode="decimal"
+      className={`w-full h-8 rounded-md bg-rc-surfaceAlt text-center tabular outline-none shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)] focus:shadow-[inset_0_0_0_1px_#0081FD,0_0_0_3px_rgba(0,129,253,0.22)] ${destaque ? "text-rc-coral font-semibold shadow-[inset_0_0_0_1px_rgba(255,107,87,0.45)]" : apagada ? "text-gray-400 opacity-40 focus:opacity-100" : "text-gray-50"}`}
+      value={typeof value === "number" ? String(value).replace(".", ",") : value ?? ""}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+function ColumnHeader({ col, onPick }) {
+  const body = (
+    <>
+      <div className={col.editable ? "text-rc-lime" : "text-rc-blueLight"}>{col.numero}ª Avaliação</div>
+      <div className="mt-0.5 font-normal normal-case tracking-normal text-gray-500">
+        {col.editable ? (col.novo ? "nova" : "editando") : formatDate(evaluationDate(col.data))}
+      </div>
+    </>
+  );
+  if (col.editable) return <div className="px-1">{body}</div>;
+  return (
+    <button type="button" onClick={() => onPick(col.data)} title="Editar esta avaliação" className="w-full rounded-md px-1 py-0.5 hover:bg-white/[0.05]">
+      {body}
+    </button>
+  );
+}
+
+function PerimetriaAdipometria({ form, setForm, columns, onPick }) {
+  const [inicio, setInicio] = useState(null);
+  const maxInicio = Math.max(0, columns.length - MAX_RESULT_COLUMNS);
+  const editIndex = columns.findIndex((col) => col.editable);
+  const autoInicio = Math.min(Math.max(0, editIndex - (MAX_RESULT_COLUMNS - 1)), maxInicio);
+  const start = Math.min(Math.max(0, inicio ?? autoInicio), maxInicio);
+  const visible = columns.slice(start, start + MAX_RESULT_COLUMNS);
+  while (visible.length < MAX_RESULT_COLUMNS) visible.push(null);
+  const exigidas = dobrasExigidas(form.protocolo_dobras, form.sexo);
+
+  const setValor = (grupo, key, value) => setForm((current) => ({
+    ...current,
+    [grupo]: { ...(current[grupo] || {}), [key]: value },
+  }));
+  const valor = (col, grupo, key) => (col?.editable ? form[grupo]?.[key] : col?.data?.[grupo]?.[key]);
+  const somaLinha = (key) => visible.reduce((acc, col) => acc + (toNumber(valor(col, "dobras", key)) ?? 0), 0);
+  const somaColuna = (col) => DOBRAS.reduce((acc, [key]) => acc + (toNumber(valor(col, "dobras", key)) ?? 0), 0);
+  const totalGeral = visible.reduce((acc, col) => acc + (col ? somaColuna(col) : 0), 0);
+  const limpar = () => {
+    if (!window.confirm("Limpar perímetros e dobras da avaliação em edição?")) return;
+    setForm((current) => ({ ...current, perimetria: {}, dobras: {}, diametros_osseos: {} }));
+  };
+  const editavel = (col) => (col?.editable ? "bg-rc-lime/[0.06]" : "");
+
+  const headCells = visible.map((col, i) => (
+    <th key={col?.key || `vazio-${i}`} className={`w-[92px] px-1.5 py-2 text-center text-[11px] font-bold ${editavel(col)}`}>
+      {col ? <ColumnHeader col={col} onPick={onPick} /> : <span className="text-gray-600">{start + i + 1}ª Avaliação</span>}
+    </th>
+  ));
+
+  return (
+    <section className="evo-card p-5" data-testid="perimetria-adipometria">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h3 className="evo-h3">Perimetria & Adipometria</h3>
+          <p className="mt-1 text-xs text-gray-500">As avaliações ficam lado a lado. Clique no título de uma avaliação salva para editá-la.</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="block w-[270px] max-w-full">
+            <span className="evo-label">Protocolo de dobras</span>
+            <select data-testid="anth-protocolo" className="evo-input h-10" value={form.protocolo_dobras} onChange={(e) => setForm((c) => ({ ...c, protocolo_dobras: e.target.value }))}>
+              {PROTOCOLOS.map(([key, text]) => <option key={key} value={key}>{text}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={limpar} className="evo-btn-ghost h-10"><Eraser className="h-4 w-4" />Limpar</button>
+        </div>
+      </div>
+
+      {columns.length > MAX_RESULT_COLUMNS && (
+        <div className="mb-2 flex items-center justify-end gap-1 text-[11px] text-gray-500">
+          <button type="button" aria-label="Avaliações anteriores" disabled={start === 0} onClick={() => setInicio(start - 1)} className="evo-btn-ghost p-1.5 disabled:opacity-30">
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="tabular">{start + 1}ª a {Math.min(start + MAX_RESULT_COLUMNS, columns.length)}ª de {columns.length}</span>
+          <button type="button" aria-label="Próximas avaliações" disabled={start >= maxInicio} onClick={() => setInicio(start + 1)} className="evo-btn-ghost p-1.5 disabled:opacity-30">
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[480px] border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-white/[0.08]">
+                <th className="px-2 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-rc-blueLight">Perímetros (cm)</th>
+                {headCells}
+              </tr>
+            </thead>
+            <tbody>
+              {PERIMETRIA.map(([key, label]) => (
+                <tr key={key} className="border-b border-white/[0.04]">
+                  <th className="px-2 py-1 text-left font-medium text-gray-300">{label}</th>
+                  {visible.map((col, i) => (
+                    <td key={col?.key || `vazio-${i}`} className={`px-1.5 py-1 ${editavel(col)}`}>
+                      {col && <GridCell editable={col.editable} value={valor(col, "perimetria", key)} onChange={(v) => setValor("perimetria", key, v)} label={`${label} - ${col.numero}ª avaliação`} />}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="space-y-5">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[540px] border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-white/[0.08]">
+                  <th className="px-2 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-rc-blueLight">Dobras (mm)</th>
+                  {headCells}
+                  <th className="w-[70px] px-1.5 py-2 text-center text-[11px] font-bold text-gray-300">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {DOBRAS.map(([key, label]) => {
+                  const destaque = exigidas.includes(key);
+                  const apagada = exigidas.length > 0 && !destaque;
+                  return (
+                    <tr key={key} className={`border-b border-white/[0.04] transition-colors ${destaque ? "bg-rc-coral/[0.06]" : ""}`}>
+                      <th className={`px-2 py-1 text-left ${destaque ? "font-semibold text-rc-coral" : apagada ? "font-medium text-gray-600" : "font-medium text-gray-300"}`}>{label}</th>
+                      {visible.map((col, i) => (
+                        <td key={col?.key || `vazio-${i}`} className={`px-1.5 py-1 ${editavel(col)}`}>
+                          {col && <GridCell editable={col.editable} destaque={destaque} apagada={apagada} value={valor(col, "dobras", key)} onChange={(v) => setValor("dobras", key, v)} label={`Dobra ${label} - ${col.numero}ª avaliação`} />}
+                        </td>
+                      ))}
+                      <td className={`px-1.5 py-1 text-center tabular ${apagada ? "text-gray-600" : "text-gray-400"}`}>{fmtMedida(somaLinha(key))}</td>
+                    </tr>
+                  );
+                })}
+                <tr className="border-t border-white/[0.1]">
+                  <th className="px-2 py-2 text-left font-bold text-gray-200">Total</th>
+                  {visible.map((col, i) => (
+                    <td key={col?.key || `vazio-${i}`} className={`px-1.5 py-2 text-center tabular font-semibold text-white ${editavel(col)}`}>
+                      {col ? fmtMedida(somaColuna(col)) : ""}
+                    </td>
+                  ))}
+                  <td className="px-1.5 py-2 text-center tabular font-semibold text-rc-lime">{fmtMedida(totalGeral)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="rc-well px-3 py-2 text-center text-[11.5px] text-gray-400">
+            Ao escolher o protocolo, só as dobras usadas no cálculo ficam <span className="font-semibold text-rc-coral">acesas</span>; as demais ficam apagadas.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function Antropometria({ d, reload }) {
   const [section, setSection] = useState("dados");
   const [editingId, setEditingId] = useState(null);
@@ -350,6 +526,13 @@ export default function Antropometria({ d, reload }) {
     .sort((a, b) => String(evaluationDate(a) || a.created_at || "").localeCompare(String(evaluationDate(b) || b.created_at || ""))),
   [evaluations]);
   const resultEvaluations = orderedEvaluations.slice(-MAX_RESULT_COLUMNS);
+  const gridColumns = useMemo(() => {
+    const cols = orderedEvaluations.map((evaluation, index) => ({
+      key: evaluation.id, numero: index + 1, data: evaluation, editable: evaluation.id === editingId,
+    }));
+    if (!editingId) cols.push({ key: "nova", numero: cols.length + 1, data: null, editable: true, novo: true });
+    return cols;
+  }, [orderedEvaluations, editingId]);
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const setNested = (group, key, value) => setForm((current) => ({
@@ -370,7 +553,7 @@ export default function Antropometria({ d, reload }) {
     setSection("dados");
   };
 
-  const editEvaluation = (evaluation) => {
+  const editEvaluation = (evaluation, keepSection = false) => {
     setEditingId(evaluation.id);
     setForm({
       ...emptyForm(d.patient),
@@ -383,7 +566,7 @@ export default function Antropometria({ d, reload }) {
       bioimpedancia: evaluation.bioimpedancia || {},
       gestacional: { ...emptyForm(d.patient).gestacional, ...(evaluation.gestacional || {}) },
     });
-    setSection("dados");
+    if (!keepSection) setSection("dados");
   };
 
   const removeEvaluation = async (evaluation) => {
@@ -474,31 +657,16 @@ export default function Antropometria({ d, reload }) {
       )}
 
       {section === "medidas" && (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <SectionCard title="Perímetros (cm)" description="Mesmos perímetros da planilha, separados por lateralidade quando aplicável.">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-              {PERIMETRIA.map(([key, label]) => (
-                <Field key={key} label={label} value={form.perimetria[key]} onChange={(v) => setNested("perimetria", key, v)} unit="cm" testId={`perim-${key}`} />
-              ))}
-            </div>
-          </SectionCard>
-          <div className="space-y-4">
-            <SectionCard title="Dobras (mm)" description="Dobras cutâneas do bloco de adipometria. O protocolo define quais entram no cálculo.">
-              <SelectField label="Protocolo de dobras" value={form.protocolo_dobras} onChange={(v) => set("protocolo_dobras", v)} options={PROTOCOLOS} testId="anth-protocolo" />
-              <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
-                {DOBRAS.map(([key, label]) => (
-                  <Field key={key} label={label} value={form.dobras[key]} onChange={(v) => setNested("dobras", key, v)} unit="mm" testId={`dobra-${key}`} />
-                ))}
-              </div>
-            </SectionCard>
-            <SectionCard title="Diâmetros ósseos" description="Campos auxiliares do bloco de perimetria e adipometria.">
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Punho" value={form.diametros_osseos.punho} onChange={(v) => setNested("diametros_osseos", "punho", v)} unit="cm" />
-                <Field label="Fêmur" value={form.diametros_osseos.femur} onChange={(v) => setNested("diametros_osseos", "femur", v)} unit="cm" />
-              </div>
-            </SectionCard>
-          </div>
-        </div>
+        <PerimetriaAdipometria
+          form={form}
+          setForm={setForm}
+          columns={gridColumns}
+          onPick={(evaluation) => {
+            const temMedidas = [form.perimetria, form.dobras].some((g) => Object.values(g || {}).some((v) => v !== "" && v != null));
+            if (temMedidas && !window.confirm("Descartar as medidas não salvas da avaliação atual?")) return;
+            editEvaluation(evaluation, true);
+          }}
+        />
       )}
 
       {section === "bio" && (

@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope, Settings, Quote, Database,
-  Ruler, FileText, BookOpenText, PackagePlus, Menu, X,
+  Ruler, FileText, BookOpenText, PackagePlus, Menu, X, Wallet,
 } from "lucide-react";
 import RCLogo from "./RCLogo";
 
@@ -14,6 +14,7 @@ const groups = [
       { to: "/dashboard", label: "Painel", icon: LayoutDashboard, testid: "nav-dashboard" },
       { to: "/pacientes", label: "Pacientes", icon: Users, testid: "nav-pacientes" },
       { to: "/agenda", label: "Agenda", icon: CalendarDays, testid: "nav-agenda" },
+      { to: "/pagamentos", label: "Pagamentos", icon: Wallet, testid: "nav-pagamentos" },
       { to: "/consultorio", label: "Consultório", icon: Stethoscope, testid: "nav-consultorio" },
     ],
   },

@@ -28,6 +28,7 @@ import CadastroInsumos from "@/pages/CadastroInsumos";
 import CadastroMedidas from "@/pages/CadastroMedidas";
 import RotulosNutricionais from "@/pages/RotulosNutricionais";
 import OrientacoesNutricionais from "@/pages/OrientacoesNutricionais";
+import Pagamentos from "@/pages/Pagamentos";
 
 function Loader() {
   return (
@@ -78,6 +79,7 @@ function App() {
             <Route path="/pacientes" element={<Protected role="nutritionist"><Pacientes /></Protected>} />
             <Route path="/pacientes/:id" element={<Protected role="nutritionist"><PacienteDetalhe /></Protected>} />
             <Route path="/agenda" element={<Protected role="nutritionist"><Agenda /></Protected>} />
+            <Route path="/pagamentos" element={<Protected role="nutritionist"><Pagamentos /></Protected>} />
             <Route path="/agentes" element={<Protected role="nutritionist"><Agentes /></Protected>} />
             <Route path="/consultorio" element={<Protected role="nutritionist"><Consultorio /></Protected>} />
             <Route path="/cadastro-alimentos" element={<Protected role="nutritionist"><CadastroAlimentos /></Protected>} />

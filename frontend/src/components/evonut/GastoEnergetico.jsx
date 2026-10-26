@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Activity, Calculator, Flame, Gauge, Save, Scale, Settings2, Zap } from "lucide-react";
+import { Activity, Calculator, Flame, PieChart, RotateCcw, Save, Scale, Settings2, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 
@@ -11,7 +11,40 @@ const SECTIONS = [
   ["protocolos", "Seleção de Protocolos", Settings2],
   ["gasto", "Gasto Energético", Zap],
   ["meta", "Meta calórica", Scale],
+  ["macros", "Previsão de macros", PieChart],
 ];
+
+const NAF_RAPIDOS = ["1.4", "1.5", "1.6"];
+
+const ARREDONDAMENTOS = [
+  ["nenhum", "Sem arredondar"],
+  ["cima", "Para cima"],
+  ["baixo", "Para baixo"],
+];
+
+const arredondar = (value, modo, multiplo = 1) => {
+  if (value == null || !Number.isFinite(value)) return null;
+  const m = Number(multiplo) || 1;
+  if (modo === "cima") return Math.ceil(value / m) * m;
+  if (modo === "baixo") return Math.floor(value / m) * m;
+  return Math.round(value * 100) / 100;
+};
+
+const textoNumero = (value) => (value == null || value === "" ? "" : String(value).replace(".", ","));
+
+const calcPadrao = (salvo, getCalculado) => ({
+  get_base: textoNumero(salvo?.get_base ?? getCalculado ?? ""),
+  operacao: salvo?.operacao || "diminuir",
+  ajuste_kcal: textoNumero(salvo?.ajuste_kcal ?? 0),
+  arredondamento: salvo?.arredondamento || "nenhum",
+  multiplo: String(salvo?.multiplo || 10),
+  kcal_final: textoNumero(salvo?.kcal_final ?? ""),
+  final_manual: Boolean(salvo?.final_manual),
+  ptn_gkg: textoNumero(salvo?.ptn_gkg ?? 2),
+  lip_gkg: textoNumero(salvo?.lip_gkg ?? 1),
+  cho_modo: salvo?.cho_modo || "restante",
+  cho_gkg: textoNumero(salvo?.cho_gkg ?? 3),
+});
 
 const PROTOCOLOS_TMB = [
   ["mifflin_st_jeor", "Mifflin St Jeor"],
@@ -208,7 +241,149 @@ const META_ROWS = [
   { label: "Cálculo VENTA", get: () => "-" },
 ];
 
-export default function GastoEnergetico({ d }) {
+function CalculadoraGet({ calc, setCalcValue, getCalculado, totalCalculado, kcalFinal, onSalvar, salvando }) {
+  const baseDiferente = getCalculado != null && toNumber(calc.get_base) !== Math.round(getCalculado * 100) / 100;
+  return (
+    <SectionCard title="Calculadora GET" description="Todos os campos são editáveis. O resultado final fica a critério do personal.">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <Field label="Valor atual (GET)" type="text" value={calc.get_base} onChange={(value) => setCalcValue("get_base", value)} unit="kcal/dia" />
+          {baseDiferente && (
+            <button type="button" onClick={() => setCalcValue("get_base", textoNumero(Math.round(getCalculado * 100) / 100))} className="mt-1 text-[11px] text-rc-blueLight hover:text-white">
+              Usar GET calculado ({formatValue(getCalculado, "kcal")})
+            </button>
+          )}
+        </div>
+        <SelectField label="Aumentar/Diminuir" value={calc.operacao} onChange={(value) => setCalcValue("operacao", value)}>
+          <option value="diminuir">Diminuir</option>
+          <option value="aumentar">Aumentar</option>
+        </SelectField>
+        <Field label="Somar/Diminuir" type="text" value={calc.ajuste_kcal} onChange={(value) => setCalcValue("ajuste_kcal", value)} unit="kcal" />
+        <SelectField label="Arredondamento" value={calc.arredondamento} onChange={(value) => setCalcValue("arredondamento", value)}>
+          {ARREDONDAMENTOS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </SelectField>
+        <SelectField label="Arredondar de" value={calc.multiplo} onChange={(value) => setCalcValue("multiplo", value)}>
+          {["1", "10", "50", "100"].map((m) => <option key={m} value={m}>{m} em {m} kcal</option>)}
+        </SelectField>
+        <div className="col-span-2"><Metric label="Total calculado" value={totalCalculado} unit="kcal/dia" /></div>
+      </div>
+
+      <div className="mt-4 rounded-lg bg-rc-lime/[0.06] p-4 shadow-[inset_0_0_0_1px_rgba(195,245,60,0.2)]">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-rc-lime">Resultado final</span>
+          {calc.final_manual && (
+            <button type="button" onClick={() => setCalcValue("final_manual", false)} className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white">
+              <RotateCcw className="h-3 w-3" /> Voltar ao total
+            </button>
+          )}
+        </div>
+        <div className="relative mt-2">
+          <input
+            inputMode="decimal"
+            aria-label="Resultado final em kcal por dia"
+            className="evo-input h-12 pr-20 rc-num text-2xl"
+            value={calc.final_manual ? calc.kcal_final : textoNumero(totalCalculado)}
+            onChange={(event) => { setCalcValue("final_manual", true); setCalcValue("kcal_final", event.target.value); }}
+          />
+          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-gray-500">kcal/dia</span>
+        </div>
+        <p className="mt-2 text-[11px] text-gray-500">
+          {calc.final_manual ? "Valor definido pelo personal." : "Segue o total calculado. Digite para definir outro valor."}
+        </p>
+        <button type="button" onClick={onSalvar} disabled={salvando || kcalFinal == null} className="evo-btn-primary mt-3 w-full">
+          <Save className="h-4 w-4" />{salvando ? "Salvando..." : "Salvar meta do paciente"}
+        </button>
+      </div>
+    </SectionCard>
+  );
+}
+
+function PrevisaoMacros({ calc, setCalcValue, macros, kcalFinal, kcalMacros, peso, onSalvar, salvando }) {
+  const diferenca = kcalFinal != null ? Math.round((kcalMacros - kcalFinal) * 10) / 10 : null;
+  const choNegativo = macros.find((m) => m.key === "cho")?.g < 0;
+  return (
+    <div className="grid gap-4 xl:grid-cols-5">
+      <SectionCard className="xl:col-span-2" title="Previsão de macros" description="Distribuição a partir do resultado final da meta calórica, em gramas por kg de peso.">
+        <div className="mb-4 grid grid-cols-2 gap-3">
+          <Metric label="Meta (resultado final)" value={kcalFinal} unit="kcal/dia" />
+          <Metric label="Peso" value={peso} unit="kg" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Proteínas" type="text" value={calc.ptn_gkg} onChange={(value) => setCalcValue("ptn_gkg", value)} unit="g/kg" />
+          <Field label="Lipídios" type="text" value={calc.lip_gkg} onChange={(value) => setCalcValue("lip_gkg", value)} unit="g/kg" />
+          <SelectField label="Carboidratos" value={calc.cho_modo} onChange={(value) => setCalcValue("cho_modo", value)}>
+            <option value="restante">Completar a meta</option>
+            <option value="gkg">Definir em g/kg</option>
+          </SelectField>
+          {calc.cho_modo === "gkg" && (
+            <Field label="Carboidratos" type="text" value={calc.cho_gkg} onChange={(value) => setCalcValue("cho_gkg", value)} unit="g/kg" />
+          )}
+        </div>
+        <p className="mt-3 text-[11px] text-gray-500">O arredondamento escolhido na calculadora GET também vale para os gramas.</p>
+        <button type="button" onClick={onSalvar} disabled={salvando || kcalFinal == null} className="evo-btn-primary mt-4 w-full">
+          <Save className="h-4 w-4" />{salvando ? "Salvando..." : "Salvar meta e macros"}
+        </button>
+      </SectionCard>
+
+      <SectionCard className="xl:col-span-3" title="Resultado">
+        {kcalFinal == null || !peso ? (
+          <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] p-6 text-center text-sm text-gray-500">
+            Defina o resultado final na calculadora GET e o peso em Dados iniciais.
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto rounded-lg border border-white/[0.08]">
+              <table className="w-full min-w-[480px] border-collapse text-sm">
+                <thead>
+                  <tr className="bg-white/[0.05] text-[11px] uppercase text-gray-400">
+                    <th className="px-3 py-3 text-left">Macronutriente</th>
+                    <th className="border-l border-white/[0.08] px-3 py-3 text-center">g/kg</th>
+                    <th className="border-l border-white/[0.08] px-3 py-3 text-center">Gramas</th>
+                    <th className="border-l border-white/[0.08] px-3 py-3 text-center">kcal</th>
+                    <th className="border-l border-white/[0.08] px-3 py-3 text-center">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {macros.map((m, i) => (
+                    <tr key={m.key} className={i % 2 ? "bg-white/[0.025]" : "bg-white/[0.055]"}>
+                      <th className="px-3 py-2.5 text-left font-semibold text-gray-200">
+                        <span className="mr-2 inline-block h-2 w-2 rounded-[2px]" style={{ background: m.cor }} />{m.label}
+                      </th>
+                      <td className="border-l border-white/[0.08] px-3 py-2.5 text-center tabular-nums text-gray-300">{formatValue(m.gkg)}</td>
+                      <td className="border-l border-white/[0.08] px-3 py-2.5 text-center tabular-nums font-semibold text-white">{formatValue(m.g, "g")}</td>
+                      <td className="border-l border-white/[0.08] px-3 py-2.5 text-center tabular-nums text-gray-300">{formatValue(m.kcal)}</td>
+                      <td className="border-l border-white/[0.08] px-3 py-2.5 text-center tabular-nums text-gray-300">
+                        {m.kcal != null && kcalMacros > 0 ? `${numberFmt.format(Math.round((m.kcal / kcalMacros) * 1000) / 10)}%` : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-white/[0.1]">
+                    <th className="px-3 py-2.5 text-left font-bold text-gray-100">Total</th>
+                    <td className="border-l border-white/[0.08]" />
+                    <td className="border-l border-white/[0.08]" />
+                    <td className="border-l border-white/[0.08] px-3 py-2.5 text-center tabular-nums font-semibold text-rc-lime">{formatValue(Math.round(kcalMacros * 10) / 10)}</td>
+                    <td className="border-l border-white/[0.08] px-3 py-2.5 text-center text-gray-300">100%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-white/[0.04]">
+              {kcalMacros > 0 && macros.filter((m) => m.kcal > 0).map((m) => (
+                <div key={m.key} style={{ width: `${(m.kcal / kcalMacros) * 100}%`, background: m.cor }} />
+              ))}
+            </div>
+            {choNegativo && <p className="mt-3 text-[12px] text-rc-coral">Proteínas e lipídios já passam da meta: reduza o g/kg para sobrar carboidrato.</p>}
+            {!choNegativo && diferenca != null && Math.abs(diferenca) >= 1 && (
+              <p className="mt-3 text-[12px] text-rc-amber">Os macros somam {formatValue(Math.abs(diferenca), "kcal")} {diferenca > 0 ? "acima" : "abaixo"} da meta.</p>
+            )}
+          </>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+export default function GastoEnergetico({ d, reload }) {
   const patient = d.patient;
   const evaluations = d.evaluations || EMPTY_EVALUATIONS;
   const orderedEvaluations = useMemo(() => [...evaluations]
@@ -239,11 +414,11 @@ export default function GastoEnergetico({ d }) {
   const [loading, setLoading] = useState(false);
   const [meta, setMeta] = useState({
     enabled: false,
-    ajusteOperacao: "diminuir",
-    ajusteKcal: 500,
     peso_desejado: "",
     prazo_dias: 30,
   });
+  const [calc, setCalc] = useState(() => calcPadrao(patient.meta_energetica, lastComp.get_kcal));
+  const [salvandoMeta, setSalvandoMeta] = useState(false);
   const [ventaResult, setVentaResult] = useState(null);
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
@@ -277,10 +452,10 @@ export default function GastoEnergetico({ d }) {
       const tmb = tmbRes.data.tmb;
       const getRes = await api.post("/calculos/get", {
         tmb,
-        naf_codigo: form.naf_manual ? null : Number(form.naf_codigo),
-        naf_manual: form.naf_manual ? Number(form.naf_manual) : null,
+        naf_codigo: toNumber(form.naf_manual) ? null : Number(form.naf_codigo),
+        naf_manual: toNumber(form.naf_manual) || null,
         fi_codigo: form.fi_codigo ? Number(form.fi_codigo) : null,
-        fi_manual: form.fi_manual ? Number(form.fi_manual) : null,
+        fi_manual: toNumber(form.fi_manual) || null,
         protocolo_tmb: form.protocolo,
         sexo_num: Number(form.sexo_num),
         peso_kg: Number(form.peso),
@@ -296,6 +471,7 @@ export default function GastoEnergetico({ d }) {
           : [],
       });
       setResult({ ...tmbRes.data, ...getRes.data });
+      setCalc((current) => ({ ...current, get_base: textoNumero(getRes.data.get) }));
       setSection("gasto");
     } catch (error) {
       toast.error(formatApiError(error.response?.data?.detail));
@@ -318,11 +494,60 @@ export default function GastoEnergetico({ d }) {
     }
   };
 
-  const currentGet = result?.get ?? lastComp.get_kcal ?? null;
-  const adjustment = toNumber(meta.ajusteKcal) || 0;
-  const adjustedGet = currentGet == null
-    ? null
-    : meta.ajusteOperacao === "aumentar" ? currentGet + adjustment : currentGet - adjustment;
+  const getCalculado = result?.get ?? lastComp.get_kcal ?? null;
+  const getBase = toNumber(calc.get_base);
+  const ajuste = toNumber(calc.ajuste_kcal) || 0;
+  const totalBruto = getBase == null ? null : calc.operacao === "aumentar" ? getBase + ajuste : getBase - ajuste;
+  const totalCalculado = arredondar(totalBruto, calc.arredondamento, calc.multiplo);
+  const kcalFinal = calc.final_manual ? toNumber(calc.kcal_final) : totalCalculado;
+  const currentGet = getBase;
+  const adjustedGet = kcalFinal;
+
+  // Previsão de macros a partir do resultado final escolhido pelo personal.
+  const peso = toNumber(form.peso);
+  const gramas = (gkg) => (peso && toNumber(gkg) != null ? toNumber(gkg) * peso : null);
+  const arredGramas = (g) => (g == null ? null : calc.arredondamento === "nenhum" ? Math.round(g * 10) / 10 : arredondar(g, calc.arredondamento, 1));
+  const ptnG = arredGramas(gramas(calc.ptn_gkg));
+  const lipG = arredGramas(gramas(calc.lip_gkg));
+  const choG = calc.cho_modo === "gkg"
+    ? arredGramas(gramas(calc.cho_gkg))
+    : kcalFinal != null && ptnG != null && lipG != null ? arredGramas((kcalFinal - ptnG * 4 - lipG * 9) / 4) : null;
+  const macros = [
+    { key: "ptn", label: "Proteínas", g: ptnG, kcalPorG: 4, cor: "#4DA6FF" },
+    { key: "cho", label: "Carboidratos", g: choG, kcalPorG: 4, cor: "#C3F53C" },
+    { key: "lip", label: "Lipídios", g: lipG, kcalPorG: 9, cor: "#FFB547" },
+  ].map((m) => ({ ...m, kcal: m.g == null ? null : Math.round(m.g * m.kcalPorG * 10) / 10, gkg: m.g != null && peso ? Math.round((m.g / peso) * 100) / 100 : null }));
+  const kcalMacros = macros.reduce((acc, m) => acc + (m.kcal || 0), 0);
+
+  const setCalcValue = (key, value) => setCalc((current) => ({ ...current, [key]: value }));
+  const salvarMeta = async () => {
+    setSalvandoMeta(true);
+    try {
+      await api.patch(`/patients/${patient.id}`, {
+        meta_energetica: {
+          get_base: getBase,
+          operacao: calc.operacao,
+          ajuste_kcal: ajuste,
+          arredondamento: calc.arredondamento,
+          multiplo: Number(calc.multiplo),
+          kcal_final: kcalFinal,
+          final_manual: calc.final_manual,
+          ptn_gkg: toNumber(calc.ptn_gkg),
+          lip_gkg: toNumber(calc.lip_gkg),
+          cho_modo: calc.cho_modo,
+          cho_gkg: toNumber(calc.cho_gkg),
+          macros_g: { proteinas: ptnG, carboidratos: choG, lipidios: lipG },
+          atualizado_em: new Date().toISOString(),
+        },
+      });
+      toast.success(`Meta salva: ${formatValue(kcalFinal, "kcal/dia")}.`);
+      reload?.();
+    } catch (error) {
+      toast.error(formatApiError(error.response?.data?.detail));
+    } finally {
+      setSalvandoMeta(false);
+    }
+  };
 
   return (
     <div className="space-y-4" data-testid="energy-workspace">
@@ -366,6 +591,27 @@ export default function GastoEnergetico({ d }) {
       {section === "protocolos" && (
         <div className="space-y-4">
           <SectionCard title="Seleção de Protocolos" description="Equação de TMB, atividade física e fator de injúria.">
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <span className="evo-label mb-0 mr-1">Fator de atividade rápido</span>
+              {NAF_RAPIDOS.map((valor) => {
+                const ativo = toNumber(form.naf_manual) === Number(valor);
+                return (
+                  <button
+                    key={valor}
+                    type="button"
+                    onClick={() => set("naf_manual", ativo ? "" : textoNumero(valor))}
+                    className={`h-9 min-w-[64px] rounded-lg px-3 text-sm font-semibold tabular-nums transition-colors ${
+                      ativo ? "bg-rc-lime text-rc-ink" : "bg-white/[0.05] text-gray-300 hover:bg-white/[0.09]"
+                    }`}
+                  >
+                    {valor.replace(".", ",")}
+                  </button>
+                );
+              })}
+              <span className="text-[11px] text-gray-500">
+                {toNumber(form.naf_manual) ? `Usando NAF ${textoNumero(form.naf_manual)} no lugar da tabela.` : "Clique para usar no lugar da tabela."}
+              </span>
+            </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
               <SelectField label="Equação TMB" value={form.protocolo} onChange={(value) => set("protocolo", value)}>
                 {PROTOCOLOS_TMB.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
@@ -385,7 +631,7 @@ export default function GastoEnergetico({ d }) {
                   </option>
                 ))}
               </SelectField>
-              <Field label="NAF manual" value={form.naf_manual} onChange={(value) => set("naf_manual", value)} />
+              <Field label="NAF manual" type="text" value={form.naf_manual} onChange={(value) => set("naf_manual", value)} />
               <Field label="FI manual" value={form.fi_manual} onChange={(value) => set("fi_manual", value)} />
               <SelectField label="Sexo" value={form.sexo_num} onChange={(value) => set("sexo_num", value)}>
                 <option value={1}>Masculino</option>
@@ -455,17 +701,15 @@ export default function GastoEnergetico({ d }) {
                 </div>
               )}
             </SectionCard>
-            <SectionCard title="Calculadora GET" description="Valor atual, ajuste e total, como no bloco da planilha.">
-              <div className="grid grid-cols-2 gap-3">
-                <Metric label="Valor Atual" value={currentGet} unit="kcal/dia" />
-                <SelectField label="Aumentar/Diminuir" value={meta.ajusteOperacao} onChange={(value) => setMetaValue("ajusteOperacao", value)}>
-                  <option value="diminuir">Diminuir</option>
-                  <option value="aumentar">Aumentar</option>
-                </SelectField>
-                <Field label="Somar/Diminuir" value={meta.ajusteKcal} onChange={(value) => setMetaValue("ajusteKcal", value)} unit="kcal" />
-                <Metric label="Total" value={adjustedGet} unit="kcal/dia" />
-              </div>
-            </SectionCard>
+            <CalculadoraGet
+              calc={calc}
+              setCalcValue={setCalcValue}
+              getCalculado={getCalculado}
+              totalCalculado={totalCalculado}
+              kcalFinal={kcalFinal}
+              onSalvar={salvarMeta}
+              salvando={salvandoMeta}
+            />
           </div>
         </div>
       )}
@@ -490,7 +734,7 @@ export default function GastoEnergetico({ d }) {
                 <div className="grid grid-cols-2 gap-3">
                   <Metric label="Bolso - perda" value={pocketLoss(form.peso)} unit="kcal/dia" />
                   <Metric label="Bolso - ganho" value={pocketGain(form.peso)} unit="kcal/dia" />
-                  <Metric label="GET ajustado" value={adjustedGet} unit="kcal/dia" />
+                  <Metric label="Resultado final" value={adjustedGet} unit="kcal/dia" />
                   <Metric label="GET base" value={currentGet} unit="kcal/dia" />
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3">
@@ -508,8 +752,24 @@ export default function GastoEnergetico({ d }) {
                 )}
               </div>
             </SectionCard>
+            <button type="button" onClick={() => setSection("macros")} className="evo-btn-secondary w-full">
+              <PieChart className="h-4 w-4" />Ir para a previsão de macros
+            </button>
           </div>
         </div>
+      )}
+
+      {section === "macros" && (
+        <PrevisaoMacros
+          calc={calc}
+          setCalcValue={setCalcValue}
+          macros={macros}
+          kcalFinal={kcalFinal}
+          kcalMacros={kcalMacros}
+          peso={peso}
+          onSalvar={salvarMeta}
+          salvando={salvandoMeta}
+        />
       )}
     </div>
   );

@@ -40,6 +40,7 @@ from ai.donato.settings import get_donato_settings
 from ai.drhouse.knowledge_sync import sync_drhouse_documents
 from ai.drhouse.prompt import DRHOUSE_KNOWLEDGE_HEADER, DRHOUSE_PROMPT_VERSION, DRHOUSE_SYSTEM_PROMPT
 from llm_chat import LlmChat, UserMessage
+from financeiro import build_financeiro_router
 import json
 import io
 import pdfplumber
@@ -225,6 +226,10 @@ class PatientUpdateIn(BaseModel):
     peso: Optional[float] = None
     altura: Optional[float] = None
     status_funil: Optional[str] = None
+    gestante: Optional[bool] = None
+    data_primeira_consulta: Optional[str] = None
+    observacoes: Optional[str] = Field(default=None, max_length=20000)
+    meta_energetica: Optional[dict] = None
 
 class AnamnesisIn(BaseModel):
     token: str
@@ -1551,6 +1556,7 @@ async def delete_patient(pid: str, user=Depends(require_nutritionist)):
         "donato_plan_generations": {"paciente_id": pid},
         "drhouse_exam_analyses": {"paciente_id": pid},
         "exames_manuais": {"paciente_id": pid},
+        "pagamentos": {"paciente_id": pid},
     }
     deleted = {}
     for collection_name, query in patient_filters.items():
@@ -3370,7 +3376,10 @@ def calc_bodycomp_v2(data: dict) -> dict:
     ig_semanas = data.get("ig_semanas")
     protocolo_dobras = data.get("protocolo_dobras")
     protocolo_mg = data.get("protocolo_mg", "siri")
-    dobras = data.get("dobras") or {}
+    dobras = dict(data.get("dobras") or {})
+    # A tela grava "tricipital"; as fórmulas de %G usam "triceps".
+    if dobras.get("tricipital") is not None and dobras.get("triceps") is None:
+        dobras["triceps"] = dobras["tricipital"]
     perimetria = data.get("perimetria") or {}
     bioimp = data.get("bioimpedancia") or {}
 
@@ -3472,7 +3481,18 @@ def calc_bodycomp_v2(data: dict) -> dict:
         except Exception:
             pass
 
+    # Peso ósseo (Von Döbeln modificada por Rocha, 1975): diâmetros de punho e fêmur em cm.
+    diametros = data.get("diametros_osseos") or {}
+    punho_cm = _coerce_float(diametros.get("punho"))
+    femur_cm = _coerce_float(diametros.get("femur"))
+    peso_osseo = peso_muscular = None
+    if punho_cm and femur_cm:
+        peso_osseo = round(3.02 * ((h ** 2) * (punho_cm / 100) * (femur_cm / 100) * 400) ** 0.712, 2)
+        if massa_gorda is not None:
+            peso_muscular = round(peso - (massa_gorda + peso_osseo + peso_residual), 2)
+
     result = {
+        "peso_osseo": peso_osseo, "peso_muscular": peso_muscular,
         "imc": imc, "imc_classificacao": imc_class, "imc_referencia": imc_ref,
         "peso_ideal_min": pi_min, "peso_ideal_max": pi_max,
         "pct_gordura": pct_mg, "pct_gordura_classificacao": pct_mg_class,
@@ -5788,6 +5808,14 @@ def _pdf_escape(value: Any) -> str:
 def _pdf_nl2br(value: Any) -> str:
     return _pdf_escape(value).replace("\n", "<br/>")
 
+def _pdf_fmt_date(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%d/%m/%Y")
+    except ValueError:
+        return str(value)
+
 def _pdf_fmt_num(value: Any, unit: str = "") -> str:
     if value in (None, ""):
         return "â€”"
@@ -5898,6 +5926,22 @@ async def relatorio_anamnese(pid: str, user=Depends(require_nutritionist)):
     nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
     anam = await db.anamneses.find_one({"paciente_id": pid}, {"_id": 0})
     secoes_html = ""
+    dados_pessoais = [
+        ("E-mail", p.get("email")),
+        ("Telefone", p.get("telefone")),
+        ("Data de nascimento", _pdf_fmt_date(p.get("data_nascimento"))),
+        ("Objetivo", p.get("objetivo")),
+        ("Data da 1ª consulta", _pdf_fmt_date(p.get("data_primeira_consulta"))),
+    ]
+    rows = "".join(
+        f"<tr><td><strong>{label}</strong></td><td>{_pdf_escape(valor)}</td></tr>"
+        for label, valor in dados_pessoais if valor
+    )
+    if rows:
+        secoes_html += f'<div class="sec"><div class="sec-title">Dados Pessoais</div><table>{rows}</table></div>'
+    if (p.get("observacoes") or "").strip():
+        obs_html = _pdf_nl2br(p["observacoes"].strip())
+        secoes_html += f'<div class="sec"><div class="sec-title">Observações</div><p>{obs_html}</p></div>'
     label_map = {
         "dados_sociais": "Dados Sociais",
         "habitos_vida": "HÃ¡bitos de Vida",
@@ -6136,6 +6180,8 @@ async def startup():
     await db.patients.create_index("lead_token")
     await db.patients.create_index("nutricionista_id")
     await db.patients.create_index("user_id")
+    await db.pagamentos.create_index([("nutricionista_id", 1), ("data_pagamento", -1)])
+    await db.pagamentos.create_index("paciente_id")
     await db.consultations.create_index("nutricionista_id")
     await db.exams.create_index("paciente_id")
     await db.agents.create_index("code", unique=True)
@@ -6209,6 +6255,7 @@ async def shutdown():
 async def health():
     return {"status": "ok"}
 
+api.include_router(build_financeiro_router(db, require_nutritionist))
 app.include_router(api)
 _frontend_urls = [
     url.strip().rstrip("/")

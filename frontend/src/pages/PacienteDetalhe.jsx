@@ -16,11 +16,11 @@ import AnalisesDieteticas from "@/components/evonut/AnalisesDieteticas";
 import MarkdownView from "@/components/evonut/MarkdownView";
 
 const TABS = [
+  { k: "exames", l: "Exames", icon: FlaskConical },
   { k: "anamnese", l: "Anamnese", icon: FileText },
   { k: "ia", l: "Análise IA", icon: Brain },
   { k: "antropometria", l: "Antropometria", icon: Activity },
   { k: "gasto", l: "Gasto Energético", icon: Zap },
-  { k: "exames", l: "Exames", icon: FlaskConical },
   { k: "adequacao", l: "Análises", icon: Sparkles },
   { k: "plano", l: "Prescrição Dietética", icon: Utensils },
   { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
@@ -31,7 +31,7 @@ const TABS = [
 export default function PacienteDetalhe() {
   const { id } = useParams();
   const [d, setD] = useState(null);
-  const [tab, setTab] = useState("anamnese");
+  const [tab, setTab] = useState("exames");
   const reload = () => api.get(`/patients/${id}`).then((r) => setD(r.data));
   useEffect(() => {
     api.get(`/patients/${id}`).then((r) => setD(r.data));
@@ -116,7 +116,7 @@ export default function PacienteDetalhe() {
       {tab === "anamnese" && <Anamnese d={d} reload={reload} />}
       {tab === "ia" && <IATab d={d} reload={reload} />}
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
-      {tab === "gasto" && <GastoEnergetico d={d} />}
+      {tab === "gasto" && <GastoEnergetico d={d} reload={reload} />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
       {tab === "adequacao" && <AnalisesDieteticas d={d} />}
       {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} />}
@@ -205,6 +205,145 @@ const ANAMNESE_SECOES = [
   ]},
 ];
 
+function idadeAnosMeses(dataNascimento) {
+  if (!dataNascimento) return null;
+  const nasc = new Date(`${String(dataNascimento).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(nasc.getTime())) return null;
+  const hoje = new Date();
+  let meses = (hoje.getFullYear() - nasc.getFullYear()) * 12 + (hoje.getMonth() - nasc.getMonth());
+  if (hoje.getDate() < nasc.getDate()) meses -= 1;
+  if (meses < 0) return null;
+  const anos = Math.floor(meses / 12);
+  const resto = meses % 12;
+  return `${anos} ${anos === 1 ? "ano" : "anos"}${resto ? ` e ${resto} ${resto === 1 ? "mês" : "meses"}` : ""}`;
+}
+
+const dadosPessoaisDe = (p) => ({
+  nome: p.nome || "",
+  data_nascimento: p.data_nascimento ? String(p.data_nascimento).slice(0, 10) : "",
+  email: p.email || "",
+  telefone: p.telefone || "",
+  sexo: p.sexo || "",
+  gestante: Boolean(p.gestante),
+  objetivo: p.objetivo || "",
+  data_primeira_consulta: p.data_primeira_consulta || (p.created_at ? String(p.created_at).slice(0, 10) : ""),
+  observacoes: p.observacoes || "",
+});
+
+function DadosPessoais({ patient, reload }) {
+  const [form, setForm] = useState(() => dadosPessoaisDe(patient));
+  const [saving, setSaving] = useState(false);
+  const original = useMemo(() => dadosPessoaisDe(patient), [patient]);
+  const alterado = JSON.stringify(form) !== JSON.stringify(original);
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const idadeTexto = idadeAnosMeses(form.data_nascimento);
+
+  useEffect(() => { setForm(dadosPessoaisDe(patient)); }, [patient]);
+
+  const save = async () => {
+    if (form.nome.trim().length < 2) {
+      toast.error("Informe o nome do paciente.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.patch(`/patients/${patient.id}`, {
+        ...form,
+        nome: form.nome.trim(),
+        email: form.email.trim() || null,
+        telefone: form.telefone.trim(),
+        data_nascimento: form.data_nascimento || null,
+        data_primeira_consulta: form.data_primeira_consulta || null,
+        sexo: form.sexo || null,
+        gestante: form.sexo === "F" ? form.gestante : false,
+      });
+      toast.success("Dados pessoais salvos.");
+      reload?.();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="evo-card p-5" data-testid="anamnese-dados-pessoais">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h3 className="evo-h3">Dados pessoais</h3>
+          <p className="mt-1 text-xs text-gray-500">Identificação e contato do paciente. As alterações também atualizam o cabeçalho e o cadastro.</p>
+        </div>
+        {alterado && (
+          <button type="button" onClick={() => setForm(original)} className="evo-btn-ghost text-xs"><X className="w-3 h-3" /> Desfazer</button>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <label className="block sm:col-span-2">
+          <span className="evo-label">Nome do paciente</span>
+          <input className="evo-input" value={form.nome} onChange={(e) => set("nome", e.target.value)} data-testid="dp-nome" />
+        </label>
+        <label className="block">
+          <span className="evo-label">Data de nascimento</span>
+          <input type="date" className="evo-input" value={form.data_nascimento} onChange={(e) => set("data_nascimento", e.target.value)} data-testid="dp-nascimento" />
+          <span className="block text-[11px] text-gray-500 mt-1 h-4">{idadeTexto || ""}</span>
+        </label>
+        <label className="block">
+          <span className="evo-label">Data da 1ª consulta</span>
+          <input type="date" className="evo-input" value={form.data_primeira_consulta} onChange={(e) => set("data_primeira_consulta", e.target.value)} />
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="evo-label">E-mail</span>
+          <input type="email" className="evo-input" value={form.email} onChange={(e) => set("email", e.target.value)} data-testid="dp-email" />
+        </label>
+        <label className="block">
+          <span className="evo-label">Telefone / WhatsApp</span>
+          <input type="tel" className="evo-input" value={form.telefone} onChange={(e) => set("telefone", e.target.value)} placeholder="(11) 90000-0000" data-testid="dp-telefone" />
+        </label>
+        <label className="block">
+          <span className="evo-label">Objetivo</span>
+          <input className="evo-input" list="dp-objetivos" value={form.objetivo} onChange={(e) => set("objetivo", e.target.value)} placeholder="Ex.: definição muscular" />
+          <datalist id="dp-objetivos">
+            {["Emagrecimento", "Definição muscular", "Hipertrofia", "Manutenção", "Saúde e qualidade de vida", "Performance esportiva"].map((o) => <option key={o} value={o} />)}
+          </datalist>
+        </label>
+        <label className="block">
+          <span className="evo-label">Gênero</span>
+          <select className="evo-input" value={form.sexo} onChange={(e) => set("sexo", e.target.value)}>
+            <option value="">Não informado</option>
+            <option value="F">Feminino</option>
+            <option value="M">Masculino</option>
+            <option value="O">Outro</option>
+          </select>
+        </label>
+        {form.sexo === "F" && (
+          <label className="block">
+            <span className="evo-label">Gestante</span>
+            <select className="evo-input" value={form.gestante ? "sim" : "nao"} onChange={(e) => set("gestante", e.target.value === "sim")}>
+              <option value="nao">Não</option>
+              <option value="sim">Sim</option>
+            </select>
+          </label>
+        )}
+        <label className="block sm:col-span-2 lg:col-span-4">
+          <span className="evo-label">Observações</span>
+          <textarea
+            className="evo-input min-h-[160px] leading-relaxed resize-y"
+            value={form.observacoes}
+            onChange={(e) => set("observacoes", e.target.value)}
+            placeholder={"Anote aqui qualquer informação relevante. Ex.:\n7:30 - 25g de farinha de aveia + whey + geleia + café\n9:00 - treino\n4x dias de treino"}
+            data-testid="dp-observacoes"
+          />
+        </label>
+      </div>
+      <div className="flex justify-end mt-4">
+        <button type="button" onClick={save} disabled={saving || !alterado} className="evo-btn-primary" data-testid="dp-salvar">
+          <Save className="w-4 h-4" /> {saving ? "Salvando..." : "Salvar dados pessoais"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function Anamnese({ d, reload }) {
   const [anam, setAnam] = useState(d.anamnese_v2 || {});
   const [openSec, setOpenSec] = useState(null);
@@ -263,6 +402,8 @@ function Anamnese({ d, reload }) {
 
   return (
     <div className="space-y-3">
+      <DadosPessoais patient={d.patient} reload={reload} />
+
       {old && !d.anamnese_v2?.criado_em && (
         <div className="evo-card p-4 border-evo-amber/30 bg-evo-amber/5">
           <div className="text-xs text-evo-amber font-semibold mb-2">Anamnese da pré-consulta (formato legado)</div>
