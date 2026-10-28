@@ -4223,7 +4223,7 @@ def _medidas_do_alimento(alim: dict) -> list[dict]:
     origem = gravadas if isinstance(gravadas, list) else _get_measures_for_food_name(alim.get("nome_original") or alim.get("nome", ""))
     for m in origem:
         if m.get("nome") and m["nome"].strip().lower() not in {x["nome"].strip().lower() for x in measures}:
-            measures.append({"nome": m["nome"], "gramas": m.get("gramas")})
+            measures.append({"nome": m["nome"], "gramas": m.get("gramas"), **({"estimada": True} if m.get("estimada") else {})})
     return measures
 
 def _resolve_quantidade_g(alimento: dict, medida_nome: Optional[str], quantidade: Optional[float], quantidade_g: Optional[float]) -> float:
@@ -4364,6 +4364,14 @@ async def search_alimentos(
                 vistos.add(a.get("id"))
                 candidatos.append(a)
         candidatos.sort(key=lambda a: _rank_busca(a.get("nome", ""), q_norm, tokens, a.get("fonte")))
+        # mesmo nome em varias tabelas: mostra so o da tabela preferida (TACO, IBGE...), que vem primeiro
+        nomes_vistos, unicos = set(), []
+        for a in candidatos:
+            chave_nome = _normalize_food_lookup(a.get("nome", ""))
+            if chave_nome not in nomes_vistos:
+                nomes_vistos.add(chave_nome)
+                unicos.append(a)
+        candidatos = unicos
         escolhidos = [a["id"] for a in candidatos[:limit]]
         completos = {d["id"]: d async for d in db.alimentos.find({"id": {"$in": escolhidos}}, {"_id": 0})}
         docs = [completos[i] for i in escolhidos if i in completos]

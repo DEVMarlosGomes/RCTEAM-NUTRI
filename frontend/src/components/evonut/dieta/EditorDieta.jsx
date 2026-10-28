@@ -255,7 +255,7 @@ function LinhaAlimento({ bk, i, item, ultima, config, onChange, onMais, onMenos,
         >
           {medidas.map((md) => (
             <option key={md.nome} value={md.nome}>
-              {ehGramas(md.nome) ? "gramas" : textoMedida(md.nome, item.medida_nome === md.nome ? item.quantidade : 1)}{md.gramas && !ehGramas(md.nome) ? ` (${nf.format(md.gramas)} g)` : ""}
+              {ehGramas(md.nome) ? "gramas" : textoMedida(md.nome, item.medida_nome === md.nome ? item.quantidade : 1)}{md.gramas && !ehGramas(md.nome) ? ` (${md.estimada ? "≈" : ""}${nf.format(md.gramas)} g)` : ""}
             </option>
           ))}
         </select>
