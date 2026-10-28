@@ -78,9 +78,19 @@ export function gramasDaMedida(item) {
   return m ? num(m.gramas) : null;
 }
 
-/** Medida padrao ao escolher um alimento: a primeira medida caseira com porcao plausivel. */
+// Medidas mais usadas na prescricao primeiro; "porcao" e generica, fica por ultimo.
+const PREFERENCIA_MEDIDA = ["unidade", "fatia", "colher de sopa", "filé", "bife", "pedaço", "colher de arroz",
+  "concha", "copo americano", "xícara de chá", "folha", "escumadeira", "pegador", "unidade pequena", "colher de chá"];
+
+/** Medida padrao ao escolher um alimento: a mais usada entre as de porcao plausivel (3 a 400 g). */
 export function medidaPadrao(medidas) {
-  return (medidas || []).find((m) => !ehGramas(m.nome) && num(m.gramas) >= 3 && num(m.gramas) <= 400) || null;
+  const plausiveis = (medidas || []).filter((m) => !ehGramas(m.nome) && num(m.gramas) >= 3 && num(m.gramas) <= 400);
+  const rank = (m) => {
+    const i = PREFERENCIA_MEDIDA.indexOf(String(m.nome).toLowerCase());
+    if (i >= 0) return i;
+    return String(m.nome).toLowerCase().startsWith("porção") ? 99 : 50;
+  };
+  return [...plausiveis].sort((a, b) => rank(a) - rank(b))[0] || null;
 }
 
 export const novoItem = () => ({ alimento_id: null, nome: "", quantidade: "", medida_nome: "", quantidade_g: "", observacao: "", substitutos: [] });

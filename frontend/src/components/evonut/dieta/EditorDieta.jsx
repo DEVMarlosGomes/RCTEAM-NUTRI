@@ -464,7 +464,7 @@ function BlocoRefeicao({
               rotulo={(m) => m.nome}
               valorDe={(m) => m.nome}
               onSelect={aplicarModelo}
-              placeholder={modelos?.length ? "Modelo de refeição (digite ou escolha)" : "Nenhum modelo salvo ainda — use a estrela para criar"}
+              placeholder={modelos?.length ? "Modelo de refeição (digite ou escolha)" : "Nenhum modelo ainda — adicione os prontos em Padrões da dieta ou use a estrela"}
               inputClassName="rc-input h-8 py-0 px-2.5 text-[13px]"
               autoFocus
               className="flex-1"

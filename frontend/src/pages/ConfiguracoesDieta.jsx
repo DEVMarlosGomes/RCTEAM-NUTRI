@@ -267,9 +267,40 @@ function ModelosDieta() {
   );
 }
 
+/** Oferece os modelos de refeição e listas de substituição prontos que ainda não estão na conta. */
+function PadroesSugeridos({ onAplicado }) {
+  const [info, setInfo] = useState(null);
+  const [aplicando, setAplicando] = useState(false);
+  useEffect(() => { api.get("/dieta/padroes-sugeridos").then((r) => setInfo(r.data)).catch(() => {}); }, []);
+  if (!info || !info.faltando) return null;
+  const aplicar = async () => {
+    setAplicando(true);
+    try {
+      const { data } = await api.post("/dieta/padroes-sugeridos/aplicar");
+      toast.success(`${data.modelos_criados} modelos de refeição e ${data.listas_criadas} listas de substituição adicionados.`);
+      setInfo({ ...info, faltando: 0 });
+      onAplicado();
+    } catch (e) { erro(e); } finally { setAplicando(false); }
+  };
+  return (
+    <div className="rc-card p-4 sm:p-5 mb-5 flex flex-wrap items-center justify-between gap-4">
+      <div className="min-w-0 max-w-[78ch]">
+        <div className="text-[14px] text-white font-medium">Modelos e listas prontos para usar</div>
+        <p className="text-[13px] text-gray-400 mt-1">
+          {info.modelos_refeicao.length} modelos de refeição ({info.modelos_refeicao.slice(0, 3).join(", ")}…) e {info.listas_substituicao.length} listas de substituição ({info.listas_substituicao.join(", ")}), já ligados aos alimentos da base. Depois você pode editar ou apagar qualquer um.
+        </p>
+      </div>
+      <button type="button" onClick={aplicar} disabled={aplicando} className="rc-btn-primary shrink-0">
+        {aplicando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Adicionar à minha conta
+      </button>
+    </div>
+  );
+}
+
 export default function ConfiguracoesDieta() {
   const { config, recarregar, salvar } = useDietaConfig();
   const [secao, setSecao] = useState("geral");
+  const [versao, setVersao] = useState(0);
   useEffect(() => { recarregar(); }, [recarregar]);
   const titulo = SECOES.find(([k]) => k === secao)?.[1];
   const ajudas = {
@@ -283,7 +314,8 @@ export default function ConfiguracoesDieta() {
   return (
     <NutriLayout>
       <PageHeader eyebrow="Configurações" title="Dieta" description="Padrões da prescrição dietética: listas de sugestões, forma de cálculo, impressão, modelos e listas de substituição." />
-      <div className="grid gap-5 lg:grid-cols-[230px_minmax(0,1fr)] items-start">
+      <PadroesSugeridos onAplicado={() => { recarregar(); setVersao((v) => v + 1); }} />
+      <div key={versao} className="grid gap-5 lg:grid-cols-[230px_minmax(0,1fr)] items-start">
         <nav className="rc-card p-2 lg:sticky lg:top-6" aria-label="Seções">
           {SECOES.map(([k, l]) => (
             <button key={k} type="button" onClick={() => setSecao(k)}

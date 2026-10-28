@@ -6,8 +6,10 @@ Tudo o que a tela de dieta usa além do CRUD de planos (que fica em server.py):
 - análise de vitaminas e minerais da dieta/refeição contra as DRIs por idade, sexo e gestação;
 - PDF do plano (layout do paciente) e PDF do relatório de nutrientes.
 """
+import json
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -66,6 +68,14 @@ CONFIG_PADRAO: dict = {
     ],
 }
 _LISTAS_CONFIG = ("objetivos", "titulos", "nomes_refeicao", "observacoes_refeicao", "observacoes_alimento")
+
+# Padrões trazidos da conta do nutricionista no NutriDiet (listas de frases, 10 modelos de refeição e
+# 6 listas de substituição), já ligados aos alimentos da base. As listas viram o padrão das configurações.
+_PADROES_PATH = Path(__file__).parent / "padroes_sugeridos.json"
+PADROES_SUGERIDOS: dict = json.loads(_PADROES_PATH.read_text(encoding="utf-8")) if _PADROES_PATH.exists() else {}
+for _campo, _valores in (PADROES_SUGERIDOS.get("listas") or {}).items():
+    if _campo in CONFIG_PADRAO and _valores:
+        CONFIG_PADRAO[_campo] = list(_valores)
 _ENUMS_CONFIG = {
     "forma_calculo": {"medida", "gramas"},
     "layout_calculos": {"medida", "gramas", "medida_gramas"},
@@ -376,6 +386,54 @@ def build_dieta_router(db, require_nutritionist, h) -> APIRouter:
 
     _crud_itens("modelos_refeicao", "/dieta/modelos-refeicao", ModeloRefeicaoIn, ("observacao",))
     _crud_itens("listas_substituicao", "/dieta/listas-substituicao", ListaSubstituicaoIn, ())
+
+    # ── Padrões sugeridos (modelos de refeição e listas de substituição prontos) ──
+    async def _padroes_existentes(user_id: str) -> tuple[set, set]:
+        modelos = {d["nome"].lower() async for d in db.modelos_refeicao.find({"nutricionista_id": user_id}, {"nome": 1})}
+        listas = {d["nome"].lower() async for d in db.listas_substituicao.find({"nutricionista_id": user_id}, {"nome": 1})}
+        return modelos, listas
+
+    @router.get("/dieta/padroes-sugeridos")
+    async def padroes_sugeridos(user=Depends(require_nutritionist)):
+        modelos, listas = await _padroes_existentes(user["id"])
+        sug_m = PADROES_SUGERIDOS.get("modelos_refeicao") or []
+        sug_l = PADROES_SUGERIDOS.get("listas_substituicao") or []
+        return {
+            "modelos_refeicao": [m["nome"] for m in sug_m],
+            "listas_substituicao": [lst["nome"] for lst in sug_l],
+            "faltando": sum(m["nome"].lower() not in modelos for m in sug_m) + sum(lst["nome"].lower() not in listas for lst in sug_l),
+        }
+
+    @router.post("/dieta/padroes-sugeridos/aplicar")
+    async def aplicar_padroes(user=Depends(require_nutritionist)):
+        modelos, listas = await _padroes_existentes(user["id"])
+        agora = h.iso(h.now_utc())
+        limpar = lambda itens: [{"alimento_id": i.get("alimento_id"), "nome": i.get("nome"), "medida_nome": i.get("medida_nome") or "Gramas",
+                                 "quantidade": i.get("quantidade"), "quantidade_g": i.get("quantidade_g"), "observacao": "", "substitutos": []}
+                                for i in itens or []]
+        novos_m = [{"id": str(uuid.uuid4()), "nutricionista_id": user["id"], "nome": m["nome"], "observacao": m.get("observacao") or "",
+                    "alimentos": limpar(m.get("alimentos")), "criado_em": agora, "atualizado_em": agora}
+                   for m in PADROES_SUGERIDOS.get("modelos_refeicao") or [] if m["nome"].lower() not in modelos]
+        novas_l = [{"id": str(uuid.uuid4()), "nutricionista_id": user["id"], "nome": lst["nome"],
+                    "alimentos": limpar(lst.get("alimentos")), "criado_em": agora, "atualizado_em": agora}
+                   for lst in PADROES_SUGERIDOS.get("listas_substituicao") or [] if lst["nome"].lower() not in listas]
+        if novos_m:
+            await db.modelos_refeicao.insert_many(novos_m)
+        if novas_l:
+            await db.listas_substituicao.insert_many(novas_l)
+        # listas de frases: acrescenta as que faltarem numa configuração já salva
+        salvo = await db.dieta_config.find_one({"nutricionista_id": user["id"]})
+        if salvo:
+            upd = {}
+            for campo, valores in (PADROES_SUGERIDOS.get("listas") or {}).items():
+                atuais = list(salvo.get(campo) or [])
+                vistos = {v.lower() for v in atuais}
+                extras = [v for v in valores if v.lower() not in vistos]
+                if campo in salvo and extras:
+                    upd[campo] = atuais + extras
+            if upd:
+                await db.dieta_config.update_one({"nutricionista_id": user["id"]}, {"$set": upd})
+        return {"modelos_criados": len(novos_m), "listas_criadas": len(novas_l)}
 
     # ── Modelos de dieta: o CRUD de criação/aplicação já existe em server.py ──
     @router.delete("/plano-templates/{tid}")

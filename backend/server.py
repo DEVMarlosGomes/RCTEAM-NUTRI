@@ -42,6 +42,7 @@ from ai.drhouse.prompt import DRHOUSE_KNOWLEDGE_HEADER, DRHOUSE_PROMPT_VERSION, 
 from llm_chat import LlmChat, UserMessage
 from financeiro import build_financeiro_router
 from dieta import build_dieta_router
+from alimentos_base import BASE_VERSAO, corrigir_mojibake, normalizar_nome, sincronizar_base
 from types import SimpleNamespace
 import json
 import io
@@ -3973,7 +3974,19 @@ async def seed_alimentos():
     for item in _TACO_SEED:
         existing = await db.alimentos.find_one({"id": item["id"]})
         if not existing:
-            await db.alimentos.insert_one({**item, "fonte": "TACO", "criado_em": iso(now_utc())})
+            # os textos desta lista estao com acentuacao corrompida no arquivo; corrige ao gravar
+            limpo = {**item, "nome": normalizar_nome(item["nome"]), "categoria": corrigir_mojibake(item["categoria"]),
+                     "medida_caseira": corrigir_mojibake(item["medida_caseira"])}
+            await db.alimentos.insert_one({**limpo, "fonte": "TACO", "criado_em": iso(now_utc())})
+
+async def _sincronizar_base_alimentos():
+    """Grava a base EVONUT normalizada no banco (uma vez por versao) sem segurar o boot do servidor."""
+    try:
+        resumo = await sincronizar_base(db, _get_measures_for_food_name)
+        if resumo:
+            _equiv_cache.update(ts=0.0, foods=[])
+    except Exception:
+        logging.exception("Falha ao sincronizar a base de alimentos")
 
 class AlimentoCustomIn(BaseModel):
     nome: str
@@ -4198,6 +4211,21 @@ def _find_equivalente_entry(food_name: str) -> Optional[dict]:
                 best_item = item
     return best_item if best_score >= 4.5 else None
 
+def _medidas_do_alimento(alim: dict) -> list[dict]:
+    """Medidas caseiras do alimento: as gravadas no documento pela sincronizacao da base (planilha EVONUT +
+    IBGE); para alimentos sem isso (cadastrados pelo nutricionista), a planilha pelo nome."""
+    measures = [{"nome": "Gramas", "gramas": 1.0}]
+    base_measure = alim.get("medida_caseira")
+    base_grams = _coerce_float(alim.get("porcao_padrao_g") or alim.get("quantidade_referencia_g"))
+    if base_measure and base_grams:
+        measures.append({"nome": str(base_measure), "gramas": round(base_grams, 2)})
+    gravadas = alim.get("medidas_caseiras")
+    origem = gravadas if isinstance(gravadas, list) else _get_measures_for_food_name(alim.get("nome_original") or alim.get("nome", ""))
+    for m in origem:
+        if m.get("nome") and m["nome"].strip().lower() not in {x["nome"].strip().lower() for x in measures}:
+            measures.append({"nome": m["nome"], "gramas": m.get("gramas")})
+    return measures
+
 def _resolve_quantidade_g(alimento: dict, medida_nome: Optional[str], quantidade: Optional[float], quantidade_g: Optional[float]) -> float:
     grams_direct = _coerce_float(quantidade_g)
     if grams_direct is not None and grams_direct > 0:
@@ -4206,15 +4234,9 @@ def _resolve_quantidade_g(alimento: dict, medida_nome: Optional[str], quantidade
     medida = (medida_nome or "").strip().lower()
     if not medida or medida == "gramas":
         return round(qty, 2)
-    all_measures = []
-    base_measure = alimento.get("medida_caseira")
-    base_grams = _coerce_float(alimento.get("porcao_padrao_g") or alimento.get("quantidade_referencia_g"))
-    if base_measure and base_grams:
-        all_measures.append({"nome": base_measure, "gramas": base_grams})
-    all_measures.extend(_get_measures_for_food_name(alimento.get("nome", "")))
-    for item in all_measures:
+    for item in _medidas_do_alimento(alimento):
         if item["nome"].strip().lower() == medida:
-            return round((item.get("gramas") or 0) * qty, 2)
+            return round((_coerce_float(item.get("gramas")) or 0) * qty, 2)
     return round(qty, 2)
 
 async def _resolve_alimento_light_by_name(nome: str) -> Optional[dict]:
@@ -4261,7 +4283,7 @@ def _regex_tokens(tokens: list[str], ancorar_primeiro: bool = False) -> str:
     regex = "^" + "".join(f"(?=.*{_regex_sem_acento(t)})" for t in tokens)
     return regex + (_regex_sem_acento(tokens[0]) if ancorar_primeiro and tokens else "")
 
-def _rank_busca(nome: str, q_norm: str, tokens: Optional[list] = None) -> tuple:
+def _rank_busca(nome: str, q_norm: str, tokens: Optional[list] = None, fonte: Optional[str] = None) -> tuple:
     """Comeca com a frase > comeca com a 1a palavra > frase no inicio de uma palavra > o resto; palavra
     inteira antes de pedaco ("Arroz, branco" antes de "Arrozina"); marcas depois; empate em ordem alfabetica."""
     n = _normalize_food_lookup(nome)
@@ -4276,7 +4298,10 @@ def _rank_busca(nome: str, q_norm: str, tokens: Optional[list] = None) -> tuple:
         nivel = 3
     inteira = re.search(rf"(^|\s){re.escape(primeira)}(\s|$)", n) is not None
     marca = "®" in nome or "™" in nome  # produtos de marca depois dos alimentos genericos
-    return (nivel, not inteira, marca, n)
+    return (nivel, not inteira, marca, _PRIORIDADE_FONTE.get(fonte, 9), n)
+
+# TACO e IBGE primeiro (nomes simples, com medidas caseiras); TBCA traz nomes cientificos longos
+_PRIORIDADE_FONTE = {"TACO": 0, "IBGE": 1, "Tucunduva": 2, "TBCA": 3, "Meus Alimentos": 4}
 
 @api.get("/alimentos")
 async def search_alimentos(
@@ -4329,7 +4354,7 @@ async def search_alimentos(
         # Ordena so com id+nome (leve) e busca o documento completo apenas dos escolhidos: no Render
         # gratuito, trazer ~1.800 documentos com 36 nutrientes a cada tecla deixava a busca "presa".
         q_norm = _normalize_food_lookup(q)
-        leve = {"_id": 0, "id": 1, "nome": 1}
+        leve = {"_id": 0, "id": 1, "nome": 1, "fonte": 1}
         filt_prefixo = {**filt, "nome": {"$regex": _regex_tokens(tokens, ancorar_primeiro=True), "$options": "i"}}
         prefixo = await db.alimentos.find(filt_prefixo, leve).sort("nome", 1).limit(300).to_list(300)
         geral = await db.alimentos.find(filt, leve).sort("nome", 1).limit(800).to_list(800)
@@ -4338,7 +4363,7 @@ async def search_alimentos(
             if a.get("id") not in vistos:
                 vistos.add(a.get("id"))
                 candidatos.append(a)
-        candidatos.sort(key=lambda a: _rank_busca(a.get("nome", ""), q_norm, tokens))
+        candidatos.sort(key=lambda a: _rank_busca(a.get("nome", ""), q_norm, tokens, a.get("fonte")))
         escolhidos = [a["id"] for a in candidatos[:limit]]
         completos = {d["id"]: d async for d in db.alimentos.find({"id": {"$in": escolhidos}}, {"_id": 0})}
         docs = [completos[i] for i in escolhidos if i in completos]
@@ -4370,29 +4395,14 @@ async def get_alimento_medidas(aid: str, user=Depends(require_nutritionist)):
     doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Alimento nÃ£o encontrado")
-    measures = [{"nome": "Gramas", "gramas": 1.0, "origem": "sistema"}]
-    base_grams = _coerce_float(doc.get("porcao_padrao_g") or doc.get("quantidade_referencia_g"))
-    base_measure = doc.get("medida_caseira")
-    if base_measure and base_grams:
-        measures.append({"nome": str(base_measure), "gramas": round(base_grams, 2), "origem": "alimento"})
-    for item in _get_measures_for_food_name(doc.get("nome", "")):
-        measures.append({**item, "origem": "tabela_medidas"})
-    unique = []
-    seen = set()
-    for item in measures:
-        key = item["nome"].strip().lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(item)
-    return {"alimento_id": aid, "alimento_nome": doc.get("nome"), "medidas": unique}
+    return {"alimento_id": aid, "alimento_nome": doc.get("nome"), "medidas": _medidas_do_alimento(doc)}
 
 @api.get("/alimentos/{aid}/equivalentes")
 async def get_alimento_equivalentes(aid: str, user=Depends(require_nutritionist)):
     doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Alimento nÃ£o encontrado")
-    entry = _find_equivalente_entry(doc.get("nome", ""))
+    entry = _find_equivalente_entry(doc.get("nome_original") or doc.get("nome", ""))
     if not entry:
         return {"alimento_id": aid, "alimento_nome": doc.get("nome"), "equivalentes": []}
     options = []
@@ -4543,15 +4553,16 @@ async def _equiv_foods() -> list[dict]:
             "id": doc.get("id"), "nome": nome, "grupo": doc.get("grupo") or doc.get("categoria"),
             "fonte": doc.get("fonte"), "m": m, "kind": _equiv_kind(doc, m), "papel": _equiv_papel(m),
             "shares": _equiv_shares(m), "norm": _normalize_food_lookup(nome),
+            "medidas": [x for x in _medidas_do_alimento(doc) if x["nome"] != "Gramas"],
         })
     _equiv_cache.update(ts=_time.time(), foods=foods)
     return foods
 
 
-def _equiv_medida(nome: str, gramas: float) -> Optional[dict]:
+def _equiv_medida(medidas: list, gramas: float) -> Optional[dict]:
     """Escolhe a medida caseira que da um numero 'redondo' (0,5 a 6 unidades) para a quantidade."""
     melhor = None
-    for med in _get_measures_for_food_name(nome):
+    for med in medidas:
         g = _coerce_float(med.get("gramas"))
         if not g or g <= 0:
             continue
@@ -4617,7 +4628,7 @@ async def _compute_equivalentes(base: dict, quantidade_g: float, q: str = "", li
         base_q = {k: round((mb.get(k) or 0) * quantidade_g / 100, 1) for k in ("kcal", "ptn", "cho", "lip")}
         saida.append({
             "alimento_id": f["id"], "nome": f["nome"], "grupo": f["grupo"], "fonte": f["fonte"],
-            "quantidade_g": gramas, "medida": _equiv_medida(f["nome"], gramas), "macros": macros,
+            "quantidade_g": gramas, "medida": _equiv_medida(f["medidas"], gramas), "macros": macros,
             "macros_100g": f["m"],
             "diferenca": {k: round(macros[k] - base_q[k], 1) for k in ("ptn", "cho", "lip")},
             "similaridade": max(0, round(100 - score * 8)),
@@ -5018,17 +5029,6 @@ async def _create_plano_snapshot(doc: dict, motivo: str, user_id: str):
 async def _enrich_plano_template(doc: dict) -> dict:
     orientacoes = await _resolve_orientacoes(doc.get("orientacao_ids") or [], doc.get("nutricionista_id"))
     return {**doc, "orientacoes": orientacoes}
-
-def _medidas_do_alimento(alim: dict) -> list[dict]:
-    measures = [{"nome": "Gramas", "gramas": 1.0}]
-    base_measure = alim.get("medida_caseira")
-    base_grams = _coerce_float(alim.get("porcao_padrao_g") or alim.get("quantidade_referencia_g"))
-    if base_measure and base_grams:
-        measures.append({"nome": str(base_measure), "gramas": round(base_grams, 2)})
-    for m in _get_measures_for_food_name(alim.get("nome", "")):
-        if m["nome"].strip().lower() not in {x["nome"].strip().lower() for x in measures}:
-            measures.append(m)
-    return measures
 
 _TOTAIS_PLANO = ["energia_kcal", "proteinas_g", "carboidratos_g", "lipidios_g", "fibras_g", "sodio_mg"]
 
@@ -6345,6 +6345,7 @@ async def startup():
     await db.exames_manuais.create_index([("paciente_id", 1), ("data_coleta", -1)])
     # seed alimentos TACO
     await seed_alimentos()
+    asyncio.create_task(_sincronizar_base_alimentos())
     # seed agents
     await ensure_agents_seeded()
     # start proactive nudge scheduler
@@ -6391,6 +6392,12 @@ async def shutdown():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+@app.get("/health/base")
+async def health_base():
+    """Versao da base de alimentos gravada no banco (para conferir a sincronizacao apos o deploy)."""
+    marcador = await db.meta_sistema.find_one({"_id": "base_alimentos"}, {"_id": 0}) or {}
+    return {"versao_esperada": BASE_VERSAO, **marcador}
 
 api.include_router(build_financeiro_router(db, require_nutritionist))
 api.include_router(build_dieta_router(db, require_nutritionist, SimpleNamespace(

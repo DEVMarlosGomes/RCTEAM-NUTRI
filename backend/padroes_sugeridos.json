@@ -1,0 +1,974 @@
+{
+ "origem": "Conteúdo da conta do nutricionista (modelos, listas de substituição e frases), ligado à base EVONUT.",
+ "listas": {
+  "objetivos": [
+   "Emagrecimento",
+   "Ganho de massa muscular",
+   "Ganho de massa muscular e Queima de gordura corporal",
+   "Qualidade de vida",
+   "Queima de gordura corporal e Ganho de massa muscular",
+   "Saúde e Desempenho esportivo",
+   "Saúde e Ganho de massa muscular",
+   "Saúde e Queima de gordura corporal",
+   "Saúde na gestação"
+  ],
+  "titulos": [
+   "Dieta padrão",
+   "Dieta para os dias COM exercício",
+   "Dieta para os dias SEM exercício"
+  ],
+  "nomes_refeicao": [
+   "ALMOÇO",
+   "CAFÉ DA MANHÃ",
+   "CEIA",
+   "COLAÇÃO",
+   "INTRA-TREINO",
+   "JANTAR",
+   "LANCHE DA MANHÃ",
+   "LANCHE DA TARDE",
+   "LANCHE DA TARDE 1",
+   "LANCHE DA TARDE 2",
+   "PÓS-TREINO",
+   "PRÉ-TREINO"
+  ],
+  "observacoes_refeicao": [
+   "Não coar o suco verde",
+   "Temperar com açafrão ou manjericão"
+  ],
+  "observacoes_alimento": [
+   "ou Grupo de Carnes e Ovos",
+   "ou Grupo de Cereais integrais, Raízes e Derivados",
+   "ou Grupo de Frutas",
+   "ou Grupo de Gorduras Boas",
+   "ou Grupo de Leguminosas",
+   "ou Grupo de Leite e Derivados"
+  ]
+ },
+ "modelos_refeicao": [
+  {
+   "nome": "Almoço tradicional (carne)",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "239",
+     "nome": "Alface",
+     "medida_nome": "Folha",
+     "quantidade": 2.0,
+     "quantidade_g": 20.0
+    },
+    {
+     "alimento_id": "6314",
+     "nome": "Tomate, com semente, cru",
+     "medida_nome": "Fatia média",
+     "quantidade": 2.0,
+     "quantidade_g": 30.0
+    },
+    {
+     "alimento_id": "1885",
+     "nome": "Cenoura, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 24.0
+    },
+    {
+     "alimento_id": "829",
+     "nome": "Beterraba, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 32.0
+    },
+    {
+     "alimento_id": "469",
+     "nome": "Azeite de oliva (IBGE)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "377",
+     "nome": "Arroz integral",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 4.0,
+     "quantidade_g": 80.0
+    },
+    {
+     "alimento_id": "2634",
+     "nome": "Feijão (preto, mulatinho, roxo, rosinha, etc)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 51.0
+    },
+    {
+     "alimento_id": "231",
+     "nome": "Alcatra grelhado(a)/brasa/churrasco",
+     "medida_nome": "Bife",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    }
+   ]
+  },
+  {
+   "nome": "Almoço tradicional (frango)",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "239",
+     "nome": "Alface",
+     "medida_nome": "Folha",
+     "quantidade": 2.0,
+     "quantidade_g": 20.0
+    },
+    {
+     "alimento_id": "6314",
+     "nome": "Tomate, com semente, cru",
+     "medida_nome": "Fatia média",
+     "quantidade": 2.0,
+     "quantidade_g": 30.0
+    },
+    {
+     "alimento_id": "1885",
+     "nome": "Cenoura, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 24.0
+    },
+    {
+     "alimento_id": "829",
+     "nome": "Beterraba, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 32.0
+    },
+    {
+     "alimento_id": "469",
+     "nome": "Azeite de oliva (IBGE)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "377",
+     "nome": "Arroz integral",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 4.0,
+     "quantidade_g": 80.0
+    },
+    {
+     "alimento_id": "2634",
+     "nome": "Feijão (preto, mulatinho, roxo, rosinha, etc)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 51.0
+    },
+    {
+     "alimento_id": "2770",
+     "nome": "Filé de frango grelhado(a)/brasa/churrasco",
+     "medida_nome": "Filé",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    }
+   ]
+  },
+  {
+   "nome": "Café da manhã (cuscuz)",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "2374",
+     "nome": "Cuscuz",
+     "medida_nome": "Pedaço",
+     "quantidade": 1.0,
+     "quantidade_g": 85.0
+    },
+    {
+     "alimento_id": "4538",
+     "nome": "Ovo de galinha cozido(a)",
+     "medida_nome": "Unidade",
+     "quantidade": 2.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "3800",
+     "nome": "Mamão, Formosa, cru",
+     "medida_nome": "Fatia média",
+     "quantidade": 1.0,
+     "quantidade_g": 170.0
+    },
+    {
+     "alimento_id": "3631",
+     "nome": "Linhaça, semente",
+     "medida_nome": "Colher de chá",
+     "quantidade": 1.0,
+     "quantidade_g": 5.0
+    },
+    {
+     "alimento_id": "1243",
+     "nome": "Café",
+     "medida_nome": "Xícara média",
+     "quantidade": 1.0,
+     "quantidade_g": 130.0
+    }
+   ]
+  },
+  {
+   "nome": "Crepioca",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "6280",
+     "nome": "Tapioca de goma",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 30.0
+    },
+    {
+     "alimento_id": "4538",
+     "nome": "Ovo de galinha cozido(a)",
+     "medida_nome": "Unidade",
+     "quantidade": 1.0,
+     "quantidade_g": 50.0
+    },
+    {
+     "alimento_id": "3631",
+     "nome": "Linhaça, semente",
+     "medida_nome": "Colher de chá",
+     "quantidade": 1.0,
+     "quantidade_g": 5.0
+    }
+   ]
+  },
+  {
+   "nome": "Omelete",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "4538",
+     "nome": "Ovo de galinha cozido(a)",
+     "medida_nome": "Unidade",
+     "quantidade": 2.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "5417",
+     "nome": "Queijo minas frescal",
+     "medida_nome": "Fatia média",
+     "quantidade": 2.0,
+     "quantidade_g": 60.0
+    },
+    {
+     "alimento_id": "6314",
+     "nome": "Tomate, com semente, cru",
+     "medida_nome": "Fatia média",
+     "quantidade": 0.5,
+     "quantidade_g": 75.0
+    },
+    {
+     "alimento_id": "1862",
+     "nome": "Cebola, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 0.5,
+     "quantidade_g": 5.0
+    },
+    {
+     "alimento_id": "4503",
+     "nome": "Orégano",
+     "medida_nome": "Colher de chá",
+     "quantidade": 1.0,
+     "quantidade_g": 4.0
+    }
+   ]
+  },
+  {
+   "nome": "Salada com frango",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "239",
+     "nome": "Alface",
+     "medida_nome": "Folha",
+     "quantidade": 3.0,
+     "quantidade_g": 30.0
+    },
+    {
+     "alimento_id": "5649",
+     "nome": "Rúcula",
+     "medida_nome": "Folhinha",
+     "quantidade": 10.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "6314",
+     "nome": "Tomate, com semente, cru",
+     "medida_nome": "Fatia média",
+     "quantidade": 3.0,
+     "quantidade_g": 45.0
+    },
+    {
+     "alimento_id": "1885",
+     "nome": "Cenoura, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 24.0
+    },
+    {
+     "alimento_id": "829",
+     "nome": "Beterraba, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 32.0
+    },
+    {
+     "alimento_id": "1862",
+     "nome": "Cebola, crua",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "469",
+     "nome": "Azeite de oliva (IBGE)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "2770",
+     "nome": "Filé de frango grelhado(a)/brasa/churrasco",
+     "medida_nome": "Filé",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    }
+   ]
+  },
+  {
+   "nome": "Sanduíche natural (atum)",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "4761",
+     "nome": "Pão, trigo, forma, integral",
+     "medida_nome": "Fatia",
+     "quantidade": 2.0,
+     "quantidade_g": 50.0
+    },
+    {
+     "alimento_id": "434",
+     "nome": "Atum em conserva",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 48.0
+    },
+    {
+     "alimento_id": "239",
+     "nome": "Alface",
+     "medida_nome": "Folha",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "6314",
+     "nome": "Tomate, com semente, cru",
+     "medida_nome": "Fatia média",
+     "quantidade": 1.0,
+     "quantidade_g": 15.0
+    },
+    {
+     "alimento_id": "4503",
+     "nome": "Orégano",
+     "medida_nome": "Colher de chá",
+     "quantidade": 0.5,
+     "quantidade_g": 2.0
+    }
+   ]
+  },
+  {
+   "nome": "Suco verde",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "184",
+     "nome": "Água",
+     "medida_nome": "Copo",
+     "quantidade": 1.0,
+     "quantidade_g": 200.0
+    },
+    {
+     "alimento_id": "2228",
+     "nome": "Couve cru(a)",
+     "medida_nome": "Folha",
+     "quantidade": 0.5,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "3171",
+     "nome": "Hortelã",
+     "medida_nome": "Folhinha",
+     "quantidade": 5.0,
+     "quantidade_g": 25.0
+    },
+    {
+     "alimento_id": "17",
+     "nome": "Abacaxi, cru",
+     "medida_nome": "Fatia",
+     "quantidade": 1.0,
+     "quantidade_g": 75.0
+    },
+    {
+     "alimento_id": "3659",
+     "nome": "Maçã",
+     "medida_nome": "Unidade",
+     "quantidade": 0.5,
+     "quantidade_g": 65.0
+    },
+    {
+     "alimento_id": "3631",
+     "nome": "Linhaça, semente",
+     "medida_nome": "Colher de sobremesa",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    }
+   ]
+  },
+  {
+   "nome": "Tapioca com queijo",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "6280",
+     "nome": "Tapioca de goma",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 45.0
+    },
+    {
+     "alimento_id": "3881",
+     "nome": "Manteiga com ou sem sal",
+     "medida_nome": "Colher de chá",
+     "quantidade": 1.0,
+     "quantidade_g": 8.0
+    },
+    {
+     "alimento_id": "5454",
+     "nome": "Queijo, minas, meia cura",
+     "medida_nome": "Fatia média",
+     "quantidade": 2.0,
+     "quantidade_g": 60.0
+    }
+   ]
+  },
+  {
+   "nome": "Vitamina",
+   "observacao": "",
+   "alimentos": [
+    {
+     "alimento_id": "3525",
+     "nome": "Leite, de vaca, integral",
+     "medida_nome": "Copo grande",
+     "quantidade": 1.0,
+     "quantidade_g": 200.0
+    },
+    {
+     "alimento_id": "585",
+     "nome": "Banana, prata, crua",
+     "medida_nome": "Unidade média",
+     "quantidade": 1.0,
+     "quantidade_g": 90.0
+    },
+    {
+     "alimento_id": "449",
+     "nome": "Aveia em flocos",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 30.0
+    },
+    {
+     "alimento_id": null,
+     "nome": "Cacau em pó",
+     "medida_nome": "Gramas",
+     "quantidade": 5.0,
+     "quantidade_g": 5.0
+    }
+   ]
+  }
+ ],
+ "listas_substituicao": [
+  {
+   "nome": "Carnes e ovos",
+   "alimentos": [
+    {
+     "alimento_id": "2759",
+     "nome": "Filé de frango",
+     "medida_nome": "Filé grande",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "4948",
+     "nome": "Peixe de mar (inteiro, em posta, em filé, etc) grelhado(a)/brasa/churrasco",
+     "medida_nome": "Filé",
+     "quantidade": 1.0,
+     "quantidade_g": 120.0
+    },
+    {
+     "alimento_id": "1539",
+     "nome": "Carne moída cozido(a)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 4.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "434",
+     "nome": "Atum em conserva",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 6.0,
+     "quantidade_g": 96.0
+    },
+    {
+     "alimento_id": "5935",
+     "nome": "Sardinha em conserva",
+     "medida_nome": "Lata",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "4538",
+     "nome": "Ovo de galinha cozido(a)",
+     "medida_nome": "Unidade",
+     "quantidade": 3.0,
+     "quantidade_g": 150.0
+    },
+    {
+     "alimento_id": "4528",
+     "nome": "Ovo de codorna cozido(a)",
+     "medida_nome": "Unidade",
+     "quantidade": 9.0,
+     "quantidade_g": 90.0
+    }
+   ]
+  },
+  {
+   "nome": "Cereais integrais, Raízes e Derivados",
+   "alimentos": [
+    {
+     "alimento_id": "4761",
+     "nome": "Pão, trigo, forma, integral",
+     "medida_nome": "Fatia",
+     "quantidade": 2.0,
+     "quantidade_g": 50.0
+    },
+    {
+     "alimento_id": "6280",
+     "nome": "Tapioca de goma",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 45.0
+    },
+    {
+     "alimento_id": "2374",
+     "nome": "Cuscuz",
+     "medida_nome": "Pedaço",
+     "quantidade": 1.0,
+     "quantidade_g": 85.0
+    },
+    {
+     "alimento_id": "4068",
+     "nome": "Milho (em grão) cozido(a)",
+     "medida_nome": "Espiga",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "709",
+     "nome": "Batata, doce, cozida",
+     "medida_nome": "Fatia",
+     "quantidade": 4.0,
+     "quantidade_g": 160.0
+    },
+    {
+     "alimento_id": "205",
+     "nome": "Aipim cozido(a)",
+     "medida_nome": "Unidade média",
+     "quantidade": 1.0,
+     "quantidade_g": 70.0
+    },
+    {
+     "alimento_id": "3193",
+     "nome": "Inhame cozido(a)",
+     "medida_nome": "Pedaço",
+     "quantidade": 3.0,
+     "quantidade_g": 180.0
+    },
+    {
+     "alimento_id": "1384",
+     "nome": "Cará, cozido",
+     "medida_nome": "Unidade pequena",
+     "quantidade": 4.0,
+     "quantidade_g": 200.0
+    },
+    {
+     "alimento_id": "377",
+     "nome": "Arroz integral",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 4.0,
+     "quantidade_g": 80.0
+    },
+    {
+     "alimento_id": "3679",
+     "nome": "Macarrão cozido(a)",
+     "medida_nome": "Pegador",
+     "quantidade": 1.0,
+     "quantidade_g": 110.0
+    },
+    {
+     "alimento_id": "3072",
+     "nome": "Granola (IBGE)",
+     "medida_nome": "Colher de sopa cheia",
+     "quantidade": 3.0,
+     "quantidade_g": 33.0
+    },
+    {
+     "alimento_id": "449",
+     "nome": "Aveia em flocos",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 30.0
+    }
+   ]
+  },
+  {
+   "nome": "Frutas",
+   "alimentos": [
+    {
+     "alimento_id": "17",
+     "nome": "Abacaxi, cru",
+     "medida_nome": "Fatia",
+     "quantidade": 1.0,
+     "quantidade_g": 75.0
+    },
+    {
+     "alimento_id": "119",
+     "nome": "Acerola, crua",
+     "medida_nome": "Unidade",
+     "quantidade": 10.0,
+     "quantidade_g": 120.0
+    },
+    {
+     "alimento_id": "288",
+     "nome": "Ameixa",
+     "medida_nome": "Unidade",
+     "quantidade": 2.0,
+     "quantidade_g": 80.0
+    },
+    {
+     "alimento_id": "326",
+     "nome": "Amora (IBGE)",
+     "medida_nome": "Unidade",
+     "quantidade": 10.0,
+     "quantidade_g": 60.0
+    },
+    {
+     "alimento_id": "585",
+     "nome": "Banana, prata, crua",
+     "medida_nome": "Unidade média",
+     "quantidade": 1.0,
+     "quantidade_g": 90.0
+    },
+    {
+     "alimento_id": "1275",
+     "nome": "Caju, cru",
+     "medida_nome": "Unidade",
+     "quantidade": 2.0,
+     "quantidade_g": 120.0
+    },
+    {
+     "alimento_id": "2120",
+     "nome": "Coco fresco",
+     "medida_nome": "Pedaço médio",
+     "quantidade": 0.5,
+     "quantidade_g": 15.0
+    },
+    {
+     "alimento_id": "3047",
+     "nome": "Goiaba (IBGE)",
+     "medida_nome": "Unidade média",
+     "quantidade": 0.5,
+     "quantidade_g": 85.0
+    },
+    {
+     "alimento_id": "3338",
+     "nome": "Kiwi, cru",
+     "medida_nome": "Unidade",
+     "quantidade": 1.0,
+     "quantidade_g": 76.0
+    },
+    {
+     "alimento_id": "3358",
+     "nome": "Laranja",
+     "medida_nome": "Unidade pequena",
+     "quantidade": 1.0,
+     "quantidade_g": 90.0
+    },
+    {
+     "alimento_id": "3563",
+     "nome": "Limão (comum, galego, etc)",
+     "medida_nome": "Unidade",
+     "quantidade": 2.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "3659",
+     "nome": "Maçã",
+     "medida_nome": "Unidade",
+     "quantidade": 1.0,
+     "quantidade_g": 130.0
+    },
+    {
+     "alimento_id": "3800",
+     "nome": "Mamão, Formosa, cru",
+     "medida_nome": "Fatia pequena",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "3802",
+     "nome": "Mamão, Papaia, cru",
+     "medida_nome": "Unidade média",
+     "quantidade": 0.5,
+     "quantidade_g": 155.0
+    },
+    {
+     "alimento_id": "3843",
+     "nome": "Manga (IBGE)",
+     "medida_nome": "Unidade média",
+     "quantidade": 0.5,
+     "quantidade_g": 70.0
+    },
+    {
+     "alimento_id": "3908",
+     "nome": "Maracujá, cru",
+     "medida_nome": "Unidade",
+     "quantidade": 1.0,
+     "quantidade_g": 45.0
+    },
+    {
+     "alimento_id": "4034",
+     "nome": "Melancia, crua",
+     "medida_nome": "Fatia",
+     "quantidade": 1.0,
+     "quantidade_g": 200.0
+    },
+    {
+     "alimento_id": "4040",
+     "nome": "Melão, cru",
+     "medida_nome": "Fatia",
+     "quantidade": 1.0,
+     "quantidade_g": 115.0
+    },
+    {
+     "alimento_id": "4267",
+     "nome": "Morango, cru",
+     "medida_nome": "Unidade",
+     "quantidade": 10.0,
+     "quantidade_g": 120.0
+    },
+    {
+     "alimento_id": "5061",
+     "nome": "Pera (IBGE)",
+     "medida_nome": "Unidade média",
+     "quantidade": 1.0,
+     "quantidade_g": 110.0
+    },
+    {
+     "alimento_id": "5109",
+     "nome": "Pêssego (IBGE)",
+     "medida_nome": "Unidade média",
+     "quantidade": 2.0,
+     "quantidade_g": 120.0
+    },
+    {
+     "alimento_id": "5684",
+     "nome": "Salada de frutas",
+     "medida_nome": "Copo duplo cheio",
+     "quantidade": 0.5,
+     "quantidade_g": 105.0
+    },
+    {
+     "alimento_id": "6271",
+     "nome": "Tangerina",
+     "medida_nome": "Unidade",
+     "quantidade": 1.0,
+     "quantidade_g": 100.0
+    },
+    {
+     "alimento_id": "6439",
+     "nome": "Uva",
+     "medida_nome": "Unidade",
+     "quantidade": 8.0,
+     "quantidade_g": 64.0
+    },
+    {
+     "alimento_id": "6440",
+     "nome": "Uva passa",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 36.0
+    }
+   ]
+  },
+  {
+   "nome": "Gorduras boas",
+   "alimentos": [
+    {
+     "alimento_id": "1829",
+     "nome": "Castanha de caju",
+     "medida_nome": "Unidade",
+     "quantidade": 3.0,
+     "quantidade_g": 9.0
+    },
+    {
+     "alimento_id": "4387",
+     "nome": "Noz, crua",
+     "medida_nome": "Unidade",
+     "quantidade": 2.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "463",
+     "nome": "Avelã",
+     "medida_nome": "Unidade",
+     "quantidade": 8.0,
+     "quantidade_g": 8.0
+    },
+    {
+     "alimento_id": "296",
+     "nome": "Amêndoa",
+     "medida_nome": "Unidade",
+     "quantidade": 9.0,
+     "quantidade_g": 9.0
+    },
+    {
+     "alimento_id": "3035",
+     "nome": "Gergelim",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    },
+    {
+     "alimento_id": "6",
+     "nome": "Abacate, cru",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 1.0,
+     "quantidade_g": 45.0
+    },
+    {
+     "alimento_id": "469",
+     "nome": "Azeite de oliva (IBGE)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 1.0,
+     "quantidade_g": 10.0
+    }
+   ]
+  },
+  {
+   "nome": "Leguminosas",
+   "alimentos": [
+    {
+     "alimento_id": "2634",
+     "nome": "Feijão (preto, mulatinho, roxo, rosinha, etc)",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 51.0
+    },
+    {
+     "alimento_id": "3551",
+     "nome": "Lentilha, cozida",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 54.0
+    },
+    {
+     "alimento_id": "2495",
+     "nome": "Ervilha em grão",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 3.0,
+     "quantidade_g": 45.0
+    },
+    {
+     "alimento_id": "3074",
+     "nome": "Grão de bico",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 44.0
+    },
+    {
+     "alimento_id": "5985",
+     "nome": "Soja em grão",
+     "medida_nome": "Colher de sopa",
+     "quantidade": 2.0,
+     "quantidade_g": 36.0
+    }
+   ]
+  },
+  {
+   "nome": "Leite e derivados",
+   "alimentos": [
+    {
+     "alimento_id": "5442",
+     "nome": "Queijo ricota",
+     "medida_nome": "Fatia",
+     "quantidade": 2.0,
+     "quantidade_g": 70.0
+    },
+    {
+     "alimento_id": "5417",
+     "nome": "Queijo minas frescal",
+     "medida_nome": "Fatia média",
+     "quantidade": 1.0,
+     "quantidade_g": 30.0
+    },
+    {
+     "alimento_id": "5454",
+     "nome": "Queijo, minas, meia cura",
+     "medida_nome": "Fatia média",
+     "quantidade": 2.0,
+     "quantidade_g": 60.0
+    },
+    {
+     "alimento_id": "3218",
+     "nome": "Iogurte desnatado natural",
+     "medida_nome": "Unidade",
+     "quantidade": 1.5,
+     "quantidade_g": 255.0
+    },
+    {
+     "alimento_id": "3227",
+     "nome": "Iogurte integral natural",
+     "medida_nome": "Unidade",
+     "quantidade": 1.0,
+     "quantidade_g": 170.0
+    },
+    {
+     "alimento_id": "3461",
+     "nome": "Leite de vaca desnatado",
+     "medida_nome": "Copo grande",
+     "quantidade": 1.0,
+     "quantidade_g": 200.0
+    },
+    {
+     "alimento_id": "3525",
+     "nome": "Leite, de vaca, integral",
+     "medida_nome": "Copo grande",
+     "quantidade": 1.0,
+     "quantidade_g": 200.0
+    },
+    {
+     "alimento_id": "6570",
+     "nome": "Yakult de qualquer sabor",
+     "medida_nome": "Unidade",
+     "quantidade": 2.0,
+     "quantidade_g": 160.0
+    }
+   ]
+  }
+ ]
+}
