@@ -29,6 +29,7 @@ import CadastroMedidas from "@/pages/CadastroMedidas";
 import RotulosNutricionais from "@/pages/RotulosNutricionais";
 import OrientacoesNutricionais from "@/pages/OrientacoesNutricionais";
 import Pagamentos from "@/pages/Pagamentos";
+import ConfiguracoesDieta from "@/pages/ConfiguracoesDieta";
 
 function Loader() {
   return (
@@ -88,6 +89,7 @@ function App() {
             <Route path="/rotulos-nutricionais" element={<Protected role="nutritionist"><RotulosNutricionais /></Protected>} />
             <Route path="/orientacoes" element={<Protected role="nutritionist"><OrientacoesNutricionais /></Protected>} />
             <Route path="/configuracoes" element={<Protected role="nutritionist"><Configuracoes /></Protected>} />
+            <Route path="/configuracoes-dieta" element={<Protected role="nutritionist"><ConfiguracoesDieta /></Protected>} />
             <Route path="/agente-config" element={<Protected role="nutritionist"><AgenteConfig /></Protected>} />
             <Route path="/depoimentos" element={<Protected role="nutritionist"><Depoimentos /></Protected>} />
 

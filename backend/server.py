@@ -41,6 +41,8 @@ from ai.drhouse.knowledge_sync import sync_drhouse_documents
 from ai.drhouse.prompt import DRHOUSE_KNOWLEDGE_HEADER, DRHOUSE_PROMPT_VERSION, DRHOUSE_SYSTEM_PROMPT
 from llm_chat import LlmChat, UserMessage
 from financeiro import build_financeiro_router
+from dieta import build_dieta_router
+from types import SimpleNamespace
 import json
 import io
 import pdfplumber
@@ -4238,6 +4240,28 @@ async def _resolve_alimento_light_by_name(nome: str) -> Optional[dict]:
 async def list_grupos(user=Depends(require_nutritionist)):
     return _GRUPOS_ALIMENTARES
 
+_ACENTOS_BUSCA = {"a": "aáàâãä", "e": "eéèêë", "i": "iíìîï", "o": "oóòôõö", "u": "uúùûü", "c": "cç"}
+
+def _regex_sem_acento(q: str) -> str:
+    """'pao' casa com 'Pão': cada vogal/c vira uma classe com as variantes acentuadas."""
+    base = unicodedata.normalize("NFD", q.strip().lower())
+    base = "".join(ch for ch in base if unicodedata.category(ch) != "Mn")
+    return "".join(f"[{_ACENTOS_BUSCA[ch]}]" if ch in _ACENTOS_BUSCA else re.escape(ch) for ch in base)
+
+def _rank_busca(nome: str, q_norm: str) -> tuple:
+    """Comeca com o termo > termo no inicio de uma palavra > contem; palavra inteira antes de pedaco
+    ("Arroz, branco" antes de "Arrozina"); empate em ordem alfabetica, como no autocomplete do NutriDiet."""
+    n = _normalize_food_lookup(nome)
+    if n.startswith(q_norm):
+        nivel = 0
+    elif f" {q_norm}" in f" {n}":
+        nivel = 1
+    else:
+        nivel = 2
+    inteira = re.search(rf"(^|\s){re.escape(q_norm)}(\s|$)", n) is not None
+    marca = "®" in nome or "™" in nome  # produtos de marca depois dos alimentos genericos
+    return (nivel, not inteira, marca, n)
+
 @api.get("/alimentos")
 async def search_alimentos(
     q: str = "",
@@ -4246,10 +4270,15 @@ async def search_alimentos(
     fonte: str = "",
     page: int = 1,
     limit: int = 50,
+    ordenar: str = "",
+    tabelas: str = "",
     user=Depends(require_nutritionist),
 ):
     filt: dict = {}
-    if q:
+    relevancia = ordenar == "relevancia" and q.strip()
+    if relevancia:
+        filt["nome"] = {"$regex": _regex_sem_acento(q), "$options": "i"}
+    elif q:
         filt["nome"] = {"$regex": q, "$options": "i"}
     if grupo:
         filt["grupo"] = grupo
@@ -4266,11 +4295,36 @@ async def search_alimentos(
             {"nutricionista_id": {"$exists": False}},
             {"nutricionista_id": user["id"]},
         ]
+    # "Tabela de alimentos consultada" da configuracao da dieta (vazio = todas)
+    sel = {t.strip() for t in tabelas.split(",") if t.strip()}
+    if sel:
+        fontes = [f for f in ("TACO", "IBGE", "TBCA", "Tucunduva") if f in sel] + (["Danone", "Essential"] if "Marcas" in sel else [])
+        ors = [{"fonte": {"$in": fontes}, "nutricionista_id": {"$exists": False}}] if fontes else []
+        if "Meus" in sel:
+            ors += [{"fonte": "Meus Alimentos", "nutricionista_id": {"$exists": False}}, {"nutricionista_id": user["id"]}]
+        if ors:
+            filt.pop("fonte", None)
+            filt.pop("nutricionista_id", None)
+            filt["$or"] = ors
     skip = (page - 1) * limit
     total = await db.alimentos.count_documents(filt)
-    cursor = db.alimentos.find(filt, {"_id": 0}).skip(skip).limit(limit).sort("nome", 1)
+    if relevancia:
+        # Editor da dieta: primeiro o que comeca com o termo, depois inicio de palavra, depois o resto
+        q_norm = _normalize_food_lookup(q)
+        filt_prefixo = {**filt, "nome": {"$regex": "^" + _regex_sem_acento(q), "$options": "i"}}
+        prefixo = await db.alimentos.find(filt_prefixo, {"_id": 0}).sort("nome", 1).limit(300).to_list(300)
+        geral = await db.alimentos.find(filt, {"_id": 0}).sort("nome", 1).limit(1500).to_list(1500)
+        vistos, candidatos = set(), []
+        for a in prefixo + geral:
+            if a.get("id") not in vistos:
+                vistos.add(a.get("id"))
+                candidatos.append(a)
+        candidatos.sort(key=lambda a: _rank_busca(a.get("nome", ""), q_norm))
+        docs = candidatos[:limit]
+    else:
+        docs = await db.alimentos.find(filt, {"_id": 0}).skip(skip).limit(limit).sort("nome", 1).to_list(limit)
     items = []
-    async for a in cursor:
+    for a in docs:
         # Normaliza campos de display para ambos os formatos (evonut e legado TACO/CUSTOM)
         m100 = _macros_100g(a)
         a.pop("nutrientes", None)
@@ -4845,19 +4899,32 @@ def _nutrientes_por_porcao(alimento: dict, quantidade_g: float) -> dict:
     return {k: round((p.get(k) or 0) * f2, 2) for k in keys}
 
 class AlimentoPlanoItem(BaseModel):
-    alimento_id: str
+    # alimento_id vazio = alimento digitado livremente (sem calculo), como no NutriDiet
+    alimento_id: Optional[str] = None
+    nome: Optional[str] = None
     quantidade_g: Optional[float] = None
-    medida_nome: str = "Gramas"
+    medida_nome: Optional[str] = "Gramas"
     quantidade: Optional[float] = None
     substituivel: bool = True
     substitutos: List[dict] = []
     observacao: Optional[str] = None
 
+class OpcaoRefeicaoPlano(BaseModel):
+    """Opcao "OU" de uma refeicao: nao entra no total do dia."""
+    observacao: Optional[str] = None
+    alimentos: List[AlimentoPlanoItem] = []
+
 class RefeicaoPlano(BaseModel):
-    nome: str
+    nome: str = ""
     horario: Optional[str] = None
     meta_kcal: Optional[float] = None
     meta_pct: Optional[float] = None
+    observacao: Optional[str] = None
+    alimentos: List[AlimentoPlanoItem] = []
+    opcoes: List[OpcaoRefeicaoPlano] = []
+
+class ListaSubstituicaoPlano(BaseModel):
+    nome: str = ""
     alimentos: List[AlimentoPlanoItem] = []
 
 class OrientacaoNutricionalIn(BaseModel):
@@ -4880,6 +4947,9 @@ class PlanoManualIn(BaseModel):
     orientacao_ids: List[str] = []
     refeicoes: List[RefeicaoPlano] = []
     observacoes: Optional[str] = None
+    recomendacoes: List[dict] = []          # [{titulo, texto}] - "Observacoes da dieta"
+    planejamento: Optional[dict] = None     # metas: kcal, pct_*, kcal_kg, *_gkg
+    listas_substituicao: List[ListaSubstituicaoPlano] = []
 
 class PlanoTemplateIn(BaseModel):
     nome: str
@@ -4895,6 +4965,9 @@ class PlanoTemplateIn(BaseModel):
     orientacao_ids: List[str] = []
     refeicoes: List[RefeicaoPlano] = []
     observacoes: Optional[str] = None
+    recomendacoes: List[dict] = []
+    planejamento: Optional[dict] = None
+    listas_substituicao: List[ListaSubstituicaoPlano] = []
 
 async def _resolve_orientacoes(ids: list[str], user_id: str) -> list[dict]:
     clean_ids = [oid for oid in ids or [] if oid]
@@ -4923,10 +4996,54 @@ async def _enrich_plano_template(doc: dict) -> dict:
     orientacoes = await _resolve_orientacoes(doc.get("orientacao_ids") or [], doc.get("nutricionista_id"))
     return {**doc, "orientacoes": orientacoes}
 
+def _medidas_do_alimento(alim: dict) -> list[dict]:
+    measures = [{"nome": "Gramas", "gramas": 1.0}]
+    base_measure = alim.get("medida_caseira")
+    base_grams = _coerce_float(alim.get("porcao_padrao_g") or alim.get("quantidade_referencia_g"))
+    if base_measure and base_grams:
+        measures.append({"nome": str(base_measure), "gramas": round(base_grams, 2)})
+    for m in _get_measures_for_food_name(alim.get("nome", "")):
+        if m["nome"].strip().lower() not in {x["nome"].strip().lower() for x in measures}:
+            measures.append(m)
+    return measures
+
+_TOTAIS_PLANO = ["energia_kcal", "proteinas_g", "carboidratos_g", "lipidios_g", "fibras_g", "sodio_mg"]
+
+async def _enrich_itens_plano(itens: list) -> tuple[list, dict]:
+    """Calcula cada item (kcal por Atwater 4/4/9, como o NutriDiet) e soma os totais do bloco."""
+    alimentos_out = []
+    totais = {k: 0.0 for k in _TOTAIS_PLANO}
+    for item in itens or []:
+        alim = await db.alimentos.find_one({"id": item.get("alimento_id")}, {"_id": 0}) if item.get("alimento_id") else None
+        if not alim:
+            # alimento digitado livremente: aparece no plano, mas sem calculo
+            if (item.get("nome") or "").strip():
+                alimentos_out.append({**item, "alimento_id": None, "alimento_nome": item.get("nome"), "medidas": [],
+                                      "macros_100g": None, "nutrientes": {k: 0.0 for k in _TOTAIS_PLANO}})
+            continue
+        resolved_g = _resolve_quantidade_g(alim, item.get("medida_nome"), item.get("quantidade"), item.get("quantidade_g"))
+        nutr = _nutrientes_por_porcao(alim, resolved_g)
+        nutr["energia_kcal"] = round(nutr.get("proteinas_g", 0) * 4 + nutr.get("carboidratos_g", 0) * 4 + nutr.get("lipidios_g", 0) * 9, 2)
+        for k in totais:
+            totais[k] = round(totais[k] + nutr.get(k, 0), 2)
+        alimentos_out.append({
+            **item,
+            "quantidade_g": resolved_g,
+            "quantidade": _coerce_float(item.get("quantidade")) if item.get("quantidade") is not None else resolved_g,
+            "medida_nome": item.get("medida_nome") if item.get("medida_nome") is not None else "Gramas",
+            "nome": item.get("nome") or alim.get("nome", ""),
+            "alimento_nome": alim.get("nome", ""),
+            "grupo": alim.get("grupo") or alim.get("categoria"),
+            "medidas": _medidas_do_alimento(alim),
+            "macros_100g": _macros_100g(alim),
+            "nutrientes": nutr,
+        })
+    return alimentos_out, totais
+
 async def _enrich_plano(doc: dict) -> dict:
     refeicoes_out = []
     ref_rows = []
-    totais_dia = {k: 0.0 for k in ["energia_kcal","proteinas_g","carboidratos_g","lipidios_g","fibras_g","sodio_mg"]}
+    totais_dia = {k: 0.0 for k in _TOTAIS_PLANO}
     metas_dia = {
         "energia_kcal": _coerce_float(doc.get("meta_kcal")),
         "proteinas_g": _coerce_float(doc.get("meta_proteina_g")),
@@ -4934,39 +5051,20 @@ async def _enrich_plano(doc: dict) -> dict:
         "lipidios_g": _coerce_float(doc.get("meta_lipidio_g")),
     }
     for ref in doc.get("refeicoes", []):
-        alimentos_out = []
-        totais_ref = {k: 0.0 for k in totais_dia}
-        for item in ref.get("alimentos", []):
-            alim = await db.alimentos.find_one({"id": item.get("alimento_id")}, {"_id": 0})
-            if not alim:
-                continue
-            resolved_g = _resolve_quantidade_g(alim, item.get("medida_nome"), item.get("quantidade"), item.get("quantidade_g"))
-            nutr = _nutrientes_por_porcao(alim, resolved_g)
-            for k in totais_ref:
-                totais_ref[k] = round(totais_ref[k] + nutr.get(k, 0), 2)
-            measures = [{"nome": "Gramas", "gramas": 1.0}]
-            base_measure = alim.get("medida_caseira")
-            base_grams = _coerce_float(alim.get("porcao_padrao_g") or alim.get("quantidade_referencia_g"))
-            if base_measure and base_grams:
-                measures.append({"nome": str(base_measure), "gramas": round(base_grams, 2)})
-            for m in _get_measures_for_food_name(alim.get("nome", "")):
-                if m["nome"].strip().lower() not in {x["nome"].strip().lower() for x in measures}:
-                    measures.append(m)
-            alimentos_out.append({
-                **item,
-                "quantidade_g": resolved_g,
-                "quantidade": _coerce_float(item.get("quantidade")) if item.get("quantidade") is not None else resolved_g,
-                "medida_nome": item.get("medida_nome") or "Gramas",
-                "alimento_nome": alim.get("nome", ""),
-                "grupo": alim.get("grupo") or alim.get("categoria"),
-                "medidas": measures,
-                "nutrientes": nutr,
-            })
+        alimentos_out, totais_ref = await _enrich_itens_plano(ref.get("alimentos", []))
+        opcoes_out = []
+        for op in ref.get("opcoes") or []:
+            op_alimentos, op_totais = await _enrich_itens_plano(op.get("alimentos", []))
+            opcoes_out.append({**op, "alimentos": op_alimentos, "totais": op_totais})
         for k in totais_dia:
             totais_dia[k] = round(totais_dia[k] + totais_ref.get(k, 0), 2)
         meta_kcal = _coerce_float(ref.get("meta_kcal"))
         saldo_kcal = round(totais_ref["energia_kcal"] - meta_kcal, 2) if meta_kcal is not None else None
-        ref_rows.append({**ref, "alimentos": alimentos_out, "totais": totais_ref, "saldo_kcal": saldo_kcal})
+        ref_rows.append({**ref, "alimentos": alimentos_out, "opcoes": opcoes_out, "totais": totais_ref, "saldo_kcal": saldo_kcal})
+    listas_out = []
+    for lista in doc.get("listas_substituicao") or []:
+        itens_lista, _ = await _enrich_itens_plano(lista.get("alimentos", []))
+        listas_out.append({**lista, "alimentos": itens_lista})
     for ref in ref_rows:
         pct_dia = round((ref["totais"]["energia_kcal"] / totais_dia["energia_kcal"]) * 100, 1) if totais_dia["energia_kcal"] > 0 else None
         refeicoes_out.append({**ref, "pct_energia_dia": pct_dia})
@@ -4974,7 +5072,8 @@ async def _enrich_plano(doc: dict) -> dict:
     for k, meta in metas_dia.items():
         saldo_dia[k] = round((totais_dia.get(k, 0) or 0) - meta, 2) if meta is not None else None
     orientacoes = await _resolve_orientacoes(doc.get("orientacao_ids") or [], doc.get("nutricionista_id"))
-    return {**doc, "refeicoes": refeicoes_out, "totais_dia": totais_dia, "saldos_dia": saldo_dia, "orientacoes": orientacoes}
+    return {**doc, "refeicoes": refeicoes_out, "listas_substituicao": listas_out, "totais_dia": totais_dia,
+            "saldos_dia": saldo_dia, "orientacoes": orientacoes}
 
 @api.get("/orientacoes")
 async def list_orientacoes(
@@ -5050,8 +5149,12 @@ async def list_planos_manuais(pid: str, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
         raise HTTPException(404, "Paciente nÃ£o encontrado")
-    docs = [d async for d in db.planos_manuais.find({"paciente_id": pid}, {"_id": 0}).sort("criado_em", -1)]
+    # Abas na ordem do NutriDiet: posicao escolhida pelo nutricionista, depois ordem de criacao
+    docs = [d async for d in db.planos_manuais.find({"paciente_id": pid}, {"_id": 0}).sort([("ordem", 1), ("criado_em", 1)])]
     return [await _enrich_plano(d) for d in docs]
+
+async def _proxima_ordem_plano(pid: str) -> int:
+    return await db.planos_manuais.count_documents({"paciente_id": pid})
 
 @api.get("/plano-templates")
 async def list_plano_templates(q: str = "", user=Depends(require_nutritionist)):
@@ -5109,6 +5212,9 @@ async def create_template_from_plano(
         "orientacao_ids": doc.get("orientacao_ids") or [],
         "refeicoes": doc.get("refeicoes") or [],
         "observacoes": doc.get("observacoes"),
+        "recomendacoes": doc.get("recomendacoes") or [],
+        "planejamento": doc.get("planejamento"),
+        "listas_substituicao": doc.get("listas_substituicao") or [],
         "origem_plano_id": pmid,
         "criado_em": now,
         "atualizado_em": now,
@@ -5137,11 +5243,16 @@ async def apply_plano_template(pid: str, tid: str, user=Depends(require_nutritio
         "meta_proteina_g": template.get("meta_proteina_g"),
         "meta_carboidrato_g": template.get("meta_carboidrato_g"),
         "meta_lipidio_g": template.get("meta_lipidio_g"),
-        "prescricao_dietetica": template.get("prescricao_dietetica"),
+        # peso/altura/GET do modelo sao do paciente de origem; a tela usa os do paciente atual
+        "prescricao_dietetica": {"estrategia": (template.get("prescricao_dietetica") or {}).get("estrategia")},
         "orientacao_ids": template.get("orientacao_ids") or [],
         "refeicoes": template.get("refeicoes") or [],
         "observacoes": template.get("observacoes"),
+        "recomendacoes": template.get("recomendacoes") or [],
+        "planejamento": template.get("planejamento"),
+        "listas_substituicao": template.get("listas_substituicao") or [],
         "versao": int((latest or {}).get("versao") or 0) + 1,
+        "ordem": await _proxima_ordem_plano(pid),
         "origem_template_id": tid,
         "criado_em": now,
         "atualizado_em": now,
@@ -5162,6 +5273,7 @@ async def create_plano_manual(pid: str, payload: PlanoManualIn, user=Depends(req
         "nutricionista_id": user["id"],
         **payload.model_dump(),
         "versao": int((latest or {}).get("versao") or 0) + 1,
+        "ordem": await _proxima_ordem_plano(pid),
         "criado_em": iso(now_utc()),
         "atualizado_em": iso(now_utc()),
     }
@@ -5205,7 +5317,7 @@ async def list_plano_manual_historico(pid: str, pmid: str, user=Depends(require_
     ).sort("criado_em", -1)]
 
 @api.post("/patients/{pid}/planos-manuais/{pmid}/duplicar", status_code=201)
-async def duplicate_plano_manual(pid: str, pmid: str, user=Depends(require_nutritionist)):
+async def duplicate_plano_manual(pid: str, pmid: str, payload: Optional[dict] = None, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
         raise HTTPException(404, "Paciente nÃƒÂ£o encontrado")
@@ -5213,11 +5325,13 @@ async def duplicate_plano_manual(pid: str, pmid: str, user=Depends(require_nutri
     if not doc:
         raise HTTPException(404, "Plano nÃƒÂ£o encontrado")
     latest = await db.planos_manuais.find_one({"paciente_id": pid}, {"versao": 1}, sort=[("versao", -1)])
+    titulo = str((payload or {}).get("titulo") or "").strip()[:140]
     clone = {
         **doc,
         "id": str(uuid.uuid4()),
-        "titulo": f"{doc.get('titulo', 'Plano')} (cÃƒÂ³pia)",
+        "titulo": titulo or f"{doc.get('titulo', 'Plano')} (cópia)",
         "versao": int((latest or {}).get("versao") or 0) + 1,
+        "ordem": await _proxima_ordem_plano(pid),
         "origem_plano_id": pmid,
         "criado_em": iso(now_utc()),
         "atualizado_em": iso(now_utc()),
@@ -6256,6 +6370,11 @@ async def health():
     return {"status": "ok"}
 
 api.include_router(build_financeiro_router(db, require_nutritionist))
+api.include_router(build_dieta_router(db, require_nutritionist, SimpleNamespace(
+    enrich_plano=_enrich_plano, coerce_float=_coerce_float, macros_100g=_macros_100g,
+    medidas_do_alimento=_medidas_do_alimento, pdf_escape=_pdf_escape, pdf_nl2br=_pdf_nl2br,
+    HTML=HTML, TZ_BR=TZ_BR, iso=iso, now_utc=now_utc,
+)))
 app.include_router(api)
 _frontend_urls = [
     url.strip().rstrip("/")

@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope, Settings, Quote, Database,
-  Ruler, FileText, BookOpenText, PackagePlus, Menu, X, Wallet,
+  Ruler, FileText, BookOpenText, PackagePlus, Menu, X, Wallet, SlidersHorizontal,
 } from "lucide-react";
 import RCLogo from "./RCLogo";
 
@@ -32,6 +32,7 @@ const groups = [
       { to: "/cadastro-medidas", label: "Medidas caseiras", icon: Ruler, testid: "nav-cadastro-medidas" },
       { to: "/rotulos-nutricionais", label: "Rótulos", icon: FileText, testid: "nav-rotulos-nutricionais" },
       { to: "/orientacoes", label: "Orientações", icon: BookOpenText, testid: "nav-orientacoes" },
+      { to: "/configuracoes-dieta", label: "Padrões da dieta", icon: SlidersHorizontal, testid: "nav-configuracoes-dieta" },
     ],
   },
   {

@@ -1,13 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { ArrowLeftRight, Check, Loader2, Search, X } from "lucide-react";
 import { api } from "@/lib/evo-api";
+import { textoMedida } from "./calculos";
 
 const nf = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
-const AUTO_KEY = "rc_dieta_equivalentes_auto";
-
-export const equivalentesAutomaticos = () => {
-  try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch { return true; }
-};
 
 function Diff({ label, value }) {
   if (value === null || value === undefined || Math.abs(value) < 0.5) {
@@ -27,7 +24,6 @@ export default function EquivalentesModal({ item, refeicaoNome, onAddSubstitutos
   const [busca, setBusca] = useState("");
   const [buscaAtiva, setBuscaAtiva] = useState("");
   const [marcados, setMarcados] = useState({});
-  const [auto, setAuto] = useState(equivalentesAutomaticos());
   const jaSubstitutos = useMemo(() => new Set((item.substitutos || []).map((s) => s.alimento_id)), [item.substitutos]);
 
   useEffect(() => {
@@ -53,17 +49,12 @@ export default function EquivalentesModal({ item, refeicaoNome, onAddSubstitutos
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const toggleAuto = () => {
-    const next = !auto;
-    setAuto(next);
-    try { localStorage.setItem(AUTO_KEY, next ? "1" : "0"); } catch { /* armazenamento indisponivel */ }
-  };
-
   const lista = dados?.equivalentes || [];
   const selecionados = lista.filter((e) => marcados[e.alimento_id]);
   const base = dados?.base;
 
-  return (
+  // No <body>: dentro da aba (que anima com transform) o position:fixed ficaria deslocado.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6" role="dialog" aria-modal="true" aria-label="Alimentos equivalentes">
       <button className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} aria-label="Fechar" />
       <div className="relative w-full sm:max-w-3xl max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-rc-ink shadow-[var(--shadow-pop)] animate-fade-up">
@@ -71,7 +62,7 @@ export default function EquivalentesModal({ item, refeicaoNome, onAddSubstitutos
         <div className="px-5 sm:px-7 pt-5 pb-4 border-b border-white/[0.06]">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="rc-eyebrow">Equivalentes · {refeicaoNome}</div>
+              <div className="rc-eyebrow">Lista de substituição · {refeicaoNome}</div>
               <h3 className="font-display font-bold uppercase text-[22px] text-white mt-2 leading-tight truncate" style={{ fontStretch: "82%" }}>
                 {item.alimento_nome || item.nome}
               </h3>
@@ -133,7 +124,7 @@ export default function EquivalentesModal({ item, refeicaoNome, onAddSubstitutos
                     <span className="text-[14px] text-gray-100 truncate">{e.nome}</span>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[12px]">
-                    {e.medida && <span className="text-rc-lime/90">≈ {nf.format(e.medida.quantidade)} {e.medida.nome.toLowerCase()}</span>}
+                    {e.medida && <span className="text-rc-lime/90">≈ {nf.format(e.medida.quantidade)} {textoMedida(e.medida.nome, e.medida.quantidade)}</span>}
                     <span className="text-gray-400 tabular">{nf.format(e.macros.kcal)} kcal</span>
                     <span className="tabular"><Diff label="P" value={e.diferenca.ptn} /></span>
                     <span className="tabular"><Diff label="C" value={e.diferenca.cho} /></span>
@@ -154,10 +145,7 @@ export default function EquivalentesModal({ item, refeicaoNome, onAddSubstitutos
 
         {/* Rodape */}
         <div className="px-5 sm:px-7 py-4 border-t border-white/[0.06] flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3">
-          <label className="inline-flex items-center gap-2 text-[12.5px] text-gray-400 cursor-pointer select-none">
-            <input type="checkbox" checked={auto} onChange={toggleAuto} className="accent-[#C3F53C] w-4 h-4" />
-            Abrir automaticamente ao escolher um alimento
-          </label>
+          <p className="text-[12.5px] text-gray-500">Marque para imprimir como “ou …” abaixo do alimento, ou troque o alimento.</p>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="rc-btn-secondary">Agora não</button>
             <button
@@ -171,6 +159,7 @@ export default function EquivalentesModal({ item, refeicaoNome, onAddSubstitutos
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
