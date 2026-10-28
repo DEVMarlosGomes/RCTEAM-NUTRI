@@ -75,6 +75,7 @@ function BuscaAlimento({ id, item, tabelas, onTexto, onEscolher, onEnterLivre })
   const [aberto, setAberto] = useState(false);
   const [ativo, setAtivo] = useState(0);
   const [carregando, setCarregando] = useState(false);
+  const [situacao, setSituacao] = useState(null); // null | "vazio" | "erro"
   const ref = useRef(null);
   const listaRef = useRef(null);
   const texto = item.nome || "";
@@ -82,16 +83,29 @@ function BuscaAlimento({ id, item, tabelas, onTexto, onEscolher, onEnterLivre })
 
   useEffect(() => {
     const q = texto.trim();
-    if (!aberto || q.length < 2 || q === nomeEscolhido) { setItens([]); return undefined; }
+    if (!aberto || q.length < 2 || q === nomeEscolhido) { setItens([]); setSituacao(null); setCarregando(false); return undefined; }
+    // cada tecla cancela a busca anterior; sem resposta em 20 s mostra erro em vez de girar para sempre
+    const controle = new AbortController();
     const t = setTimeout(async () => {
       setCarregando(true);
+      setSituacao(null);
       try {
-        const { data } = await api.get("/alimentos", { params: { q, limit: 12, ordenar: "relevancia", tabelas } });
-        setItens(data.items || []);
+        const { data } = await api.get("/alimentos", {
+          params: { q, limit: 12, ordenar: "relevancia", tabelas }, signal: controle.signal, timeout: 20000,
+        });
+        const lista = data.items || [];
+        setItens(lista);
         setAtivo(0);
-      } catch { setItens([]); } finally { setCarregando(false); }
-    }, 220);
-    return () => clearTimeout(t);
+        setSituacao(lista.length ? null : "vazio");
+        setCarregando(false);
+      } catch {
+        if (controle.signal.aborted) return;
+        setItens([]);
+        setSituacao("erro");
+        setCarregando(false);
+      }
+    }, 250);
+    return () => { clearTimeout(t); controle.abort(); };
   }, [texto, aberto, nomeEscolhido, tabelas]);
 
   useEffect(() => {
@@ -104,7 +118,7 @@ function BuscaAlimento({ id, item, tabelas, onTexto, onEscolher, onEnterLivre })
   }, []);
 
   const escolher = (food) => { setAberto(false); setItens([]); onEscolher(food); };
-  const visivel = aberto && (carregando || itens.length > 0);
+  const visivel = aberto && (carregando || itens.length > 0 || !!situacao);
 
   return (
     <div ref={ref} className="relative min-w-0">
@@ -134,6 +148,8 @@ function BuscaAlimento({ id, item, tabelas, onTexto, onEscolher, onEnterLivre })
       <Flutuante ancora={ref} aberto={visivel} largura={Math.min(480, window.innerWidth - 16)} listaRef={listaRef}>
         <div role="listbox">
           {carregando && !itens.length && <div className="px-3 py-3 text-[12.5px] text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" />Buscando…</div>}
+          {!carregando && situacao === "vazio" && <div className="px-3 py-3 text-[12.5px] text-gray-400">Nenhum alimento encontrado. Enter mantém “{texto.trim()}” como texto livre (sem cálculo).</div>}
+          {!carregando && situacao === "erro" && <div className="px-3 py-3 text-[12.5px] text-rc-coral">Não foi possível buscar agora. Continue digitando para tentar de novo.</div>}
           {itens.map((f, i) => (
             <button
               key={f.id}

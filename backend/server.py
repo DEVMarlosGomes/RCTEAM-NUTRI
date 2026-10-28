@@ -4248,17 +4248,33 @@ def _regex_sem_acento(q: str) -> str:
     base = "".join(ch for ch in base if unicodedata.category(ch) != "Mn")
     return "".join(f"[{_ACENTOS_BUSCA[ch]}]" if ch in _ACENTOS_BUSCA else re.escape(ch) for ch in base)
 
-def _rank_busca(nome: str, q_norm: str) -> tuple:
-    """Comeca com o termo > termo no inicio de uma palavra > contem; palavra inteira antes de pedaco
-    ("Arroz, branco" antes de "Arrozina"); empate em ordem alfabetica, como no autocomplete do NutriDiet."""
+_PALAVRAS_VAZIAS_BUSCA = {"de", "da", "do", "das", "dos", "e", "a", "o", "com", "em", "ao", "na", "no", "para"}
+
+def _tokens_busca(q: str) -> list[str]:
+    """'banana prata' -> ['banana', 'prata']; 'pão de forma' -> ['pao', 'forma'] (sem acento e sem 'de/com/e')."""
+    tokens = _normalize_food_lookup(q).split()
+    uteis = [t for t in tokens if t not in _PALAVRAS_VAZIAS_BUSCA]
+    return uteis or tokens
+
+def _regex_tokens(tokens: list[str], ancorar_primeiro: bool = False) -> str:
+    """Todas as palavras em qualquer posicao (lookaheads), cada uma aceitando acento: casa 'Banana, prata, crua'."""
+    regex = "^" + "".join(f"(?=.*{_regex_sem_acento(t)})" for t in tokens)
+    return regex + (_regex_sem_acento(tokens[0]) if ancorar_primeiro and tokens else "")
+
+def _rank_busca(nome: str, q_norm: str, tokens: Optional[list] = None) -> tuple:
+    """Comeca com a frase > comeca com a 1a palavra > frase no inicio de uma palavra > o resto; palavra
+    inteira antes de pedaco ("Arroz, branco" antes de "Arrozina"); marcas depois; empate em ordem alfabetica."""
     n = _normalize_food_lookup(nome)
+    primeira = (tokens or q_norm.split() or [""])[0]
     if n.startswith(q_norm):
         nivel = 0
-    elif f" {q_norm}" in f" {n}":
+    elif n.startswith(primeira):
         nivel = 1
-    else:
+    elif f" {q_norm}" in f" {n}":
         nivel = 2
-    inteira = re.search(rf"(^|\s){re.escape(q_norm)}(\s|$)", n) is not None
+    else:
+        nivel = 3
+    inteira = re.search(rf"(^|\s){re.escape(primeira)}(\s|$)", n) is not None
     marca = "®" in nome or "™" in nome  # produtos de marca depois dos alimentos genericos
     return (nivel, not inteira, marca, n)
 
@@ -4276,8 +4292,9 @@ async def search_alimentos(
 ):
     filt: dict = {}
     relevancia = ordenar == "relevancia" and q.strip()
+    tokens = _tokens_busca(q) if relevancia else []
     if relevancia:
-        filt["nome"] = {"$regex": _regex_sem_acento(q), "$options": "i"}
+        filt["nome"] = {"$regex": _regex_tokens(tokens), "$options": "i"}
     elif q:
         filt["nome"] = {"$regex": q, "$options": "i"}
     if grupo:
@@ -4307,21 +4324,27 @@ async def search_alimentos(
             filt.pop("nutricionista_id", None)
             filt["$or"] = ors
     skip = (page - 1) * limit
-    total = await db.alimentos.count_documents(filt)
     if relevancia:
-        # Editor da dieta: primeiro o que comeca com o termo, depois inicio de palavra, depois o resto
+        # Editor da dieta: primeiro o que comeca com o termo, depois inicio de palavra, depois o resto.
+        # Ordena so com id+nome (leve) e busca o documento completo apenas dos escolhidos: no Render
+        # gratuito, trazer ~1.800 documentos com 36 nutrientes a cada tecla deixava a busca "presa".
         q_norm = _normalize_food_lookup(q)
-        filt_prefixo = {**filt, "nome": {"$regex": "^" + _regex_sem_acento(q), "$options": "i"}}
-        prefixo = await db.alimentos.find(filt_prefixo, {"_id": 0}).sort("nome", 1).limit(300).to_list(300)
-        geral = await db.alimentos.find(filt, {"_id": 0}).sort("nome", 1).limit(1500).to_list(1500)
+        leve = {"_id": 0, "id": 1, "nome": 1}
+        filt_prefixo = {**filt, "nome": {"$regex": _regex_tokens(tokens, ancorar_primeiro=True), "$options": "i"}}
+        prefixo = await db.alimentos.find(filt_prefixo, leve).sort("nome", 1).limit(300).to_list(300)
+        geral = await db.alimentos.find(filt, leve).sort("nome", 1).limit(800).to_list(800)
         vistos, candidatos = set(), []
         for a in prefixo + geral:
             if a.get("id") not in vistos:
                 vistos.add(a.get("id"))
                 candidatos.append(a)
-        candidatos.sort(key=lambda a: _rank_busca(a.get("nome", ""), q_norm))
-        docs = candidatos[:limit]
+        candidatos.sort(key=lambda a: _rank_busca(a.get("nome", ""), q_norm, tokens))
+        escolhidos = [a["id"] for a in candidatos[:limit]]
+        completos = {d["id"]: d async for d in db.alimentos.find({"id": {"$in": escolhidos}}, {"_id": 0})}
+        docs = [completos[i] for i in escolhidos if i in completos]
+        total = len(candidatos)
     else:
+        total = await db.alimentos.count_documents(filt)
         docs = await db.alimentos.find(filt, {"_id": 0}).skip(skip).limit(limit).sort("nome", 1).to_list(limit)
     items = []
     for a in docs:
