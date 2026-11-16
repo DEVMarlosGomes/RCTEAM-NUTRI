@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Check, CheckCircle2, FileText, Loader2, Upload, 
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 import Brand from "@/components/evonut/Brand";
-import ProtocoloFotos from "@/components/evonut/ProtocoloFotos";
+import ProtocoloFotos, { POSES, REGRAS } from "@/components/evonut/ProtocoloFotos";
 import { carregarEstrutura, idadeAnos, perguntasVisiveis, vazio } from "@/lib/anamnese";
 
 /**
@@ -420,8 +420,69 @@ function BoasVindas({ onComecar }) {
           </div>
         </div>
       </section>
+
+      {/* Segundo passo: protocolo de fotos (como no protótipo do Rogério) */}
+      <section className="max-w-5xl mx-auto px-5 sm:px-8 py-14 space-y-8" data-testid="boas-vindas-protocolo">
+        <div className="text-center space-y-4 max-w-2xl mx-auto">
+          <SeloPasso>Segundo passo</SeloPasso>
+          <h2 className="rc-h2">Protocolo de fotos</h2>
+          <p className="text-gray-300 leading-relaxed">
+            Seguir as diretrizes do nosso Protocolo de Fotos é crucial. Nosso objetivo é oferecer suporte, não fazer julgamentos.
+            Diariamente, analisamos fotos de avaliação física de todos os tipos de corpos. Nesta fase, nosso único propósito é entender
+            como podemos ajudá-lo(a) melhor e acompanhar sua jornada de transformação.
+          </p>
+        </div>
+        <div className="grid sm:grid-cols-3 gap-4">
+          {REGRAS.map((r) => (
+            <div key={r.t} className="rc-card p-5 border-t-2 border-rc-blue">
+              <h3 className="text-[13px] uppercase tracking-[0.14em] text-rc-blue font-semibold">{r.t}</h3>
+              <ul className="mt-3 space-y-2 text-[14px] text-gray-300 leading-relaxed">{r.itens.map((i) => <li key={i}>{i}</li>)}</ul>
+            </div>
+          ))}
+        </div>
+        <p className="text-center text-[14px] text-gray-400">Essas orientações são padrão para todos os relatórios enviados, garantindo uma avaliação consistente e precisa.</p>
+      </section>
+
+      {/* Terceiro passo: padrão de fotos (provas de vida) */}
+      <section className="border-t border-white/[0.06] bg-white/[0.015]" data-testid="boas-vindas-padrao">
+        <div className="max-w-5xl mx-auto px-5 sm:px-8 py-14 space-y-8">
+          <div className="text-center space-y-4">
+            <SeloPasso>Terceiro passo</SeloPasso>
+            <h2 className="rc-h2">Padrão de fotos</h2>
+          </div>
+          {[["homem", "Homens"], ["mulher", "Mulheres"]].map(([g, rotulo]) => (
+            <div key={g}>
+              <h3 className="text-[13px] uppercase tracking-[0.14em] text-rc-blue font-semibold mb-3">{rotulo}</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {POSES.map(([k, l]) => (
+                  <figure key={k} className="rounded-xl overflow-hidden bg-rc-surfaceAlt ring-1 ring-white/[0.06]">
+                    <img src={`/protocolo-fotos/${g}-${k}.jpg`} alt={`${rotulo === "Homens" ? "Homem" : "Mulher"}: ${l.toLowerCase()}`} loading="lazy" className="w-full aspect-[3/4] object-cover" />
+                    <figcaption className="px-3 py-2 text-[12.5px] text-gray-400">{l}</figcaption>
+                  </figure>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="max-w-3xl space-y-3 pt-2">
+            <h3 className="text-[17px] font-semibold text-rc-blue">Atualizações e feedbacks</h3>
+            <p className="text-gray-300 leading-relaxed">Após nosso primeiro encontro, é crucial que você nos mantenha atualizados semanalmente com seu peso e com as fotos padrão. A pesagem deve ser realizada em jejum, logo após acordar.</p>
+            <p className="text-gray-300 leading-relaxed">Essas atualizações, juntamente com seus feedbacks, são essenciais para que possamos acompanhar de perto seu progresso e ajustar seu plano conforme necessário.</p>
+            <p className="text-gray-300 leading-relaxed">Nossa consultoria online funciona em conjunto, com base nas suas experiências e necessidades. Por isso, sua participação ativa é fundamental. Não hesite em nos informar sobre quaisquer problemas ou dúvidas que surgirem durante o processo.</p>
+            <p className="text-white font-medium">Juntos, estaremos sempre alinhados e evoluindo em direção aos seus objetivos.</p>
+          </div>
+          <div className="text-center pt-4">
+            <button type="button" onClick={onComecar} className="rc-btn-primary h-14 px-8 text-[15px]">
+              Preencher pré-consulta <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   );
+}
+
+function SeloPasso({ children }) {
+  return <span className="inline-block rounded-full bg-rc-blue/15 text-rc-blue px-3 py-1 text-[12px] font-semibold uppercase tracking-[0.14em]">{children}</span>;
 }
 
 async function fotoReduzida(file, maxSize = 1280, quality = 0.78) {

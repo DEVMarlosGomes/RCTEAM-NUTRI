@@ -1,14 +1,14 @@
 import React, { useState } from "react";
 
 // Protocolo e padrão de fotos do Rogério (mesmo texto da página de boas-vindas).
-const POSES = [
+export const POSES = [
   ["frente", "Frente"],
   ["costas", "Costas"],
   ["perfil-direito", "Perfil direito"],
   ["perfil-esquerdo", "Perfil esquerdo"],
 ];
 
-const REGRAS = [
+export const REGRAS = [
   {
     t: "Roupa",
     itens: [
