@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import SeletorAvaliacoes, { numerarAvaliacoes, useAvaliacoesExibidas, useCapacidade } from "./SeletorAvaliacoes";
 import { Activity, Calculator, Flame, PieChart, RotateCcw, Save, Scale, Settings2, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 
 const EMPTY_EVALUATIONS = [];
-const MAX_COLUMNS = 10;
 
 const SECTIONS = [
   ["dados", "Dados iniciais", Activity],
@@ -95,12 +95,6 @@ const formatDate = (value) => {
 
 const evaluationDate = (evaluation) => evaluation?.data_avaliacao || evaluation?.created_at?.slice(0, 10);
 
-const fixedColumns = (evaluations) => {
-  const rows = [...evaluations];
-  while (rows.length < MAX_COLUMNS) rows.push(null);
-  return rows.slice(-MAX_COLUMNS);
-};
-
 const pocketLoss = (peso) => {
   const value = toNumber(peso);
   return value == null ? null : Math.floor(value * 20);
@@ -178,19 +172,20 @@ function Metric({ label, value, unit, tag }) {
   );
 }
 
-function SheetTable({ title, description, evaluations, rows }) {
-  const active = fixedColumns(evaluations);
+function SheetTable({ title, description, evaluations, rows, seletor }) {
+  const active = evaluations.length ? evaluations : [null];
 
   return (
     <SectionCard title={title} description={description}>
+      {seletor && <div className="-mt-3 mb-2">{seletor}</div>}
       <div className="overflow-x-auto rounded-lg border border-white/[0.08]">
-        <table className="min-w-[1320px] w-full border-collapse text-xs">
+        <table className="w-full border-collapse text-xs" style={{ minWidth: 240 + active.length * 108 }}>
           <thead>
             <tr className="bg-white/[0.05] text-[11px] uppercase text-gray-400">
               <th className="w-[240px] px-3 py-3 text-left font-bold">Campo</th>
               {active.map((evaluation, index) => (
                 <th key={evaluation?.id || index} className="w-[108px] border-l border-white/[0.08] px-2 py-3 text-center font-bold">
-                  <div className="text-rc-blue">{index + 1}ª Avaliação</div>
+                  <div className="text-rc-blue">{evaluation ? `${evaluation._numero}ª Avaliação` : "Sem avaliações"}</div>
                   <div className="mt-0.5 normal-case text-gray-500">{formatDate(evaluationDate(evaluation))}</div>
                 </th>
               ))}
@@ -383,16 +378,19 @@ function PrevisaoMacros({ calc, setCalcValue, macros, kcalFinal, kcalMacros, pes
   );
 }
 
-export default function GastoEnergetico({ d, reload }) {
+export default function GastoEnergetico({ d, reload, secaoInicial = "dados" }) {
   const patient = d.patient;
   const evaluations = d.evaluations || EMPTY_EVALUATIONS;
-  const orderedEvaluations = useMemo(() => [...evaluations]
-    .sort((a, b) => String(evaluationDate(a) || a.created_at || "").localeCompare(String(evaluationDate(b) || b.created_at || ""))),
-  [evaluations]);
+  // ordem cronológica, com o número real de cada avaliação (sem limite de avaliações)
+  const orderedEvaluations = useMemo(() => numerarAvaliacoes(evaluations), [evaluations]);
+  const larguraRef = useRef(null);
+  const capacidade = useCapacidade(larguraRef, { rotulo: 280, coluna: 108 });
+  const exibidas = useAvaliacoesExibidas(orderedEvaluations, capacidade);
+  const seletor = <SeletorAvaliacoes estado={exibidas} />;
   const lastEval = orderedEvaluations[orderedEvaluations.length - 1];
   const lastComp = lastEval?.composicao || {};
 
-  const [section, setSection] = useState("dados");
+  const [section, setSection] = useState(secaoInicial);
   const [form, setForm] = useState({
     data_avaliacao: evaluationDate(lastEval) || today(),
     protocolo: lastComp.tmb_protocolo || "fao_who_1985",
@@ -550,7 +548,7 @@ export default function GastoEnergetico({ d, reload }) {
   };
 
   return (
-    <div className="space-y-4" data-testid="energy-workspace">
+    <div className="space-y-4" data-testid="energy-workspace" ref={larguraRef}>
       <div className="evo-card p-2 overflow-x-auto">
         <div className="flex min-w-max gap-1.5">
           {SECTIONS.map(([key, label, Icon]) => (
@@ -581,8 +579,9 @@ export default function GastoEnergetico({ d, reload }) {
           </SectionCard>
           <SheetTable
             title="Histórico - dados iniciais"
-            description="Até 10 avaliações, no mesmo formato sequencial da planilha."
-            evaluations={orderedEvaluations}
+            description="Avaliações no mesmo formato sequencial da planilha, sem limite: escolha quais exibir."
+            evaluations={exibidas.visiveis}
+            seletor={seletor}
             rows={INITIAL_ROWS}
           />
         </div>
@@ -670,7 +669,8 @@ export default function GastoEnergetico({ d, reload }) {
           <SheetTable
             title="Histórico - seleção de protocolos"
             description="Protocolos usados nas avaliações já cadastradas."
-            evaluations={orderedEvaluations}
+            evaluations={exibidas.visiveis}
+            seletor={seletor}
             rows={PROTOCOL_ROWS}
           />
         </div>
@@ -682,7 +682,8 @@ export default function GastoEnergetico({ d, reload }) {
             <SheetTable
               title="Gasto Energético"
               description="TMB, adicional de atividade física, fator de injúria e GET."
-              evaluations={orderedEvaluations}
+              evaluations={exibidas.visiveis}
+              seletor={seletor}
               rows={ENERGY_ROWS}
             />
           </div>
@@ -720,7 +721,8 @@ export default function GastoEnergetico({ d, reload }) {
             <SheetTable
               title="Meta calórica"
               description="Fórmulas de bolso e VENTA em colunas de avaliação."
-              evaluations={orderedEvaluations}
+              evaluations={exibidas.visiveis}
+              seletor={seletor}
               rows={META_ROWS}
             />
           </div>

@@ -57,6 +57,7 @@ export default function CadastroAlimentos() {
   const [total, setTotal] = useState(0);
   const [modal, setModal] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [ordem, setOrdem] = useState("alfabetica");
 
   useEffect(() => {
     let active = true;
@@ -65,8 +66,10 @@ export default function CadastroAlimentos() {
       setLoading(true);
       setError("");
       try {
-        const params = new URLSearchParams({ limit: "120" });
+        // a base (TABELA ENXUTA) tem 262 alimentos: cabe inteira numa página, junto dos personalizados
+        const params = new URLSearchParams({ limit: "300" });
         if (query.trim().length >= 2) params.set("q", query.trim());
+        if (ordem === "planilha") params.set("ordenar", "planilha");
         const { data } = await api.get(`/alimentos?${params.toString()}`, { signal: controller.signal });
         if (!active) return;
         setFoods(data.items || []);
@@ -85,7 +88,7 @@ export default function CadastroAlimentos() {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [query, refreshKey]);
+  }, [query, refreshKey, ordem]);
 
   const remove = async (food) => {
     if (!window.confirm(`Excluir o alimento customizado “${food.nome}”?`)) return;
@@ -107,7 +110,7 @@ export default function CadastroAlimentos() {
               <div className="rc-eyebrow">Base interna</div>
               <h1 className="rc-h2 mt-2">Cadastro de alimentos</h1>
               <p className="text-sm text-gray-300 mt-3">
-                Base alimentar real do sistema, combinando banco padrao e alimentos customizados do nutricionista.
+                Base do sistema: TABELA ENXUTA (262 alimentos escolhidos pelo Rogério), mais os alimentos que você cadastrar.
               </p>
             </div>
             <div className="flex gap-2"><div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-alimentos"><Download className="w-4 h-4" />Fonte: API</div><button onClick={() => setModal("new")} className="rc-btn-primary"><Plus className="w-4 h-4" /> Novo alimento</button></div>
@@ -148,7 +151,16 @@ export default function CadastroAlimentos() {
               <h2 className="rc-h3">Tabela de composicao</h2>
               <p className="text-xs text-gray-400 mt-1">Acesso restrito ao nutricionista.</p>
             </div>
-            <div className="text-xs text-gray-500">{filteredFoods.length} resultados carregados</div>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-xs text-gray-400">
+                Ordem
+                <select value={ordem} onChange={(e) => setOrdem(e.target.value)} className="rc-input h-8 py-0 text-xs w-auto" data-testid="ordem-cadastro-alimentos">
+                  <option value="alfabetica">Alfabética</option>
+                  <option value="planilha">Da planilha</option>
+                </select>
+              </label>
+              <div className="text-xs text-gray-500">{filteredFoods.length} resultados carregados</div>
+            </div>
           </div>
 
           {loading && <div className="px-6 py-10 text-sm text-gray-400">Carregando cadastro...</div>}

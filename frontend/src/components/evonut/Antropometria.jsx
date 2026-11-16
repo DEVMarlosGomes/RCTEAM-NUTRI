@@ -8,6 +8,9 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
+import { CORES, COR_NOME_PROTOCOLO, LEGENDA, corDobra } from "./dobrasCores";
+import { PROTOCOLOS_DOBRAS, avisoIdade, dobrasDoProtocolo, perimetrosDoProtocolo } from "./protocolosDobras";
+import SeletorAvaliacoes, { numerarAvaliacoes, useAvaliacoesExibidas } from "./SeletorAvaliacoes";
 
 const MAX_RESULT_COLUMNS = 4;
 const EMPTY_EVALUATIONS = [];
@@ -71,20 +74,6 @@ const BIOIMPEDANCIA = [
   ["gordura_visceral", "Nível de Gordura Visceral", ""],
   ["idade_metabolica", "Idade Metabólica", "anos"],
 ];
-
-const PROTOCOLOS = [
-  ["pollock7", "Jackson, Pollock e Ward 7D (1980)"],
-  ["pollock3", "Jackson e Pollock 3D (1978/1980)"],
-  ["faulkner", "Faulkner 4D (1968)"],
-];
-
-// Dobras que entram na fórmula de cada protocolo (ficam em vermelho na grade).
-const dobrasExigidas = (protocolo, sexo) => {
-  if (protocolo === "pollock7") return ["subescapular", "tricipital", "peitoral", "axilar", "suprailiaca", "abdominal", "coxa"];
-  if (protocolo === "pollock3") return sexo === "M" ? ["peitoral", "abdominal", "coxa"] : ["tricipital", "suprailiaca", "coxa"];
-  if (protocolo === "faulkner") return ["tricipital", "subescapular", "suprailiaca", "abdominal"];
-  return [];
-};
 
 const numberFmt = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
 
@@ -234,7 +223,7 @@ function SectionCard({ title, description, children, className = "" }) {
   );
 }
 
-function SheetTable({ title, description, evaluations, rows }) {
+function SheetTable({ title, description, evaluations, rows, seletor }) {
   const active = withFixedColumns(evaluations);
   const lastFilled = [...evaluations].reverse()[0] || null;
 
@@ -250,6 +239,7 @@ function SheetTable({ title, description, evaluations, rows }) {
 
   return (
     <SectionCard title={title} description={description}>
+      {seletor && <div className="-mt-3 mb-2">{seletor}</div>}
       <div className="overflow-x-auto rounded-lg border border-white/[0.08]">
         <table className="min-w-[980px] w-full border-collapse text-xs">
           <thead>
@@ -257,7 +247,7 @@ function SheetTable({ title, description, evaluations, rows }) {
               <th className="w-[220px] px-3 py-3 text-left font-bold">Indicador</th>
               {active.map((evaluation, index) => (
                 <th key={evaluation?.id || index} className="w-[130px] border-l border-white/[0.08] px-3 py-3 text-center font-bold">
-                  <div className="text-rc-blue">{index + 1}ª Avaliação</div>
+                  <div className="text-rc-blue">{evaluation ? `${evaluation._numero}ª Avaliação` : "—"}</div>
                   <div className="mt-0.5 normal-case text-gray-500">{formatDate(evaluationDate(evaluation))}</div>
                 </th>
               ))}
@@ -352,15 +342,18 @@ const fmtMedida = (value) => {
   return n === null ? "" : n.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 };
 
-function GridCell({ editable, value, onChange, destaque, apagada, label }) {
+// `cor`: hex da cor de resultado (só no número); `apagada`: dobra fora do protocolo.
+function GridCell({ editable, value, onChange, cor, apagada, label }) {
+  const style = cor ? { color: cor } : undefined;
   if (!editable) {
-    return <span className={`block text-center tabular ${destaque ? "text-rc-coral/80" : apagada ? "text-gray-600" : "text-gray-300"}`}>{fmtMedida(value)}</span>;
+    return <span style={style} className={`block text-center tabular ${cor ? "font-semibold" : apagada ? "text-gray-600" : "text-gray-300"}`}>{fmtMedida(value)}</span>;
   }
   return (
     <input
       aria-label={label}
       inputMode="decimal"
-      className={`w-full h-8 rounded-md bg-rc-surfaceAlt text-center tabular outline-none shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)] focus:shadow-[inset_0_0_0_1px_#0081FD,0_0_0_3px_rgba(0,129,253,0.22)] ${destaque ? "text-rc-coral font-semibold shadow-[inset_0_0_0_1px_rgba(255,107,87,0.45)]" : apagada ? "text-gray-400 opacity-40 focus:opacity-100" : "text-gray-50"}`}
+      style={style}
+      className={`w-full h-8 rounded-md bg-rc-surfaceAlt text-center tabular outline-none shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)] focus:shadow-[inset_0_0_0_1px_#0081FD,0_0_0_3px_rgba(0,129,253,0.22)] ${cor ? "font-semibold" : apagada ? "text-gray-400 opacity-40 focus:opacity-100" : "text-gray-50"}`}
       value={typeof value === "number" ? String(value).replace(".", ",") : value ?? ""}
       onChange={(event) => onChange(event.target.value)}
     />
@@ -384,15 +377,20 @@ function ColumnHeader({ col, onPick }) {
   );
 }
 
-function PerimetriaAdipometria({ form, setForm, columns, onPick }) {
+function PerimetriaAdipometria({ form, setForm, columns, onPick, atleta, exibidas }) {
   const [inicio, setInicio] = useState(null);
   const maxInicio = Math.max(0, columns.length - MAX_RESULT_COLUMNS);
   const editIndex = columns.findIndex((col) => col.editable);
   const autoInicio = Math.min(Math.max(0, editIndex - (MAX_RESULT_COLUMNS - 1)), maxInicio);
   const start = Math.min(Math.max(0, inicio ?? autoInicio), maxInicio);
-  const visible = columns.slice(start, start + MAX_RESULT_COLUMNS);
+  // "Avaliações exibidas": com escolha manual, mostra as escolhidas + a coluna em edição (sempre visível)
+  const visible = exibidas?.manual
+    ? columns.filter((c) => c.editable || exibidas.ids.includes(c.key)).slice(-MAX_RESULT_COLUMNS)
+    : columns.slice(start, start + MAX_RESULT_COLUMNS);
   while (visible.length < MAX_RESULT_COLUMNS) visible.push(null);
-  const exigidas = dobrasExigidas(form.protocolo_dobras, form.sexo);
+  const exigidas = dobrasDoProtocolo(form.protocolo_dobras, form.sexo);
+  const perimetrosProtocolo = perimetrosDoProtocolo(form.protocolo_dobras, form.sexo);
+  const aviso = avisoIdade(form.protocolo_dobras, form.sexo, form.idade);
 
   const setValor = (grupo, key, value) => setForm((current) => ({
     ...current,
@@ -400,8 +398,39 @@ function PerimetriaAdipometria({ form, setForm, columns, onPick }) {
   }));
   const valor = (col, grupo, key) => (col?.editable ? form[grupo]?.[key] : col?.data?.[grupo]?.[key]);
   const somaLinha = (key) => visible.reduce((acc, col) => acc + (toNumber(valor(col, "dobras", key)) ?? 0), 0);
-  const somaColuna = (col) => DOBRAS.reduce((acc, [key]) => acc + (toNumber(valor(col, "dobras", key)) ?? 0), 0);
+  // Total da avaliação: só as dobras do protocolo.
+  const somaColuna = (col) => exigidas.reduce((acc, key) => acc + (toNumber(valor(col, "dobras", key)) ?? 0), 0);
+  const completa = (col) => Boolean(col) && exigidas.length > 0 && exigidas.every((key) => toNumber(valor(col, "dobras", key)) != null);
   const totalGeral = visible.reduce((acc, col) => acc + (col ? somaColuna(col) : 0), 0);
+  // Avaliação anterior na ordem cronológica completa (não só nas colunas visíveis).
+  const anteriorDe = (col) => {
+    const i = columns.findIndex((c) => c.key === col.key);
+    return i > 0 ? columns[i - 1] : null;
+  };
+  const sexo = form.sexo === "M" || form.sexo === "F" ? form.sexo : null;
+  const hex = (nome) => (nome ? CORES[nome] : undefined);
+  const corCelula = (col, key) => {
+    const ant = anteriorDe(col);
+    return hex(corDobra({
+      atleta, sexo, chave: key,
+      valor: toNumber(valor(col, "dobras", key)),
+      anterior: ant ? toNumber(valor(ant, "dobras", key)) : null,
+    }));
+  };
+  const corTotal = (col) => {
+    if (!completa(col)) return undefined;
+    if (atleta) {
+      // As faixas de total valem só para o protocolo de 7 dobras.
+      if (form.protocolo_dobras !== "pollock7") return undefined;
+      return hex(corDobra({ atleta, sexo, chave: "total", valor: somaColuna(col) }));
+    }
+    const ant = anteriorDe(col);
+    if (!ant) return CORES.cinza;
+    if (!completa(ant)) return undefined;
+    return hex(corDobra({ atleta, sexo, chave: "total", valor: somaColuna(col), anterior: somaColuna(ant) }));
+  };
+  const nomeProtocolo = PROTOCOLOS_DOBRAS.find((p) => p.id === form.protocolo_dobras)?.nome || "";
+  const legenda = atleta ? LEGENDA.atleta : LEGENDA.naoAtleta;
   const limpar = () => {
     if (!window.confirm("Limpar perímetros e dobras da avaliação em edição?")) return;
     setForm((current) => ({ ...current, perimetria: {}, dobras: {}, diametros_osseos: {} }));
@@ -425,14 +454,16 @@ function PerimetriaAdipometria({ form, setForm, columns, onPick }) {
           <label className="block w-[270px] max-w-full">
             <span className="evo-label">Protocolo de dobras</span>
             <select data-testid="anth-protocolo" className="evo-input h-10" value={form.protocolo_dobras} onChange={(e) => setForm((c) => ({ ...c, protocolo_dobras: e.target.value }))}>
-              {PROTOCOLOS.map(([key, text]) => <option key={key} value={key}>{text}</option>)}
+              {PROTOCOLOS_DOBRAS.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
             </select>
           </label>
           <button type="button" onClick={limpar} className="evo-btn-ghost h-10"><Eraser className="h-4 w-4" />Limpar</button>
         </div>
       </div>
 
-      {columns.length > MAX_RESULT_COLUMNS && (
+      {aviso && <p role="status" className="mb-3 rounded-lg bg-rc-amber/10 px-3 py-2 text-[12px] text-rc-amber" data-testid="aviso-protocolo">{aviso}</p>}
+      {exibidas && <div className="mb-1">{<SeletorAvaliacoes estado={exibidas} />}</div>}
+      {!exibidas?.manual && columns.length > MAX_RESULT_COLUMNS && (
         <div className="mb-2 flex items-center justify-end gap-1 text-[11px] text-gray-500">
           <button type="button" aria-label="Avaliações anteriores" disabled={start === 0} onClick={() => setInicio(start - 1)} className="evo-btn-ghost p-1.5 disabled:opacity-30">
             <ChevronLeft className="h-4 w-4" />
@@ -456,7 +487,8 @@ function PerimetriaAdipometria({ form, setForm, columns, onPick }) {
             <tbody>
               {PERIMETRIA.map(([key, label]) => (
                 <tr key={key} className="border-b border-white/[0.04]">
-                  <th className="px-2 py-1 text-left font-medium text-gray-300">{label}</th>
+                  <th style={perimetrosProtocolo.includes(key) ? { color: COR_NOME_PROTOCOLO } : undefined}
+                    className={`px-2 py-1 text-left ${perimetrosProtocolo.includes(key) ? "font-bold" : "font-medium text-gray-300"}`}>{label}</th>
                   {visible.map((col, i) => (
                     <td key={col?.key || `vazio-${i}`} className={`px-1.5 py-1 ${editavel(col)}`}>
                       {col && <GridCell editable={col.editable} value={valor(col, "perimetria", key)} onChange={(v) => setValor("perimetria", key, v)} label={`${label} - ${col.numero}ª avaliação`} />}
@@ -470,6 +502,10 @@ function PerimetriaAdipometria({ form, setForm, columns, onPick }) {
 
         <div className="space-y-5">
           <div className="overflow-x-auto">
+            <p className="px-2 pb-2 text-[11.5px] text-gray-500">
+              <span className="font-semibold text-gray-200">{sexo === "M" ? "Homem" : sexo === "F" ? "Mulher" : "Sexo não informado"}</span>
+              {" · "}{atleta ? "Atleta" : "Não atleta"}{" · "}{exigidas.length ? `${exigidas.length} dobras` : "protocolo por perímetros"} ({nomeProtocolo})
+            </p>
             <table className="w-full min-w-[540px] border-collapse text-xs">
               <thead>
                 <tr className="border-b border-white/[0.08]">
@@ -480,35 +516,41 @@ function PerimetriaAdipometria({ form, setForm, columns, onPick }) {
               </thead>
               <tbody>
                 {DOBRAS.map(([key, label]) => {
-                  const destaque = exigidas.includes(key);
-                  const apagada = exigidas.length > 0 && !destaque;
+                  const noProtocolo = exigidas.includes(key);
                   return (
-                    <tr key={key} className={`border-b border-white/[0.04] transition-colors ${destaque ? "bg-rc-coral/[0.06]" : ""}`}>
-                      <th className={`px-2 py-1 text-left ${destaque ? "font-semibold text-rc-coral" : apagada ? "font-medium text-gray-600" : "font-medium text-gray-300"}`}>{label}</th>
+                    <tr key={key} className="border-b border-white/[0.04]">
+                      <th style={noProtocolo ? { color: COR_NOME_PROTOCOLO } : undefined} className={`px-2 py-1 text-left ${noProtocolo ? "font-bold" : "font-medium text-gray-600"}`}>{label}</th>
                       {visible.map((col, i) => (
                         <td key={col?.key || `vazio-${i}`} className={`px-1.5 py-1 ${editavel(col)}`}>
-                          {col && <GridCell editable={col.editable} destaque={destaque} apagada={apagada} value={valor(col, "dobras", key)} onChange={(v) => setValor("dobras", key, v)} label={`Dobra ${label} - ${col.numero}ª avaliação`} />}
+                          {col && <GridCell editable={col.editable} cor={noProtocolo ? corCelula(col, key) : undefined} apagada={!noProtocolo} value={valor(col, "dobras", key)} onChange={(v) => setValor("dobras", key, v)} label={`Dobra ${label} - ${col.numero}ª avaliação`} />}
                         </td>
                       ))}
-                      <td className={`px-1.5 py-1 text-center tabular ${apagada ? "text-gray-600" : "text-gray-400"}`}>{fmtMedida(somaLinha(key))}</td>
+                      <td className={`px-1.5 py-1 text-center tabular ${noProtocolo ? "text-gray-500" : "text-gray-600"}`}>{fmtMedida(somaLinha(key))}</td>
                     </tr>
                   );
                 })}
                 <tr className="border-t border-white/[0.1]">
                   <th className="px-2 py-2 text-left font-bold text-gray-200">Total</th>
-                  {visible.map((col, i) => (
-                    <td key={col?.key || `vazio-${i}`} className={`px-1.5 py-2 text-center tabular font-semibold text-white ${editavel(col)}`}>
-                      {col ? fmtMedida(somaColuna(col)) : ""}
-                    </td>
-                  ))}
-                  <td className="px-1.5 py-2 text-center tabular font-semibold text-rc-lime">{fmtMedida(totalGeral)}</td>
+                  {visible.map((col, i) => {
+                    const cor = col ? corTotal(col) : undefined;
+                    return (
+                      <td key={col?.key || `vazio-${i}`} style={cor ? { color: cor } : undefined} className={`px-1.5 py-2 text-center tabular font-semibold ${cor ? "" : "text-gray-200"} ${editavel(col)}`}>
+                        {col ? fmtMedida(somaColuna(col)) : ""}
+                      </td>
+                    );
+                  })}
+                  <td className="px-1.5 py-2 text-center tabular font-semibold text-gray-500">{fmtMedida(totalGeral)}</td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <p className="rc-well px-3 py-2 text-center text-[11.5px] text-gray-400">
-            Ao escolher o protocolo, só as dobras usadas no cálculo ficam <span className="font-semibold text-rc-coral">acesas</span>; as demais ficam apagadas.
-          </p>
+          <div className="rc-well px-3 py-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11.5px] text-gray-400" data-testid="legenda-dobras">
+            <span><span className="font-bold" style={{ color: COR_NOME_PROTOCOLO }}>Nome azul</span> entra no protocolo</span>
+            {legenda.map(([cor, texto]) => (
+              <span key={cor}><span className="font-semibold" style={{ color: CORES[cor] }}>{cor[0].toUpperCase() + cor.slice(1)}</span> {texto}</span>
+            ))}
+            {atleta && !sexo && <span className="text-rc-amber">Informe o sexo do paciente para colorir pelas faixas de atleta.</span>}
+          </div>
         </div>
       </div>
     </section>
@@ -522,10 +564,10 @@ export default function Antropometria({ d, reload }) {
   const [form, setForm] = useState(() => emptyForm(d.patient));
   const evaluations = d.evaluations || EMPTY_EVALUATIONS;
 
-  const orderedEvaluations = useMemo(() => [...evaluations]
-    .sort((a, b) => String(evaluationDate(a) || a.created_at || "").localeCompare(String(evaluationDate(b) || b.created_at || ""))),
-  [evaluations]);
-  const resultEvaluations = orderedEvaluations.slice(-MAX_RESULT_COLUMNS);
+  // sem limite de avaliações: ordem cronológica com o número real, e o seletor "Avaliações exibidas"
+  const orderedEvaluations = useMemo(() => numerarAvaliacoes(evaluations), [evaluations]);
+  const exibidas = useAvaliacoesExibidas(orderedEvaluations, MAX_RESULT_COLUMNS);
+  const resultEvaluations = exibidas.visiveis;
   const gridColumns = useMemo(() => {
     const cols = orderedEvaluations.map((evaluation, index) => ({
       key: evaluation.id, numero: index + 1, data: evaluation, editable: evaluation.id === editingId,
@@ -658,6 +700,8 @@ export default function Antropometria({ d, reload }) {
 
       {section === "medidas" && (
         <PerimetriaAdipometria
+          exibidas={exibidas}
+          atleta={Boolean(d.patient?.atleta)}
           form={form}
           setForm={setForm}
           columns={gridColumns}
@@ -680,8 +724,9 @@ export default function Antropometria({ d, reload }) {
           </SectionCard>
           <SheetTable
             title="Resultado - bioimpedância"
-            description="Histórico separado em até quatro avaliações, com evolução e situação."
+            description="Quatro avaliações lado a lado (escolha quais em Avaliações exibidas), com evolução e situação."
             evaluations={resultEvaluations}
+            seletor={<SeletorAvaliacoes estado={exibidas} />}
             rows={BIO_ROWS}
           />
         </div>
@@ -694,6 +739,7 @@ export default function Antropometria({ d, reload }) {
               title="Resultado - adultos e idosos"
               description="Campos iguais ao resultado adulto da planilha."
               evaluations={resultEvaluations}
+              seletor={<SeletorAvaliacoes estado={exibidas} />}
               rows={ADULT_ROWS}
             />
           </div>
@@ -722,6 +768,7 @@ export default function Antropometria({ d, reload }) {
           title="Resultado - crianças e adolescentes"
           description="Campos iguais ao resultado infantil da planilha."
           evaluations={resultEvaluations}
+          seletor={<SeletorAvaliacoes estado={exibidas} />}
           rows={CHILD_ROWS}
         />
       )}
@@ -744,6 +791,7 @@ export default function Antropometria({ d, reload }) {
             title="Resultado gestacional"
             description="Peso pré-gestacional, IMC pré-gestacional e evolução do ganho de peso."
             evaluations={resultEvaluations}
+            seletor={<SeletorAvaliacoes estado={exibidas} />}
             rows={GESTATIONAL_ROWS}
           />
         </div>

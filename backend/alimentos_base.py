@@ -1,13 +1,12 @@
 """Base de alimentos: normalização de nomes e medidas caseiras + sincronização com o banco.
 
-A base EVONUT (evonut_database.json) veio de planilhas e catálogos em PDF: tem palavras grudadas
-("integralFit", "frangocongelada"), acentos faltando ("oleo"), espaços sobrando e, no seed antigo
-do server.py, acentuação corrompida ("contrafilÃ©"). Aqui ficam as regras que limpam isso e a
-rotina que, no boot do servidor, grava a base normalizada no banco (uma vez por versão).
+A única base de alimentos do sistema é a TABELA ENXUTA do Rogério (tabela_enxuta_alimentos.json, 262
+alimentos, mesmos ids da base EVONUT antiga). No boot do servidor ela é gravada no banco (uma vez por
+versão) e o restante da base antiga é ARQUIVADO: some da busca, mas segue resolvido por id para não
+quebrar dietas antigas.
 
-As medidas caseiras de cada alimento são gravadas no próprio documento (`medidas_caseiras`), a partir
-da planilha EVONUT e da Tabela de Medidas Referidas do IBGE (POF 2008-2009, medidas_ibge.json).
-Assim elas não dependem do nome, que muda com a normalização (o nome antigo fica em `nome_original`).
+As medidas caseiras vêm da própria tabela (aba "Cadastro de Medidas"); só quando um alimento não tem
+nenhuma, entra a Tabela de Medidas Referidas do IBGE (medidas_ibge.json), marcada como estimada.
 """
 import json
 import logging
@@ -19,7 +18,7 @@ from typing import Callable, Optional
 
 from pymongo import UpdateOne
 
-BASE_VERSAO = "2026-10-28.2"
+BASE_VERSAO = "2026-11-15.1"
 RAIZ = Path(__file__).parent
 log = logging.getLogger("alimentos_base")
 
@@ -208,117 +207,7 @@ _MUDAM_FORMA = {"farinha", "sopa", "clara", "gema", "suco", "polpa", "po", "molh
                 "vitamina", "iogurte", "sorvete", "pudim", "bolo", "torta", "biscoito", "pao", "barra"}
 _RUIDO_NOME = {"natura", "in", "media", "diferentes", "amostras", "varias", "tipo", "l", "s", "c",
                "industrializado", "industrializada", "marcas", "sabores", "qualquer", "marca"}
-# grupos em que a mesma medida serve para quase todos os alimentos (colher de óleo, copo de suco...)
-_GRUPOS_UNIFORMES = {"Óleos e Gorduras", "Sucos Naturais e Integrais", "Oleaginosas e Sementes", "Fibras A", "Fibras B",
-                     "Feijão e Leguminosas"}
-# medidas de "item inteiro" variam de alimento para alimento: nunca são estimadas por semelhança
-_MEDIDAS_DO_ITEM = {"unidade", "unidade pequena", "metade", "banda", "posta", "espiga", "cacho", "asa", "coxa",
-                    "sobrecoxa", "peito", "pescoço", "costela", "bife", "filé"}
-_PRIORIDADE = {"TACO": 0, "IBGE": 1, "Tucunduva": 2, "TBCA": 3}
-_VAZIAS_CHAVE = {"de", "da", "do", "das", "dos", "e", "com", "em", "a", "o", "ao", "c", "s"}
 
-
-def _porcao_do_rotulo(a: dict) -> Optional[list]:
-    """Produtos de marca: '15Uni/32G' -> unidade de 32 g; 'Lata, 480G, 15Doses' -> dose de 32 g;
-    'Meus Alimentos' guardam a porção do rótulo em quantidade_referencia_g."""
-    nome = a.get("nome") or ""
-    m = re.search(r"(\d+)\s*Uni\s*/\s*(\d+(?:[.,]\d+)?)\s*G\b", nome, re.I)
-    if m:
-        return [{"nome": "Unidade", "gramas": float(m.group(2).replace(",", "."))}]
-    m = re.search(r"(\d+(?:[.,]\d+)?)\s*G\s*,\s*(\d+)\s*Doses", nome, re.I)
-    if m:
-        return [{"nome": "Dose", "gramas": round(float(m.group(1).replace(",", ".")) / int(m.group(2)), 1)}]
-    ref = a.get("quantidade_referencia_g")
-    if ref and float(ref) != 100.0:
-        return [{"nome": "Porção", "gramas": float(ref)}]
-    return None
-
-
-def completar_medidas(alimentos: list, medidas: dict) -> dict:
-    """Para alimentos ainda sem medida caseira, em ordem de confiança:
-    1. o mesmo alimento em outra tabela (mesmas palavras, ou uma a mais que não muda a forma);
-    2. a porção do rótulo (produtos de marca);
-    3. a medida típica de alimentos do mesmo tipo (duas primeiras palavras) - marcada como estimada;
-    4. a medida típica do grupo, só em grupos uniformes - estimada.
-    Devolve {id: (medidas, origem)}."""
-    voc_comum = set()
-    for a in alimentos:
-        if a.get("fonte") in ("TACO", "IBGE", "Tucunduva"):
-            voc_comum |= tokens_casamento(a.get("nome"))
-
-    def nucleo(a):
-        t = tokens_casamento(a.get("nome"))
-        if a.get("fonte") == "TBCA":  # descarta o nome científico ("Mangifera indica L.")
-            t = {x for x in t if x in voc_comum}
-        return frozenset(t - _RUIDO_NOME)
-
-    def chave_tipo(a):
-        palavras = [w for w in re.findall(r"[a-z]+", _sem_acento(normalizar_nome(a.get("nome"))).lower()) if w not in _VAZIAS_CHAVE]
-        return " ".join(palavras[:2])
-
-    com = [a for a in alimentos if medidas.get(str(a["id"]))]
-    por_nucleo: dict = {}
-    for a in com:
-        por_nucleo.setdefault(nucleo(a), []).append(a)
-    melhor = lambda lista: sorted(lista, key=lambda x: _PRIORIDADE.get(x.get("fonte"), 9))[0]
-
-    def tipicas(grupos: dict, minimo: int, cv_max: float) -> dict:
-        import statistics
-        saida = {}
-        for k, lista in grupos.items():
-            if len(lista) < minimo:
-                continue
-            gramas: dict = {}
-            for a in lista:
-                for m in medidas[str(a["id"])]:
-                    gramas.setdefault(m["nome"], []).append(m["gramas"])
-            sel = []
-            for nome, gs in gramas.items():
-                if nome.lower() in _MEDIDAS_DO_ITEM:
-                    continue
-                if len(gs) >= max(4, 0.5 * len(lista)):
-                    med = statistics.median(gs)
-                    if med and statistics.pstdev(gs) / med <= cv_max:
-                        sel.append((len(gs), {"nome": nome, "gramas": round(med, 1), "estimada": True}))
-            if sel:
-                saida[k] = [m for _, m in sorted(sel, key=lambda x: -x[0])[:3]]
-        return saida
-
-    por_tipo: dict = {}
-    por_grupo: dict = {}
-    for a in com:
-        por_tipo.setdefault(chave_tipo(a), []).append(a)
-        if a.get("grupo") in _GRUPOS_UNIFORMES:
-            por_grupo.setdefault(a["grupo"], []).append(a)
-    tipicas_tipo = tipicas(por_tipo, 5, 0.3)
-    tipicas_grupo = tipicas(por_grupo, 10, 0.35)
-
-    resultado = {}
-    for a in alimentos:
-        aid = str(a["id"])
-        if medidas.get(aid):
-            continue
-        k = nucleo(a)
-        forma = bool(k & _MUDAM_FORMA)
-        if k and k in por_nucleo:
-            resultado[aid] = ([dict(m) for m in medidas[str(melhor(por_nucleo[k])["id"])]], "outra_tabela")
-            continue
-        if len(k) >= 3:
-            cands = [b for x in k if x not in _MUDAM_FORMA for b in por_nucleo.get(k - {x}, []) if len(k - {x}) >= 2]
-            if cands:
-                resultado[aid] = ([dict(m) for m in medidas[str(melhor(cands)["id"])]], "outra_tabela")
-                continue
-        rotulo = _porcao_do_rotulo(a)
-        if rotulo:
-            resultado[aid] = (rotulo, "rotulo")
-            continue
-        if forma:
-            continue  # pó, suco, farinha... só com dado específico
-        if chave_tipo(a) in tipicas_tipo:
-            resultado[aid] = ([dict(m) for m in tipicas_tipo[chave_tipo(a)]], "semelhantes")
-        elif a.get("grupo") in tipicas_grupo:
-            resultado[aid] = ([dict(m) for m in tipicas_grupo[a["grupo"]]], "grupo")
-    return resultado
 
 def _carregar_ibge() -> dict:
     caminho = RAIZ / "medidas_ibge.json"
@@ -347,58 +236,107 @@ def montar_medidas(alimento_id: str, nome_original: str, medidas_planilha: Calla
 
 # ── Sincronização no boot ───────────────────────────────────────────────────
 
-def _vocabulario(nomes: list) -> set:
-    contagem: dict = {}
-    for n in nomes:
-        for w in re.findall(r"[a-zà-ÿ]+", str(n).lower()):
-            contagem[w] = contagem.get(w, 0) + 1
-    return {w for w, c in contagem.items() if c >= 5 and len(w) >= 3}
+TABELA_ENXUTA = RAIZ / "tabela_enxuta_alimentos.json"
+# documentos que guardam alimentos escolhidos (dietas, modelos, recordatórios...): usados no relatório de impacto
+_COLECOES_COM_ALIMENTOS = ("planos_manuais", "plano_templates", "recordatorios", "modelos_refeicao",
+                           "listas_substituicao", "meal_plans")
+# só a base do sistema é arquivada; o que o nutricionista cadastrou nunca é tocado
+_FILTRO_BASE = {"nutricionista_id": {"$exists": False}, "fonte": {"$ne": "CUSTOM"}}
 
 
-async def sincronizar_base(db, medidas_planilha: Callable[[str], list]) -> Optional[dict]:
-    """Grava a base EVONUT normalizada (upsert por id) e corrige nomes antigos. Roda uma vez por BASE_VERSAO."""
+def carregar_tabela_enxuta() -> list:
+    """A única base de alimentos do sistema: TABELA ENXUTA do Rogério (262 alimentos)."""
+    return json.loads(TABELA_ENXUTA.read_text(encoding="utf-8"))["alimentos"]
+
+
+def medidas_da_tabela(a: dict, ibge: dict) -> tuple:
+    """Medidas da aba 'Cadastro de Medidas' da planilha. Sem nenhuma lá, usa a do IBGE marcada como estimada."""
+    saida, vistos = [], set()
+    for m in a.get("medidas_caseiras") or []:
+        nome = normalizar_medida(m.get("nome"))
+        try:
+            g = round(float(m.get("gramas")), 2)
+        except (TypeError, ValueError):
+            continue
+        if nome and g > 0 and nome.lower() not in vistos:
+            vistos.add(nome.lower())
+            saida.append({"nome": nome, "gramas": g})
+    if saida:
+        return saida, "tabela_enxuta"
+    estimadas = [{**m, "estimada": True} for m in montar_medidas(str(a["id"]), "", lambda _n: [], ibge)]
+    return estimadas, ("ibge_estimada" if estimadas else None)
+
+
+def _ids_citados(valor, achados: set) -> None:
+    if isinstance(valor, dict):
+        for k, v in valor.items():
+            if k == "alimento_id" and v is not None:
+                achados.add(str(v))
+            else:
+                _ids_citados(v, achados)
+    elif isinstance(valor, list):
+        for v in valor:
+            _ids_citados(v, achados)
+
+
+async def relatorio_impacto(db, arquivar: set) -> dict:
+    """Quantas dietas, modelos e recordatórios usam alimentos que vão ser arquivados (e quais os mais usados)."""
+    por_colecao, frequencia = {}, {}
+    for col in _COLECOES_COM_ALIMENTOS:
+        docs = 0
+        async for d in db[col].find({}, {"_id": 0}):
+            ids = set()
+            _ids_citados(d, ids)
+            usados = ids & arquivar
+            if usados:
+                docs += 1
+                for i in usados:
+                    frequencia[i] = frequencia.get(i, 0) + 1
+        por_colecao[col] = docs
+    top = sorted(frequencia.items(), key=lambda kv: -kv[1])[:20]
+    nomes = {d["id"]: d.get("nome") async for d in db.alimentos.find({"id": {"$in": [i for i, _ in top]}}, {"_id": 0, "id": 1, "nome": 1})}
+    return {"documentos_afetados": por_colecao,
+            "mais_usados": [{"id": i, "nome": nomes.get(i), "documentos": n} for i, n in top]}
+
+
+async def sincronizar_base(db) -> Optional[dict]:
+    """Grava a TABELA ENXUTA (upsert por id) e arquiva o resto da base antiga. Roda uma vez por BASE_VERSAO.
+
+    Arquivar não apaga: o alimento some da busca, mas continua sendo encontrado por id, para dietas antigas
+    abrirem e calcularem igual. Para desfazer: db.alimentos.update_many({"arquivado": True}, {"$unset": {"arquivado": ""}}).
+    """
     marcador = await db.meta_sistema.find_one({"_id": "base_alimentos"})
     if marcador and marcador.get("versao") == BASE_VERSAO:
         return None
-    dados = json.loads((RAIZ / "evonut_database.json").read_text(encoding="utf-8"))
-    alimentos = dados.get("alimentos", [])
+    alimentos = carregar_tabela_enxuta()
+    ids_novos = {str(a["id"]) for a in alimentos}
     ibge = _carregar_ibge()
-    vocab = _vocabulario([a.get("nome") for a in alimentos])
-    diretas = {str(a["id"]): montar_medidas(str(a["id"]), a.get("nome") or "", medidas_planilha, ibge) for a in alimentos}
-    completadas = completar_medidas(alimentos, diretas)
-    ops, com_medida, origens = [], 0, {}
+    agora = datetime.now(timezone.utc).isoformat()
+
+    # relatório de impacto ANTES de arquivar
+    arquivar = {d["id"] async for d in db.alimentos.find({**_FILTRO_BASE, "id": {"$nin": list(ids_novos)}}, {"_id": 0, "id": 1})}
+    impacto = await relatorio_impacto(db, arquivar)
+    log.info("Impacto do arquivamento (%d alimentos): %s", len(arquivar), impacto)
+
+    ops, origens = [], {}
     for a in alimentos:
         aid = str(a["id"])
         original = a.get("nome") or ""
-        medidas, origem = (diretas[aid], "tabela") if diretas[aid] else completadas.get(aid, ([], None))
-        com_medida += bool(medidas)
-        if origem:
-            origens[origem] = origens.get(origem, 0) + 1
-        doc = {**a, "id": aid, "nome": normalizar_nome(original, vocab), "nome_original": original,
-               "medidas_caseiras": medidas, "medidas_origem": origem}
-        ops.append(UpdateOne({"id": aid}, {"$set": doc}, upsert=True))
-    for i in range(0, len(ops), 500):
-        await db.alimentos.bulk_write(ops[i:i + 500], ordered=False)
+        medidas, origem = medidas_da_tabela(a, ibge)
+        origens[origem or "sem_medida"] = origens.get(origem or "sem_medida", 0) + 1
+        doc = {k: v for k, v in a.items() if k != "medidas_caseiras"}
+        doc.update(id=aid, nome=normalizar_nome(original), nome_original=original,
+                   medidas_caseiras=medidas, medidas_origem=origem, base="tabela_enxuta")
+        ops.append(UpdateOne({"id": aid}, {"$set": doc, "$unset": {"arquivado": "", "arquivado_em": "", "arquivado_motivo": ""}},
+                             upsert=True))
+    await db.alimentos.bulk_write(ops, ordered=False)
 
-    # Alimentos antigos da base (seed TACO do server.py, "Meus Alimentos"): corrige nomes e medidas.
-    ids_evonut = {str(a["id"]) for a in alimentos}
-    corrigidos = 0
-    async for d in db.alimentos.find({"nutricionista_id": {"$exists": False}}, {"_id": 0, "id": 1, "nome": 1,
-                                                                                 "categoria": 1, "medida_caseira": 1}):
-        if d.get("id") in ids_evonut:
-            continue
-        upd = {}
-        for campo in ("nome", "categoria", "medida_caseira"):
-            if d.get(campo):
-                novo = normalizar_nome(d[campo], vocab) if campo == "nome" else corrigir_mojibake(d[campo])
-                if novo != d[campo]:
-                    upd[campo] = novo
-        if upd:
-            if "nome" in upd:
-                upd["nome_original"] = d["nome"]
-            await db.alimentos.update_one({"id": d["id"]}, {"$set": upd})
-            corrigidos += 1
-    resumo = {"alimentos": len(alimentos), "com_medida": com_medida, "origem_medidas": origens, "antigos_corrigidos": corrigidos}
+    res = await db.alimentos.update_many(
+        {**_FILTRO_BASE, "id": {"$nin": list(ids_novos)}, "arquivado": {"$ne": True}},
+        {"$set": {"arquivado": True, "arquivado_em": agora, "arquivado_motivo": "fora da TABELA ENXUTA"}},
+    )
+    resumo = {"base": "TABELA ENXUTA", "alimentos": len(alimentos), "origem_medidas": origens,
+              "arquivados": res.modified_count, "impacto_arquivamento": impacto}
     await db.meta_sistema.update_one(
         {"_id": "base_alimentos"},
         {"$set": {"versao": BASE_VERSAO, "resumo": resumo, "atualizado_em": datetime.now(timezone.utc).isoformat()}},

@@ -49,10 +49,10 @@ def ler_ibge(xls: str) -> tuple[dict, dict]:
 
 def main(xls: str):
     com_preparo, so_alimento = ler_ibge(xls)
-    alimentos = json.loads((BACKEND / "evonut_database.json").read_text(encoding="utf-8"))["alimentos"]
+    alimentos = json.loads((BACKEND / "tabela_enxuta_alimentos.json").read_text(encoding="utf-8"))["alimentos"]
     por_alimento, exatos, sem_preparo = {}, 0, 0
     for a in alimentos:
-        if a.get("fonte") in ("Danone", "Essential") or "®" in (a.get("nome") or ""):
+        if "®" in (a.get("nome") or ""):
             continue  # produtos de marca têm porção própria no rótulo
         t = tokens_casamento(a.get("nome"))
         if t in com_preparo:

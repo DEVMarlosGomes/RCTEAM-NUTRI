@@ -48,7 +48,9 @@ def seed(uri: str, db_name: str):
 
     # ── alimentos (upsert por id) ──────────────────────────────
     BATCH = 500
-    alimentos = data.get('alimentos', [])
+    # a base de alimentos é só a TABELA ENXUTA (evonut_database.json não traz mais a lista de alimentos)
+    with open('tabela_enxuta_alimentos.json', 'r', encoding='utf-8') as f:
+        alimentos = json.load(f)['alimentos']
     if alimentos:
         # Garante que o id é sempre string para consistência com custom alimentos
         for a in alimentos:

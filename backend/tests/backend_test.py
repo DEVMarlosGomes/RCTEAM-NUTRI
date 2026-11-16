@@ -93,12 +93,21 @@ class TestPublicFlow:
         assert r.status_code == 404
 
     def test_submit_anamnesis_updates_status(self, created_lead):
+        # formulário pré-consulta (5 blocos): perguntas obrigatórias + algumas opcionais
         respostas = {
-            "peso": 78.5, "altura": 170, "sexo": "F",
-            "data_nascimento": "1992-05-10", "objetivo": "emagrecimento",
-            "rotina": "Trabalho em escritório", "sono": "6h",
-            "medicamentos": "Nenhum", "alergias": "Nenhuma",
+            "email": "test_joana@example.com", "nome": "TEST_Paciente Joana", "data_nascimento": "1992-05-10",
+            "sexo": "Feminino", "estatura": "170", "peso_atual": "78,5", "objetivo": "emagrecimento",
+            "condicionamento": "Ativo 1 (treina com certa frequência)", "local_treino": "Academia completa",
+            "desempenho_treino": "Excelente", "gestante_lactante": "Não", "exames_recentes": "Não",
+            "alcool": "Não consumo", "libido": "Prefiro não responder", "tipo_trabalho": "Sentado",
+            "estrutura_alimentacao": "Sim", "disposicao": "7", "sono": ["Tenho despertares noturnos"],
+            "agua": "Entre 1 L e 2 L (entre 5 e 10 copos de 200 ml)", "alergias": "Nenhuma",
+            "intestino": "Bem, com evacuações regulares todos os dias", "plano_anterior": "Não",
         }
+        faltando = {k: v for k, v in respostas.items() if k != "agua"}
+        r = requests.post(f"{BASE_URL}/api/public/anamnesis",
+                          json={"token": created_lead["token"], "respostas": faltando}, timeout=15)
+        assert r.status_code == 400 and "30" in r.text  # pergunta 30 (água) é obrigatória
         r = requests.post(f"{BASE_URL}/api/public/anamnesis",
                           json={"token": created_lead["token"], "respostas": respostas}, timeout=15)
         assert r.status_code == 200

@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bot, ChevronLeft, ChevronRight, Copy, FileDown, FilePlus2, FolderInput, Loader2, Save, Settings2, Star, Trash2 } from "lucide-react";
+import { Bot, ChevronLeft, ChevronRight, Copy, FileDown, FilePlus2, FolderInput, Loader2, Save, LibraryBig, Settings2, Star, Trash2, Utensils } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 import EditorDieta, { LARGURA_MIN_EDITOR } from "./dieta/EditorDieta";
 import PainelTotais from "./dieta/PainelTotais";
 import OutrasOpcoes from "./dieta/OutrasOpcoes";
 import ImportarDieta from "./dieta/ImportarDieta";
+import AlimentacaoPaciente, { usePainelAlimentacao } from "./dieta/AlimentacaoPaciente";
+import ModelosDietaModal, { SalvarModeloDialogo } from "./dieta/ModelosDietaModal";
 import ObservacoesDieta from "./dieta/ObservacoesDieta";
 import DonatoPanel from "./dieta/DonatoPanel";
 import Combobox from "./dieta/Combobox";
@@ -23,10 +25,10 @@ const avisarErro = (error) => {
 const maisRecente = (lista) => [...lista].sort((a, b) => String(b.atualizado_em || "").localeCompare(String(a.atualizado_em || "")))[0];
 const substituir = (lista, plano) => (lista.some((p) => p.id === plano.id) ? lista.map((p) => (p.id === plano.id ? plano : p)) : [...lista, plano]);
 
-function AcaoTopo({ titulo, rotulo, onClick, children, disabled }) {
+function AcaoTopo({ titulo, rotulo, onClick, children, disabled, ativo }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} title={titulo} aria-label={titulo}
-      className="flex flex-col items-center gap-1 rounded-xl px-2.5 py-1.5 text-gray-400 hover:text-white hover:bg-white/[0.05] transition-colors disabled:opacity-30">
+    <button type="button" onClick={onClick} disabled={disabled} title={titulo} aria-label={titulo} aria-pressed={ativo}
+      className={`flex flex-col items-center gap-1 rounded-xl px-2.5 py-1.5 hover:text-white hover:bg-white/[0.05] transition-colors disabled:opacity-30 ${ativo ? "text-rc-lime" : "text-gray-400"}`}>
       {children}
       <span className="text-[10.5px] leading-none">{rotulo}</span>
     </button>
@@ -50,7 +52,7 @@ async function abrirPdf(janela, url, nomeArquivo) {
  * Prescricao dietetica no formato do NutriDiet: varias dietas por paciente em abas, refeicoes com
  * opcoes "OU", copiar/colar, modelos, lista de substituicao, estatistica, "Outras opcoes" e PDF.
  */
-export default function PrescricaoDietetica({ d }) {
+export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
   const pid = d.patient.id;
   const { config, recarregar } = useDietaConfig();
   const [planos, setPlanos] = useState(null);
@@ -65,6 +67,8 @@ export default function PrescricaoDietetica({ d }) {
   const [outras, setOutras] = useState(null);
   const [importar, setImportar] = useState(false);
   const [donato, setDonato] = useState(false);
+  const [alimentacao, setAlimentacao] = usePainelAlimentacao();
+  const [modelosDieta, setModelosDieta] = useState(false);
 
   const dRef = useRef(d);
   dRef.current = d;
@@ -164,11 +168,11 @@ export default function PrescricaoDietetica({ d }) {
     toast.success(`Dieta duplicada: ${titulo}.`);
   };
 
-  const salvarModeloDieta = async (nome) => {
+  const salvarModeloDieta = async (nome, categoria) => {
     const atual = await garantirSalvo();
-    await api.post(`/patients/${pid}/planos-manuais/${atual.id}/template`, { nome });
+    await api.post(`/patients/${pid}/planos-manuais/${atual.id}/template`, { nome, categoria });
     setPrompt(null);
-    toast.success(`Modelo de dieta "${nome}" salvo. Importe em qualquer paciente pelo ícone Importar.`);
+    toast.success(`Modelo "${nome}" salvo${categoria ? ` em ${categoria}` : ""}. Use em qualquer paciente pelo botão Modelos.`);
   };
 
   const salvarModeloRefeicao = async (nome, bloco) => {
@@ -278,10 +282,12 @@ export default function PrescricaoDietetica({ d }) {
               <Combobox id="dieta-titulo" value={draft.titulo} onChange={(v) => set("titulo", v)} opcoes={config.titulos} placeholder="Título da dieta" inputClassName="rc-input h-10 font-medium" onEnter={() => document.getElementById("r0-nome")?.focus()} />
             </label>
             <div className="flex items-center gap-0.5">
+              <AcaoTopo titulo="Modelos de dieta por categoria (um clique aplica)" rotulo="Modelos" onClick={() => setModelosDieta(true)}><LibraryBig className="w-5 h-5" /></AcaoTopo>
               <AcaoTopo titulo="Importar dieta (modelos, recordatório, outros pacientes)" rotulo="Importar" onClick={() => setImportar(true)}><FolderInput className="w-5 h-5" /></AcaoTopo>
               <AcaoTopo titulo="Nova dieta em branco" rotulo="Nova" onClick={novaDieta}><FilePlus2 className="w-5 h-5" /></AcaoTopo>
               <AcaoTopo titulo="Duplicar dieta" rotulo="Duplicar" onClick={() => setPrompt({ tipo: "duplicar" })}><Copy className="w-5 h-5" /></AcaoTopo>
-              <AcaoTopo titulo="Salvar dieta como modelo" rotulo="Modelo" onClick={() => setPrompt({ tipo: "modeloDieta" })}><Star className="w-5 h-5" /></AcaoTopo>
+              <AcaoTopo titulo="Salvar dieta como modelo" rotulo="Salvar modelo" onClick={() => setPrompt({ tipo: "modeloDieta" })}><Star className="w-5 h-5" /></AcaoTopo>
+              <AcaoTopo titulo="Alimentação do paciente (respostas da anamnese)" rotulo="Alimentação" onClick={() => setAlimentacao(!alimentacao)} ativo={alimentacao}><Utensils className="w-5 h-5" /></AcaoTopo>
             </div>
           </div>
 
@@ -314,6 +320,11 @@ export default function PrescricaoDietetica({ d }) {
       </div>
 
       {importar && <ImportarDieta d={d} onImportado={aposImportar} onClose={() => setImportar(false)} />}
+      {modelosDieta && (
+        <ModelosDietaModal pid={pid} draft={draft} categorias={config.categorias_modelos || []}
+          onAplicado={(id) => { setModelosDieta(false); aposImportar(id); }} onClose={() => setModelosDieta(false)} />
+      )}
+      {alimentacao && <AlimentacaoPaciente pacienteId={pid} onClose={() => setAlimentacao(false)} onEditar={() => onAbrirAnamnese?.()} />}
       {estatistica && <EstatisticaRefeicaoModal pid={pid} bloco={estatistica.bloco} titulo={estatistica.titulo} peso={peso} onClose={() => setEstatistica(null)} />}
       {outras && (
         <OutrasOpcoes
@@ -333,7 +344,7 @@ export default function PrescricaoDietetica({ d }) {
         <PromptDialogo titulo="Duplicar dieta" rotulo="Título da dieta duplicada" opcoes={config.titulos} confirmar="Duplicar" onConfirmar={(t) => duplicar(t).catch(avisarErro)} onClose={() => setPrompt(null)} />
       )}
       {prompt?.tipo === "modeloDieta" && (
-        <PromptDialogo titulo="Salvar como modelo" rotulo="Título do modelo de dieta" valorInicial={draft.titulo} onConfirmar={(t) => salvarModeloDieta(t).catch(avisarErro)} onClose={() => setPrompt(null)} />
+        <SalvarModeloDialogo valorInicial={draft.titulo} categorias={config.categorias_modelos || []} onConfirmar={(t, c) => salvarModeloDieta(t, c).catch(avisarErro)} onClose={() => setPrompt(null)} />
       )}
       {prompt?.tipo === "modeloRefeicao" && (
         <PromptDialogo titulo="Modelo de refeição" rotulo="Título do modelo de refeição" valorInicial={prompt.sugestao ? prompt.sugestao.charAt(0) + prompt.sugestao.slice(1).toLowerCase() : ""}

@@ -71,12 +71,12 @@ def _food_row(food: dict[str, Any]) -> dict[str, Any] | None:
 async def build_food_catalog(db) -> list[dict[str, Any]]:
     """Cardapio fechado: toda a TACO (generica, nomes padronizados) + essenciais esportivos de outras fontes."""
     catalog: dict[str, dict[str, Any]] = {}
-    async for food in db.alimentos.find({"fonte": "TACO"}, {"_id": 0}):
+    async for food in db.alimentos.find({"fonte": "TACO", "arquivado": {"$ne": True}}, {"_id": 0}):
         row = _food_row(food)
         if row:
             catalog[row["id"]] = row
     for pattern in _EXTRA_FOOD_PATTERNS:
-        candidates = await db.alimentos.find({"nome": {"$regex": pattern, "$options": "i"}}, {"_id": 0}).to_list(40)
+        candidates = await db.alimentos.find({"arquivado": {"$ne": True}, "nome": {"$regex": pattern, "$options": "i"}}, {"_id": 0}).to_list(40)
         rows = [r for r in (_food_row(c) for c in candidates) if r]
         rows.sort(key=lambda r: len(r["nome"] or ""))  # nome mais curto tende a ser o item generico
         for row in rows[:2]:

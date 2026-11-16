@@ -6,7 +6,7 @@ import StatusBadge from "@/components/evonut/StatusBadge";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing, Zap, ClipboardList, Plus, ChevronDown, ChevronRight, Save, X, Scale, Edit2, Search, Loader2 } from "lucide-react";
+import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing, Zap, ClipboardList, Plus, ChevronDown, ChevronRight, Save, X, Scale, Edit2, Search, Loader2, PieChart } from "lucide-react";
 import { toast } from "sonner";
 import NudgeManager from "@/components/evonut/NudgeManager";
 import Antropometria from "@/components/evonut/Antropometria";
@@ -14,16 +14,17 @@ import GastoEnergetico from "@/components/evonut/GastoEnergetico";
 import PrescricaoDietetica from "@/components/evonut/PrescricaoDietetica";
 import AnalisesDieteticas from "@/components/evonut/AnalisesDieteticas";
 import MarkdownView from "@/components/evonut/MarkdownView";
+import AnamneseBlocos from "@/components/evonut/AnamneseBlocos";
 
+// Ordem das abas definida pelo Rogério (print de referência).
 const TABS = [
-  { k: "exames", l: "Exames", icon: FlaskConical },
   { k: "anamnese", l: "Anamnese", icon: FileText },
-  { k: "ia", l: "Análise IA", icon: Brain },
+  { k: "exames", l: "Exames", icon: FlaskConical },
+  { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
   { k: "antropometria", l: "Antropometria", icon: Activity },
   { k: "gasto", l: "Gasto Energético", icon: Zap },
-  { k: "adequacao", l: "Análises", icon: Sparkles },
+  { k: "macros", l: "Previsão de Macros", icon: PieChart },
   { k: "plano", l: "Prescrição Dietética", icon: Utensils },
-  { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
   { k: "lembretes", l: "Lembretes", icon: BellRing },
   { k: "comparativo", l: "Comparativo", icon: Sparkles },
 ];
@@ -31,7 +32,7 @@ const TABS = [
 export default function PacienteDetalhe() {
   const { id } = useParams();
   const [d, setD] = useState(null);
-  const [tab, setTab] = useState("exames");
+  const [tab, setTab] = useState("anamnese");
   const reload = () => api.get(`/patients/${id}`).then((r) => setD(r.data));
   useEffect(() => {
     api.get(`/patients/${id}`).then((r) => setD(r.data));
@@ -117,9 +118,10 @@ export default function PacienteDetalhe() {
       {tab === "ia" && <IATab d={d} reload={reload} />}
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
       {tab === "gasto" && <GastoEnergetico d={d} reload={reload} />}
+      {tab === "macros" && <GastoEnergetico d={d} reload={reload} secaoInicial="macros" />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
       {tab === "adequacao" && <AnalisesDieteticas d={d} />}
-      {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} />}
+      {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} onAbrirAnamnese={() => { setTab("anamnese"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
       {tab === "recordatorio" && <Recordatorio d={d} reload={reload} />}
       {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
       {tab === "comparativo" && <Comparativo id={d.patient.id} />}
@@ -160,51 +162,6 @@ function PdfBtn({ pid, tipo, label }) {
   );
 }
 
-const ANAMNESE_SECOES = [
-  { key: "dados_sociais", label: "Dados Sociais", campos: [
-    ["estado_civil","Estado civil"],["ocupacao","Ocupação"],["escolaridade","Escolaridade"],
-    ["naturalidade","Naturalidade"],["email","E-mail"],["telefone","Telefone"],
-    ["celular","Celular"],["endereco","Endereço"],["bairro","Bairro"],
-    ["cidade_uf","Cidade/UF"],["cep","CEP"],["redes_sociais","Redes sociais"],
-  ]},
-  { key: "habitos_vida", label: "Hábitos de Vida", campos: [
-    ["restricao_alimentar","Restrição alimentar"],["alcool","Álcool"],
-    ["tabagismo","Tabagismo"],["refeicoes_fora","Refeições fora"],
-    ["pessoas_casa","Pessoas em casa"],["compras_casa","Compras da casa"],
-    ["sal_oleo_mes","Sal/óleo/mês"],["habitos_sono","Hábitos de sono"],
-  ]},
-  { key: "patologias", label: "Patologias e Histórico", campos: [
-    ["sintomas_gerais","Sintomas gerais"],["outros_sintomas","Outros sintomas"],
-    ["lesoes","Lesões"],["cirurgias","Cirurgias"],["patologias","Patologias"],
-    ["medicamentos","Medicamentos"],["historico_familiar","Histórico familiar"],
-  ]},
-  { key: "avaliacao_clinica", label: "Avaliação Clínica", campos: [
-    ["apetite","Apetite"],["mastigacao","Mastigação"],["habito_intestinal","Hábito intestinal"],
-    ["cor_fezes","Cor das fezes"],["formato_fezes","Escala de Bristol (1-7)"],
-    ["habito_urinario","Hábito urinário"],["ingestao_hidrica","Ingestão hídrica"],
-    ["hidratacao_urinaria","Hidratação urinária"],
-  ]},
-  { key: "alimentacao", label: "Alimentação", campos: [
-    ["intolerancia_alimentar","Intolerância alimentar"],["preferencia_alimentar","Preferências"],
-    ["aversao_alimentar","Aversões"],["alergia_alimentar","Alergias"],
-    ["alteracoes_apetite","Alterações de apetite"],["inicio_obesidade","Início da obesidade"],
-    ["dieta_especial","Dieta especial"],["num_refeicoes_dia","Refeições/dia"],["suplementos","Suplementos"],
-  ]},
-  { key: "atividade_fisica", label: "Atividade Física", campos: [
-    ["atividades_praticadas","Atividades praticadas"],["intensidade_atividades","Intensidade"],
-    ["horario_atividades","Horário"],["duracao_atividades","Duração"],
-    ["frequencia_semana","Frequência/semana"],["sintomas_durante","Sintomas durante"],
-    ["sintomas_apos","Sintomas após"],["hidratacao_atividade","Hidratação"],
-    ["alimentacao_pre","Alimentação pré"],["alimentacao_durante","Alimentação durante"],
-    ["alimentacao_pos","Alimentação pós"],
-  ]},
-  { key: "mulheres", label: "Dados Femininos", campos: [
-    ["ultima_menstruacao","Última menstruação"],["tpm","TPM"],
-    ["ciclo_menstrual","Ciclo menstrual"],["contraceptivo","Contraceptivo"],
-    ["colicas","Cólicas"],["lactante","Lactante"],["menopausa","Menopausa"],
-  ]},
-];
-
 function idadeAnosMeses(dataNascimento) {
   if (!dataNascimento) return null;
   const nasc = new Date(`${String(dataNascimento).slice(0, 10)}T12:00:00`);
@@ -225,6 +182,9 @@ const dadosPessoaisDe = (p) => ({
   telefone: p.telefone || "",
   sexo: p.sexo || "",
   gestante: Boolean(p.gestante),
+  atleta: Boolean(p.atleta),
+  altura: p.altura != null ? String(p.altura) : "",
+  peso: p.peso != null ? String(p.peso).replace(".", ",") : "",
   objetivo: p.objetivo || "",
   data_primeira_consulta: p.data_primeira_consulta || (p.created_at ? String(p.created_at).slice(0, 10) : ""),
   observacoes: p.observacoes || "",
@@ -256,6 +216,8 @@ function DadosPessoais({ patient, reload }) {
         data_primeira_consulta: form.data_primeira_consulta || null,
         sexo: form.sexo || null,
         gestante: form.sexo === "F" ? form.gestante : false,
+        altura: form.altura.trim() ? Math.round(Number(form.altura.replace(",", "."))) || null : null,
+        peso: form.peso.trim() ? Number(form.peso.replace(",", ".")) || null : null,
       });
       toast.success("Dados pessoais salvos.");
       reload?.();
@@ -307,13 +269,29 @@ function DadosPessoais({ patient, reload }) {
           </datalist>
         </label>
         <label className="block">
-          <span className="evo-label">Gênero</span>
+          <span className="evo-label">Sexo biológico</span>
           <select className="evo-input" value={form.sexo} onChange={(e) => set("sexo", e.target.value)}>
             <option value="">Não informado</option>
             <option value="F">Feminino</option>
             <option value="M">Masculino</option>
             <option value="O">Outro</option>
           </select>
+        </label>
+        <label className="block">
+          <span className="evo-label">Estatura (cm)</span>
+          <input className="evo-input" inputMode="numeric" value={form.altura} onChange={(e) => set("altura", e.target.value)} placeholder="ex.: 178" data-testid="dp-altura" />
+        </label>
+        <label className="block">
+          <span className="evo-label">Peso atual (kg)</span>
+          <input className="evo-input" inputMode="decimal" value={form.peso} onChange={(e) => set("peso", e.target.value)} placeholder="ex.: 82,5" data-testid="dp-peso" />
+        </label>
+        <label className="block">
+          <span className="evo-label">Atleta</span>
+          <select className="evo-input" value={form.atleta ? "sim" : "nao"} onChange={(e) => set("atleta", e.target.value === "sim")} data-testid="dp-atleta">
+            <option value="nao">Não</option>
+            <option value="sim">Sim</option>
+          </select>
+          <span className="block text-[11px] text-gray-500 mt-1">Define o critério de cor das dobras cutâneas.</span>
         </label>
         {form.sexo === "F" && (
           <label className="block">
@@ -344,187 +322,12 @@ function DadosPessoais({ patient, reload }) {
   );
 }
 
+// Anamnese = Bloco 1 (dados pessoais, no card) + blocos 2 a 5 do formulário pré-consulta.
 function Anamnese({ d, reload }) {
-  const [anam, setAnam] = useState(d.anamnese_v2 || {});
-  const [openSec, setOpenSec] = useState(null);
-  const [editSec, setEditSec] = useState(null);
-  const [draft, setDraft] = useState({});
-  const [saving, setSaving] = useState(false);
-  const [obs, setObs] = useState("");
-  const [obsSecao, setObsSecao] = useState("dados_iniciais");
-
-  const startEdit = (secKey) => {
-    const sec = ANAMNESE_SECOES.find(s => s.key === secKey);
-    const init = {};
-    if (sec) sec.campos.forEach(([k]) => { init[k] = anam[k] || ""; });
-    setDraft(init);
-    setEditSec(secKey);
-  };
-
-  const save = async (secKey) => {
-    setSaving(true);
-    try {
-      const { data } = await api.patch(`/patients/${d.patient.id}/anamnese/${secKey}`, { dados: draft });
-      setAnam(data);
-      setEditSec(null);
-      toast.success("Seção salva!");
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail));
-    } finally { setSaving(false); }
-  };
-
-  const addObs = async () => {
-    if (!obs.trim()) return;
-    try {
-      await api.post(`/patients/${d.patient.id}/anamnese/observacoes/${obsSecao}`, { texto: obs });
-      const { data } = await api.get(`/patients/${d.patient.id}/anamnese-v2`);
-      setAnam(data);
-      setObs("");
-      toast.success("Observação adicionada!");
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail));
-    }
-  };
-
-  const clearSection = async (section) => {
-    if (!window.confirm("Limpar todos os campos desta seção da anamnese?")) return;
-    try {
-      await api.delete(`/patients/${d.patient.id}/anamnese/${section}`);
-      const { data } = await api.get(`/patients/${d.patient.id}/anamnese-v2`);
-      setAnam(data);
-      setEditSec(null);
-      toast.success("Seção limpa.");
-      reload?.();
-    } catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
-  };
-
-  const old = d.anamneses?.[0];
-
   return (
     <div className="space-y-3">
       <DadosPessoais patient={d.patient} reload={reload} />
-
-      {old && !d.anamnese_v2?.criado_em && (
-        <div className="evo-card p-4 border-evo-amber/30 bg-evo-amber/5">
-          <div className="text-xs text-evo-amber font-semibold mb-2">Anamnese da pré-consulta (formato legado)</div>
-          <div className="grid sm:grid-cols-2 gap-2">
-            {Object.entries(old.respostas || {}).map(([k, v]) => (
-              <div key={k} className="text-xs">
-                <span className="text-gray-500">{k.replaceAll("_"," ")}: </span>
-                <span className="text-gray-200">{String(v)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {ANAMNESE_SECOES.map((sec) => {
-        const isOpen = openSec === sec.key;
-        const isEdit = editSec === sec.key;
-        const filled = sec.campos.filter(([k]) => anam[k]).length;
-        const obsKey = `obs_${sec.key === "dados_sociais" ? "dados_iniciais" : sec.key}`;
-        const obsEntries = anam[obsKey] || [];
-
-        return (
-          <div key={sec.key} className="evo-card overflow-hidden">
-            <button
-              className="w-full flex items-center justify-between p-4 text-left hover:bg-white/[0.02] transition-colors"
-              onClick={() => setOpenSec(isOpen ? null : sec.key)}
-            >
-              <div className="flex items-center gap-3">
-                {isOpen ? <ChevronDown className="w-4 h-4 text-evo-purple" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-                <span className="font-semibold text-sm">{sec.label}</span>
-                <span className="text-[11px] text-gray-500">{filled}/{sec.campos.length} campos</span>
-                {obsEntries.length > 0 && <span className="text-[10px] bg-evo-teal/15 text-evo-teal px-2 py-0.5 rounded-full">{obsEntries.length} obs.</span>}
-              </div>
-              {isOpen && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); isEdit ? setEditSec(null) : startEdit(sec.key); }}
-                  className="text-xs flex items-center gap-1 px-3 py-1 rounded-md border border-white/10 hover:border-evo-purple/40 transition-colors"
-                >
-                  {isEdit ? <><X className="w-3 h-3" /> Cancelar</> : <><Edit2 className="w-3 h-3" /> Editar</>}
-                </button>
-              )}
-            </button>
-
-            {isOpen && (
-              <div className="px-4 pb-4 space-y-4">
-                {isEdit ? (
-                  <>
-                    <div className="grid sm:grid-cols-2 gap-3">
-                      {sec.campos.map(([k, label]) => (
-                        <div key={k}>
-                          <label className="evo-label">{label}</label>
-                          <input
-                            className="evo-input"
-                            value={draft[k] || ""}
-                            onChange={(e) => setDraft(prev => ({ ...prev, [k]: e.target.value }))}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <button onClick={() => save(sec.key)} disabled={saving} className="evo-btn-primary">
-                      <Save className="w-4 h-4" /> {saving ? "Salvando..." : "Salvar seção"}
-                    </button>
-                  </>
-                ) : (
-                  <div className="grid sm:grid-cols-2 gap-2">
-                    {sec.campos.map(([k, label]) => anam[k] ? (
-                      <div key={k} className="text-sm">
-                        <span className="text-gray-500 text-[11px]">{label}: </span>
-                        <span className="text-gray-200">{String(anam[k])}</span>
-                      </div>
-                    ) : null)}
-                    {filled === 0 && <div className="text-sm text-gray-500 col-span-2">Seção não preenchida. Clique em Editar.</div>}
-                  </div>
-                )}
-
-                {obsEntries.length > 0 && (
-                  <div className="mt-3 space-y-1">
-                    <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold">Observações</div>
-                    {obsEntries.map((o, i) => (
-                      <div key={i} className="text-xs p-2 rounded bg-evo-bg border border-white/[0.04]">
-                        <span className="text-gray-500 mr-2">{new Date(o.data).toLocaleDateString("pt-BR")}</span>
-                        {o.texto}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {filled > 0 && !isEdit && (
-                  <button onClick={() => clearSection(sec.key)} className="evo-btn-ghost text-evo-coral text-xs">
-                    <Trash2 className="w-3 h-3" /> Limpar seção
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      <div className="evo-card p-4">
-        <div className="text-sm font-semibold mb-3">Adicionar observação</div>
-        <div className="flex gap-2 flex-wrap items-end">
-          <div>
-            <label className="evo-label">Seção</label>
-            <select className="evo-input" value={obsSecao} onChange={(e) => setObsSecao(e.target.value)}>
-              <option value="dados_iniciais">Dados iniciais</option>
-              <option value="habitos_vida">Hábitos de vida</option>
-              <option value="patologias">Patologias</option>
-              <option value="avaliacao_clinica">Avaliação clínica</option>
-              <option value="alimentacao">Alimentação</option>
-              <option value="atividade_fisica">Atividade física</option>
-              <option value="mulheres">Dados femininos</option>
-            </select>
-          </div>
-          <div className="flex-1 min-w-[200px]">
-            <label className="evo-label">Observação</label>
-            <input className="evo-input" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Digite a observação..." />
-          </div>
-          <button onClick={addObs} className="evo-btn-primary" disabled={!obs.trim()}>
-            <Plus className="w-4 h-4" /> Adicionar
-          </button>
-        </div>
-      </div>
+      <AnamneseBlocos pacienteId={d.patient.id} sexoPaciente={d.patient.sexo} inicial={d.anamnese_v2} />
     </div>
   );
 }
@@ -577,7 +380,7 @@ function AdequacaoClinicaLegado({ d }) {
     return () => { active = false; };
   }, [pid]);
 
-  if (loading) return <div className="evo-card p-8 text-gray-400 text-sm">Carregando anÃ¡lises...</div>;
+  if (loading) return <div className="evo-card p-8 text-gray-400 text-sm">Carregando análises...</div>;
 
   const plano = data?.plano;
   const recordatorio = data?.recordatorio;
@@ -592,25 +395,25 @@ function AdequacaoClinicaLegado({ d }) {
           {plano ? (
             <>
               <div className="text-lg font-semibold mt-1">{plano.titulo || "Plano manual"}</div>
-              <div className="text-xs text-gray-500 mt-1">Meta kcal: {plano.meta_kcal || "â€”"} · Energia do plano: {plano.totais_dia?.energia_kcal || 0} kcal</div>
+              <div className="text-xs text-gray-500 mt-1">Meta kcal: {plano.meta_kcal || "—"} · Energia do plano: {plano.totais_dia?.energia_kcal || 0} kcal</div>
             </>
           ) : <div className="text-sm text-gray-500 mt-2">Nenhum plano manual encontrado.</div>}
         </div>
         <div className="evo-card p-5">
-          <div className="text-[10px] uppercase tracking-wider text-gray-500">RecordatÃ³rio base</div>
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">Recordatório base</div>
           {recordatorio ? (
             <>
-              <div className="text-lg font-semibold mt-1">{recordatorio.data || "â€”"}</div>
+              <div className="text-lg font-semibold mt-1">{recordatorio.data || "—"}</div>
               <div className="text-xs text-gray-500 mt-1">Energia do dia: {recordatorio.totais_dia?.energia_kcal || 0} kcal · {recordatorio.finalizado ? "Finalizado" : "Rascunho"}</div>
             </>
-          ) : <div className="text-sm text-gray-500 mt-2">Nenhum recordatÃ³rio encontrado.</div>}
+          ) : <div className="text-sm text-gray-500 mt-2">Nenhum recordatório encontrado.</div>}
         </div>
       </div>
 
       {plano && recordatorio ? (
         <div className="grid xl:grid-cols-5 gap-4">
           <div className="xl:col-span-3 evo-card p-5">
-            <h3 className="evo-h3 mb-4">AdequaÃ§Ã£o do recordatÃ³rio versus plano</h3>
+            <h3 className="evo-h3 mb-4">Adequação do recordatório versus plano</h3>
             <div className="grid sm:grid-cols-2 gap-3">
               {comparativo.map((item) => (
                 <div key={item.codigo} className="rounded-lg border border-white/[0.06] bg-evo-bg p-3">
@@ -621,12 +424,12 @@ function AdequacaoClinicaLegado({ d }) {
                       <div className="font-semibold">{item.plano}</div>
                     </div>
                     <div>
-                      <div className="text-xs text-gray-500">RecordatÃ³rio</div>
+                      <div className="text-xs text-gray-500">Recordatório</div>
                       <div className="font-semibold">{item.recordatorio}</div>
                     </div>
                     <div className="text-right">
-                      <div className="text-xs text-gray-500">AderÃªncia</div>
-                      <div className={`font-semibold ${item.delta > 0 ? "text-evo-coral" : item.delta < 0 ? "text-blue-400" : "text-evo-teal"}`}>{item.pct_vs_plano != null ? `${item.pct_vs_plano}%` : "â€”"}</div>
+                      <div className="text-xs text-gray-500">Aderência</div>
+                      <div className={`font-semibold ${item.delta > 0 ? "text-evo-coral" : item.delta < 0 ? "text-blue-400" : "text-evo-teal"}`}>{item.pct_vs_plano != null ? `${item.pct_vs_plano}%` : "—"}</div>
                     </div>
                   </div>
                 </div>
@@ -637,7 +440,7 @@ function AdequacaoClinicaLegado({ d }) {
           <div className="xl:col-span-2 evo-card p-5">
             <h3 className="evo-h3 mb-4">DRIs relevantes</h3>
             {dri.length === 0 ? (
-              <div className="text-sm text-gray-500">Sem adequaÃ§Ãµes calculadas no Ãºltimo recordatÃ³rio.</div>
+              <div className="text-sm text-gray-500">Sem adequações calculadas no último recordatório.</div>
             ) : (
               <div className="space-y-2">
                 {dri.map((item) => (
@@ -649,9 +452,9 @@ function AdequacaoClinicaLegado({ d }) {
                       </span>
                     </div>
                     <div className="text-[11px] text-gray-500 mt-1">
-                      {item.valor_recordatorio} / {item.recomendacao || "â€”"} {item.tipo_dri ? `· ${item.tipo_dri}` : ""}
+                      {item.valor_recordatorio} / {item.recomendacao || "—"} {item.tipo_dri ? `· ${item.tipo_dri}` : ""}
                     </div>
-                    <div className="text-xs mt-1 text-white">{item.pct_adequacao != null ? `${item.pct_adequacao}% de adequaÃ§Ã£o` : "Sem referÃªncia"}</div>
+                    <div className="text-xs mt-1 text-white">{item.pct_adequacao != null ? `${item.pct_adequacao}% de adequação` : "Sem referência"}</div>
                   </div>
                 ))}
               </div>
@@ -659,7 +462,7 @@ function AdequacaoClinicaLegado({ d }) {
           </div>
         </div>
       ) : (
-        <div className="evo-card p-8 text-gray-400 text-sm">Cadastre ao menos um plano manual e um recordatÃ³rio para liberar a leitura de adequaÃ§Ã£o.</div>
+        <div className="evo-card p-8 text-gray-400 text-sm">Cadastre ao menos um plano manual e um recordatório para liberar a leitura de adequação.</div>
       )}
     </div>
   );
@@ -812,13 +615,13 @@ export function AntropometriaLegado({ d, reload }) {
           </div>
 
           <div className="mt-5">
-            <div className="evo-label">BioimpedÃ¢ncia (opcional)</div>
+            <div className="evo-label">Bioimpedância (opcional)</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <Inp l="% Gordura" v={form.bioimpedancia.pct_gordura || ""} onChange={(v) => setB("pct_gordura", v)} t="number" />
               <Inp l="Massa Magra (kg)" v={form.bioimpedancia.massa_magra_kg || ""} onChange={(v) => setB("massa_magra_kg", v)} t="number" />
-              <Inp l="% Ãgua corporal" v={form.bioimpedancia.agua_corporal_pct || ""} onChange={(v) => setB("agua_corporal_pct", v)} t="number" />
+              <Inp l="% Água corporal" v={form.bioimpedancia.agua_corporal_pct || ""} onChange={(v) => setB("agua_corporal_pct", v)} t="number" />
               <Inp l="Gordura Visceral" v={form.bioimpedancia.gordura_visceral || ""} onChange={(v) => setB("gordura_visceral", v)} t="number" />
-              <Inp l="% MÃºsculo Esq." v={form.bioimpedancia.musculo_esqueletico_pct || ""} onChange={(v) => setB("musculo_esqueletico_pct", v)} t="number" />
+              <Inp l="% Músculo Esq." v={form.bioimpedancia.musculo_esqueletico_pct || ""} onChange={(v) => setB("musculo_esqueletico_pct", v)} t="number" />
             </div>
           </div>
 

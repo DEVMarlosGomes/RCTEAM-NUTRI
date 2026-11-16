@@ -393,8 +393,8 @@
      "quantidade_g": 200.0
     },
     {
-     "alimento_id": "2228",
-     "nome": "Couve cru(a)",
+     "alimento_id": "2241",
+     "nome": "Couve, manteiga, crua",
      "medida_nome": "Folha",
      "quantidade": 0.5,
      "quantidade_g": 10.0
@@ -441,8 +441,8 @@
      "quantidade_g": 45.0
     },
     {
-     "alimento_id": "3881",
-     "nome": "Manteiga com ou sem sal",
+     "alimento_id": "3901",
+     "nome": "Manteiga, sem sal",
      "medida_nome": "Colher de chá",
      "quantidade": 1.0,
      "quantidade_g": 8.0
@@ -807,10 +807,10 @@
      "quantidade_g": 64.0
     },
     {
-     "alimento_id": "6440",
-     "nome": "Uva passa",
-     "medida_nome": "Colher de sopa",
-     "quantidade": 2.0,
+     "alimento_id": "6441",
+     "nome": "Uva passa, s/ caroço",
+     "medida_nome": "Gramas",
+     "quantidade": 36.0,
      "quantidade_g": 36.0
     }
    ]
@@ -948,8 +948,8 @@
      "quantidade_g": 170.0
     },
     {
-     "alimento_id": "3461",
-     "nome": "Leite de vaca desnatado",
+     "alimento_id": "3524",
+     "nome": "Leite, de vaca, desnatado, UHT",
      "medida_nome": "Copo grande",
      "quantidade": 1.0,
      "quantidade_g": 200.0

@@ -460,7 +460,7 @@ function Sobre({ onStart }) {
         <Reveal className="relative order-last lg:order-first">
           <div className="relative aspect-[4/5] max-w-[520px] rounded-3xl overflow-hidden bg-rc-surface shadow-[var(--shadow-card)]">
             {foto ? (
-              <img src="/landing/rogerio.webp" alt="Rogério Costa, treinador e nutricionista" className="w-full h-full object-cover" onError={() => setFoto(false)} />
+              <img src="/landing/rogerio.jpg" alt="Rogério Costa, treinador e nutricionista" className="w-full h-full object-cover" onError={() => setFoto(false)} />
             ) : (
               <div className="absolute inset-0 p-8 sm:p-10 flex flex-col bg-[radial-gradient(520px_420px_at_20%_10%,rgba(0,129,253,0.24),transparent_60%),radial-gradient(420px_360px_at_100%_100%,rgba(195,245,60,0.10),transparent_60%)]">
                 <RCLogo size={44} variant="blue" />

@@ -10,7 +10,7 @@
     "descricao": "Abacate, cru (Metade: 1) (215g)  │  Opção 2: Ovo de galinha (IBGE) (Gramas: 100)",
     "opcoes": [
       {
-        "nome": "Ovo de galinha (IBGE)",
+        "nome": "Ovo, galinha, mexido, s/ sal",
         "medida_nome": "Gramas",
         "quantidade": 100.0
       }
@@ -122,7 +122,7 @@
         "quantidade": 1522.25
       },
       {
-        "nome": "Bacalhau (refogado)",
+        "nome": "Bacalhau, salgado, refogado",
         "medida_nome": "Gramas",
         "quantidade": 300.0
       }
@@ -235,7 +235,7 @@
     "descricao": "Pão de forma tradicional - Wickbold® (Fatia: 2) (50g)  │  Opção 2: Pão francês (gramas: 50)  │  Opção 3: Tapioca de goma (gramas: 30)  │  Opção 4: Cuscuz de milho, c/ sal, cozido (gramas: 70)  │  Opção 5: rap10 (gramas: 50)",
     "opcoes": [
       {
-        "nome": "Pão francês",
+        "nome": "Pão, trigo, francês",
         "medida_nome": "gramas",
         "quantidade": 50.0
       },
@@ -330,7 +330,7 @@
   {
     "codigo": 19,
     "base_raw": "Iogurte natural desnatado -Nestlé®160",
-    "base_nome": "Iogurte natural desnatado -Nestlé®",
+    "base_nome": "Iogurte, natural, desnatado (TACO)",
     "base_display": "Iogurte natural desnatado -Nestlé® (Gramas: 160)",
     "base_medida_nome": "Gramas",
     "base_quantidade": 160.0,
@@ -468,17 +468,17 @@
     "descricao": "Iogurte pense zero batavo (batido) (Gramas: 200)  │  Opção 2: Leite de vaca desnatado (Gramas: 200)  │  Opção 3: Leite em pó desnatado (Gramas: 20)  │  Opção 4: Iogurte natural desnatado -Nestlé® (Gramas: 160)",
     "opcoes": [
       {
-        "nome": "Leite de vaca desnatado",
+        "nome": "Leite, de vaca, desnatado, UHT",
         "medida_nome": "Gramas",
         "quantidade": 200.0
       },
       {
-        "nome": "Leite em pó desnatado",
+        "nome": "Leite, de vaca, desnatado, pó",
         "medida_nome": "Gramas",
         "quantidade": 20.0
       },
       {
-        "nome": "Iogurte natural desnatado -Nestlé®",
+        "nome": "Iogurte, natural, desnatado (TACO)",
         "medida_nome": "Gramas",
         "quantidade": 160.0
       }

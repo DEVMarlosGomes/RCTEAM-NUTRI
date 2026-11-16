@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 # ── Configurações padrão ────────────────────────────────────────────────────
 
-TABELAS_ALIMENTOS = ("TACO", "IBGE", "TBCA", "Tucunduva", "Marcas", "Meus")
+TABELAS_ALIMENTOS = ("TACO", "IBGE", "TBCA", "Tucunduva", "Meus")
 
 CONFIG_PADRAO: dict = {
     "refeicoes_iniciais": 6,
@@ -66,8 +66,10 @@ CONFIG_PADRAO: dict = {
         "Sem açúcar",
         "Cozido(a) ou grelhado(a)",
     ],
+    # categorias dos modelos de dieta (editáveis em Configurações da dieta)
+    "categorias_modelos": ["Perda de gordura", "Ganho de massa muscular"],
 }
-_LISTAS_CONFIG = ("objetivos", "titulos", "nomes_refeicao", "observacoes_refeicao", "observacoes_alimento")
+_LISTAS_CONFIG = ("objetivos", "titulos", "nomes_refeicao", "observacoes_refeicao", "observacoes_alimento", "categorias_modelos")
 
 # Padrões trazidos da conta do nutricionista no NutriDiet (listas de frases, 10 modelos de refeição e
 # 6 listas de substituição), já ligados aos alimentos da base. As listas viram o padrão das configurações.
@@ -98,6 +100,7 @@ class DietaConfigIn(BaseModel):
     nomes_refeicao: Optional[List[str]] = None
     refeicoes_padrao: Optional[List[dict]] = None
     observacoes_refeicao: Optional[List[str]] = None
+    categorias_modelos: Optional[List[str]] = None
     observacoes_alimento: Optional[List[str]] = None
 
 
@@ -436,6 +439,36 @@ def build_dieta_router(db, require_nutritionist, h) -> APIRouter:
         return {"modelos_criados": len(novos_m), "listas_criadas": len(novas_l)}
 
     # ── Modelos de dieta: o CRUD de criação/aplicação já existe em server.py ──
+    class ModeloDietaPatch(BaseModel):
+        nome: Optional[str] = Field(default=None, max_length=140)
+        categoria: Optional[str] = Field(default=None, max_length=80)  # "" = Sem categoria
+
+    @router.patch("/plano-templates/{tid}")
+    async def editar_modelo_dieta(tid: str, payload: ModeloDietaPatch, user=Depends(require_nutritionist)):
+        upd = {}
+        if payload.nome is not None:
+            if not payload.nome.strip():
+                raise HTTPException(400, "Informe o nome do modelo")
+            upd["nome"] = payload.nome.strip()
+        if payload.categoria is not None:
+            upd["categoria"] = payload.categoria.strip() or None
+        upd["atualizado_em"] = h.iso(h.now_utc())
+        res = await db.plano_templates.update_one({"id": tid, "nutricionista_id": user["id"]}, {"$set": upd})
+        if res.matched_count == 0:
+            raise HTTPException(404, "Modelo não encontrado")
+        return await db.plano_templates.find_one({"id": tid}, {"_id": 0})
+
+    @router.post("/plano-templates/{tid}/duplicar", status_code=201)
+    async def duplicar_modelo_dieta(tid: str, user=Depends(require_nutritionist)):
+        origem = await db.plano_templates.find_one({"id": tid, "nutricionista_id": user["id"]}, {"_id": 0})
+        if not origem:
+            raise HTTPException(404, "Modelo não encontrado")
+        agora = h.iso(h.now_utc())
+        copia = {**origem, "id": str(uuid.uuid4()), "nome": f"{origem.get('nome') or 'Modelo'} (cópia)"[:140],
+                 "criado_em": agora, "atualizado_em": agora}
+        await db.plano_templates.insert_one(dict(copia))
+        return copia
+
     @router.delete("/plano-templates/{tid}")
     async def apagar_modelo_dieta(tid: str, user=Depends(require_nutritionist)):
         res = await db.plano_templates.delete_one({"id": tid, "nutricionista_id": user["id"]})

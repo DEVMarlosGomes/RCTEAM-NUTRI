@@ -1,330 +1,440 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { api, formatApiError } from "@/lib/evo-api";
-import GlowOrb from "@/components/evonut/GlowOrb";
-import Brand from "@/components/evonut/Brand";
-import {
-  ArrowLeft,
-  ArrowRight,
-  CheckCircle2,
-  User,
-  Activity,
-  Target,
-  Calendar,
-  Moon,
-  Wine,
-  Droplet,
-  Apple,
-  Heart,
-  Briefcase,
-  Zap,
-  Activity as ActivityIcon,
-  PlusCircle,
-  Image as ImageIcon,
-  Upload,
-  X,
-} from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, FileText, Loader2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
+import { api, formatApiError } from "@/lib/evo-api";
+import Brand from "@/components/evonut/Brand";
+import ProtocoloFotos from "@/components/evonut/ProtocoloFotos";
+import { carregarEstrutura, idadeAnos, perguntasVisiveis, vazio } from "@/lib/anamnese";
 
 /**
- * Estrutura de seções 100% alinhada ao doc "FORMULÁRIO PRÉ CONSULTA".
- * Cada seção tem id, title, helper opcional, ícone e fields tipados.
- * Tipos suportados: text, email, number, date, textarea, radio, radio-card,
- *                   multi-check, slider, yes-no, photos.
+ * Pré-consulta pública (link enviado pelo WhatsApp): boas-vindas -> tela inicial -> uma pergunta por tela
+ * (5 blocos, 37 perguntas, condicionais) -> "Tudo certo". As perguntas vêm do backend (anamnese_form.py).
+ * Rascunho salvo a cada resposta (no aparelho e no servidor): o cliente pode fechar e voltar pelo mesmo link.
  */
-const SECTIONS = [
-  {
-    id: "dados_pessoais",
-    title: "Dados pessoais",
-    icon: User,
-    helper: "Suas informações serão usadas para montar um plano alimentar 100% personalizado.",
-    fields: [
-      { k: "email", l: "E-mail", type: "email", placeholder: "voce@email.com" },
-      { k: "nome", l: "Nome completo", type: "text", req: true },
-      { k: "data_nascimento", l: "Data de nascimento", type: "date", req: true },
-      { k: "estatura", l: "Estatura (cm)", type: "number", req: true, placeholder: "ex: 178" },
-      { k: "peso_atual", l: "Peso atual (kg)", type: "number", req: true, placeholder: "ex: 82.5" },
-    ],
-  },
-  {
-    id: "condicionamento",
-    title: "Condicionamento físico",
-    icon: Activity,
-    helper: "Selecione a opção que mais se aproxima da sua realidade atual.",
-    fields: [
-      {
-        k: "condicionamento",
-        type: "radio-card",
-        req: true,
-        opts: [
-          { v: "sem_experiencia", l: "Sem experiência", desc: "Nunca treinou ou está começando do zero" },
-          { v: "inativo", l: "Inativo", desc: "Já treinou, mas está parado atualmente" },
-          { v: "ativo_1", l: "Ativo 1", desc: "Treina às vezes, sem muita regularidade" },
-          { v: "ativo_2", l: "Ativo 2", desc: "Treina com frequência e mantém rotina consistente" },
-          { v: "atleta", l: "Atleta", desc: "Treina com alto nível de disciplina e foco em performance" },
-        ],
-      },
-    ],
-  },
-  {
-    id: "objetivo",
-    title: "Objetivo",
-    icon: Target,
-    helper: "O que você deseja alcançar com esse acompanhamento?",
-    fields: [
-      {
-        k: "objetivo",
-        l: "Descreva seu objetivo",
-        type: "textarea",
-        req: true,
-        placeholder: "ex: emagrecimento, ganho de massa, melhorar saúde, performance...",
-      },
-    ],
-  },
-  {
-    id: "treino",
-    title: "Rotina de treino",
-    icon: Calendar,
-    fields: [
-      {
-        k: "dias_treino",
-        l: "Marque os dias que você pode treinar",
-        type: "multi-check",
-        opts: ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"],
-      },
-      {
-        k: "horario_treino",
-        l: "Qual horário costuma ou pretende treinar?",
-        type: "text",
-        placeholder: "ex: 06:00 da manhã / após o trabalho",
-      },
-    ],
-  },
-  {
-    id: "sono",
-    title: "Sono",
-    icon: Moon,
-    helper: "Como está seu sono atualmente? (Pode marcar mais de uma)",
-    fields: [
-      {
-        k: "sono",
-        type: "multi-check",
-        opts: [
-          "Tenho dificuldade para dormir",
-          "Acordo durante a noite",
-          "Sono leve ou agitado",
-          "Uso celular antes de dormir",
-          "Acordo cansado",
-          "Durmo bem",
-        ],
-      },
-    ],
-  },
-  {
-    id: "habitos",
-    title: "Hábitos",
-    icon: Wine,
-    fields: [
-      {
-        k: "alcool",
-        l: "Com que frequência você consome bebidas alcoólicas?",
-        type: "radio",
-        opts: [
-          "Apenas finais de semana",
-          "Apenas socialmente",
-          "Durante a semana e finais de semana",
-          "Quase todos os dias",
-          "Não consumo",
-        ],
-      },
-    ],
-  },
-  {
-    id: "agua",
-    title: "Consumo de água",
-    icon: Droplet,
-    helper: "Considere um copo de aproximadamente 200ml.",
-    fields: [
-      {
-        k: "agua",
-        l: "Quanto de água você consome por dia?",
-        type: "radio",
-        opts: [
-          "Menos de 1L (até 5 copos)",
-          "Entre 1L e 2L (5 a 10 copos)",
-          "Entre 2L e 3L (10 a 15 copos)",
-          "Mais de 3L (mais de 15 copos)",
-        ],
-      },
-    ],
-  },
-  {
-    id: "alimentacao",
-    title: "Alimentação",
-    icon: Apple,
-    helper: "Considere sua rotina da maior parte da semana.",
-    fields: [
-      {
-        k: "alimentacao_atual",
-        l: "Como você avalia sua alimentação atual?",
-        type: "radio-card",
-        opts: [
-          { v: "pouco_saudavel", l: "Pouco saudável", desc: "Muitos industrializados, fast food, frituras e baixa ingestão de alimentos naturais" },
-          { v: "moderado", l: "Moderado", desc: "Alimentação razoável, mas com exageros frequentes" },
-          { v: "saudavel", l: "Saudável", desc: "Base alimentar equilibrada, com alimentos naturais na maior parte do tempo" },
-        ],
-      },
-      {
-        k: "alergias",
-        l: "Possui alguma alergia, intolerância ou alimento que não gosta?",
-        type: "textarea",
-        placeholder: "ex: lactose, glúten, frutos do mar... ou alimentos que evita",
-      },
-      { k: "frutas_preferidas", l: "Quais frutas você prefere?", type: "textarea", placeholder: "ex: banana, mamão, morango, abacate..." },
-    ],
-  },
-  {
-    id: "saude",
-    title: "Saúde",
-    icon: Heart,
-    helper: "Informações importantes para garantir segurança e personalização do plano.",
-    fields: [
-      { k: "lesoes", l: "Possui alguma lesão muscular ou articular?", type: "textarea", placeholder: "Se sim, qual?" },
-      { k: "doencas", l: "Possui alguma condição de saúde ou desconforto relevante?", type: "textarea" },
-      { k: "medicacao", l: "Faz uso de algum medicamento contínuo?", type: "textarea", placeholder: "Se sim, qual?" },
-      { k: "anabolizantes", l: "Faz ou já fez uso de esteroides anabolizantes?", type: "yes-no" },
-      { k: "exames_recentes", l: "Realizou exames de sangue nos últimos 6 meses?", type: "yes-no" },
-    ],
-  },
-  {
-    id: "trabalho",
-    title: "Rotina de trabalho",
-    icon: Briefcase,
-    helper: "Essas informações ajudam a adaptar sua dieta à sua rotina diária.",
-    fields: [
-      { k: "profissao", l: "Qual sua atividade profissional atual?", type: "text" },
-      {
-        k: "tipo_trabalho",
-        l: "Durante o trabalho, você passa a maior parte do tempo:",
-        type: "multi-check",
-        opts: ["Sentado", "Caminhando", "Em pé", "Subindo escadas", "Carregando peso"],
-      },
-      {
-        k: "estrutura_alimentacao",
-        l: "No seu trabalho, você tem acesso a:",
-        type: "multi-check",
-        opts: ["Geladeira", "Micro-ondas", "Local para armazenar ou preparar refeições", "Não tenho acesso"],
-      },
-    ],
-  },
-  {
-    id: "energia",
-    title: "Energia e desempenho",
-    icon: Zap,
-    fields: [
-      { k: "energia", l: "Como está sua energia no dia a dia?", type: "slider", min: 0, max: 10 },
-      {
-        k: "desempenho_treino",
-        l: "Como você avalia seu desempenho nos treinos?",
-        type: "radio-card",
-        opts: [
-          { v: "baixo", l: "Baixo", desc: "Pouca energia e rendimento" },
-          { v: "medio", l: "Médio", desc: "Consegue treinar, mas pode melhorar" },
-          { v: "alto", l: "Alto", desc: "Boa energia e desempenho" },
-        ],
-      },
-    ],
-  },
-  {
-    id: "intestino",
-    title: "Funcionamento intestinal",
-    icon: ActivityIcon,
-    fields: [
-      {
-        k: "intestino",
-        l: "Como está seu funcionamento intestinal?",
-        type: "radio",
-        opts: [
-          "Regular (diário)",
-          "Às vezes irregular",
-          "Constipação frequente",
-          "Diarreia frequente",
-          "Muito instável",
-        ],
-      },
-    ],
-  },
-  {
-    id: "outras",
-    title: "Outras informações",
-    icon: PlusCircle,
-    fields: [
-      { k: "suplementacao", l: "Utiliza algum tipo de suplementação? Se sim, qual?", type: "textarea" },
-      { k: "fumo", l: "Você fuma? Se sim, quantos cigarros por dia?", type: "text", placeholder: "ex: não / 5 por dia" },
-      {
-        k: "libido",
-        l: "Como está seu desejo sexual (libido)?",
-        type: "radio",
-        opts: ["Baixo", "Varia ao longo do tempo", "Alto"],
-      },
-    ],
-  },
-  {
-    id: "saude_geral",
-    title: "Saúde geral",
-    icon: Heart,
-    fields: [
-      { k: "saude_score", l: "De 0 a 10, como você avalia sua saúde atualmente?", type: "slider", min: 0, max: 10 },
-      {
-        k: "rotina_alimentar",
-        l: "Descreva de forma breve sua rotina alimentar",
-        helper: "Se souber as quantidades melhor — caso não, sem problemas.",
-        type: "textarea",
-        placeholder:
-          "Exemplo:\n07:00 — Café da manhã: 2 fatias de pão + 1 ovo + 1 fruta\n10:00 — Lanche: 1 iogurte + 1 fruta + whey\n12:00 — Almoço: arroz + feijão + carne + salada\n16:00 — Lanche da tarde: 2 fatias de pão + 1 ovo + 1 fruta\n19:00 — Jantar: arroz + feijão + carne + salada",
-        rows: 8,
-      },
-    ],
-  },
-  {
-    id: "fotos",
-    title: "Fotos (opcional)",
-    icon: ImageIcon,
-    helper: "Frente, lateral e costas — para análise antropométrica visual. Privadas, vistas só pelo Rogério.",
-    fields: [
-      { k: "fotos", type: "photos" },
-    ],
-  },
-];
+const STORAGE_KEY = (token) => `rc_preconsulta_${token}`;
 
-const STORAGE_KEY = (token) => `rc_anamnesis_${token}`;
-
-// ---------- helpers ----------
-function calcAge(dateStr) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr + "T00:00:00");
-  if (Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  let age = now.getFullYear() - d.getFullYear();
-  const m = now.getMonth() - d.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
-  return age >= 0 && age < 130 ? age : "";
+function lerLocal(token) {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY(token)) || "null"); } catch { return null; }
+}
+function gravarLocal(token, dados) {
+  try { localStorage.setItem(STORAGE_KEY(token), JSON.stringify(dados)); } catch { /* sem armazenamento: segue só com o servidor */ }
+}
+function apagarLocal(token) {
+  try { localStorage.removeItem(STORAGE_KEY(token)); } catch { /* idem */ }
 }
 
-async function fileToResizedBase64(file, maxSize = 1280, quality = 0.78) {
+export default function PreConsulta() {
+  const { token } = useParams();
+  const navigate = useNavigate();
+  const [estrutura, setEstrutura] = useState(null);
+  const [fase, setFase] = useState("boas_vindas");
+  const [respostas, setRespostas] = useState({});
+  const [cur, setCur] = useState(null);
+  const [retomar, setRetomar] = useState(false);
+  const [erro, setErro] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const timerAvanco = useRef(null);
+  const timerRascunho = useRef(null);
+
+  useEffect(() => {
+    if (!token) return;
+    let ativo = true;
+    Promise.all([
+      carregarEstrutura(),
+      api.get(`/public/lead/${token}`).then((r) => r.data),
+      api.get(`/public/lead/${token}/rascunho`).then((r) => r.data).catch(() => ({})),
+    ]).then(([est, lead, servidor]) => {
+      if (!ativo) return;
+      setEstrutura(est);
+      const local = lerLocal(token);
+      const maisNovo = [local, servidor].filter((x) => x?.respostas)
+        .sort((a, b) => String(b.atualizado_em || "").localeCompare(String(a.atualizado_em || "")))[0];
+      if (maisNovo && Object.keys(maisNovo.respostas).length) {
+        setRespostas(maisNovo.respostas);
+        setCur(local?.cur || null);
+        setRetomar(true);
+      } else {
+        const pre = {};
+        if (lead.nome) pre.nome = lead.nome;
+        if (lead.email) pre.email = lead.email;
+        if (lead.peso) pre.peso_atual = String(lead.peso);
+        if (lead.altura) pre.estatura = String(lead.altura);
+        if (lead.objetivo) pre.objetivo = lead.objetivo;
+        setRespostas(pre);
+      }
+    }).catch(() => {
+      toast.error("Link inválido ou expirado");
+      navigate("/");
+    });
+    return () => { ativo = false; };
+  }, [token, navigate]);
+
+  useEffect(() => () => { clearTimeout(timerAvanco.current); clearTimeout(timerRascunho.current); }, []);
+
+  const lista = useMemo(() => (estrutura ? perguntasVisiveis(estrutura, respostas) : []), [estrutura, respostas]);
+  const idx = Math.max(0, lista.findIndex((p) => p.id === cur));
+  const pergunta = lista[idx];
+
+  const salvarRascunho = useCallback((novas, posicao) => {
+    const agora = new Date().toISOString();
+    gravarLocal(token, { respostas: novas, cur: posicao, atualizado_em: agora });
+    clearTimeout(timerRascunho.current);
+    timerRascunho.current = setTimeout(() => {
+      api.put(`/public/lead/${token}/rascunho`, { respostas: novas }).catch(() => { /* fica salvo no aparelho */ });
+    }, 800);
+  }, [token]);
+
+  const irPara = useCallback((delta) => {
+    clearTimeout(timerAvanco.current);
+    const atual = lista[idx];
+    if (delta > 0 && atual?.obrig && vazio(respostas[atual.id])) {
+      setErro("Esta resposta é obrigatória.");
+      return;
+    }
+    setErro("");
+    const j = idx + delta;
+    if (j < 0) setFase("intro");
+    else if (j < lista.length) {
+      setCur(lista[j].id);
+      salvarRascunho(respostas, lista[j].id);
+    }
+    try { window.scrollTo(0, 0); } catch { /* sem janela */ }
+  }, [idx, lista, respostas, salvarRascunho]);
+
+  const responder = (id, valor, avancar = false) => {
+    const novas = { ...respostas, [id]: valor };
+    setRespostas(novas);
+    setErro("");
+    salvarRascunho(novas, id);
+    if (avancar) {
+      // escolha única: avança sozinho depois de mostrar a opção marcada. A próxima pergunta é calculada
+      // com as respostas novas, porque a resposta pode abrir ou fechar perguntas condicionais.
+      clearTimeout(timerAvanco.current);
+      timerAvanco.current = setTimeout(() => avancarDepois(novas, id), 220);
+    }
+  };
+
+  const avancarDepois = (novas, id) => {
+    const nova = perguntasVisiveis(estrutura, novas);
+    const i = nova.findIndex((p) => p.id === id);
+    if (i >= 0 && i + 1 < nova.length) {
+      setCur(nova[i + 1].id);
+      salvarRascunho(novas, nova[i + 1].id);
+      try { window.scrollTo(0, 0); } catch { /* sem janela */ }
+    }
+  };
+
+  const enviar = async () => {
+    if (pergunta?.obrig && vazio(respostas[pergunta.id])) {
+      setErro("Esta resposta é obrigatória.");
+      return;
+    }
+    setEnviando(true);
+    try {
+      const visiveis = new Set(lista.map((p) => p.id));
+      const payload = Object.fromEntries(Object.entries(respostas).filter(([k, v]) => visiveis.has(k) && !vazio(v)));
+      await api.post("/public/anamnesis", { token, respostas: payload });
+      clearTimeout(timerRascunho.current);
+      apagarLocal(token);
+      setFase("fim");
+      try { window.scrollTo(0, 0); } catch { /* sem janela */ }
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-gray-300 bg-rc-ink px-4">
+        <div className="text-center">
+          <p className="mb-4">Você precisa de um link de pré-consulta válido.</p>
+          <Link to="/" className="rc-btn-primary">Voltar à página inicial</Link>
+        </div>
+      </div>
+    );
+  }
+  if (!estrutura) {
+    return <div className="min-h-screen bg-rc-ink flex items-center justify-center"><Loader2 className="w-6 h-6 text-rc-blue animate-spin" /></div>;
+  }
+
+  const nome = String(respostas.nome || "").trim().split(/\s+/)[0] || "";
+
+  if (fase === "boas_vindas") return <BoasVindas onComecar={() => setFase("intro")} />;
+
+  if (fase === "intro") {
+    return (
+      <Moldura>
+        <div className="max-w-xl mt-6 space-y-5 animate-fade-up">
+          <h1 className="rc-h2">Formulário pré-consulta</h1>
+          <p className="text-[15px] text-gray-300 leading-relaxed">
+            Suas respostas são a base do seu plano alimentar e do seu treino. É uma pergunta por vez e leva cerca de
+            10 minutos. Responda com sinceridade, pensando na sua rotina real. As informações serão usadas apenas na sua consultoria.
+          </p>
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <button type="button" className="rc-btn-primary h-12 px-7" data-testid="preconsulta-comecar"
+              onClick={() => { setFase("perguntas"); if (!retomar || !cur) setCur(lista[0]?.id); }}>
+              {retomar ? "Continuar de onde parei" : "Começar"} <ArrowRight className="w-4 h-4" />
+            </button>
+            {retomar && (
+              <button type="button" className="rc-btn-secondary h-12" onClick={() => { setFase("perguntas"); setCur(lista[0]?.id); }}>
+                Revisar desde o início
+              </button>
+            )}
+          </div>
+          <button type="button" onClick={() => setFase("boas_vindas")} className="text-sm font-medium text-rc-blue hover:underline">
+            Voltar para a página inicial
+          </button>
+        </div>
+      </Moldura>
+    );
+  }
+
+  if (fase === "fim") {
+    return <Final token={token} nome={nome} onAtendimento={() => navigate(`/chat/${token}`)} />;
+  }
+
+  // ── uma pergunta por tela ──
+  const bloco = estrutura.blocos[pergunta.blocoIndex];
+  const primeiraDoBloco = idx === 0 || lista[idx - 1].bloco !== pergunta.bloco;
+  const transicao = primeiraDoBloco
+    ? (nome ? bloco.transicao.replace("{nome}", nome) : bloco.transicao.replace(/Prazer, \{nome\}! /, ""))
+    : "";
+  const pct = Math.round(((idx + 1) / lista.length) * 100);
+  const ultima = idx === lista.length - 1;
+  const valor = respostas[pergunta.id];
+  const autoAvanca = pergunta.tipo === "unica" || pergunta.tipo === "escala";
+  const bloqueado = pergunta.obrig && vazio(valor);
+  const idade = pergunta.id === "data_nascimento" ? idadeAnos(valor) : null;
+
+  return (
+    <div className="min-h-screen bg-rc-ink">
+      <header className="sticky top-0 z-10 bg-rc-ink/90 backdrop-blur-xl border-b border-white/[0.06]">
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-[13px] font-medium text-gray-300 truncate" data-testid="preconsulta-bloco">
+              Bloco {pergunta.blocoIndex + 1} de {estrutura.blocos.length}: {bloco.titulo}
+            </p>
+            <span className="rc-num text-[18px] text-rc-lime tabular">{pct}%</span>
+          </div>
+          <div role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Progresso do formulário"
+            className="mt-2 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+            <div className="h-full bg-rc-lime rounded-full transition-[width] duration-300 ease-out" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 sm:px-6 pt-8 pb-16" key={pergunta.id}>
+        <div className="space-y-5 animate-fade-up">
+          {transicao && <p className="text-rc-blue font-semibold text-[15px]">{transicao}</p>}
+          <h1 className="text-[22px] sm:text-[24px] font-semibold text-white leading-snug">
+            {pergunta.titulo}{pergunta.obrig && <span className="text-rc-coral ml-1" aria-label="obrigatória">*</span>}
+          </h1>
+          {pergunta.desc && <p className="text-[14px] text-gray-400 whitespace-pre-line leading-relaxed">{pergunta.desc}</p>}
+
+          <Entrada pergunta={pergunta} valor={valor} token={token}
+            onChange={(v, avancar) => responder(pergunta.id, v, avancar)}
+            onEnter={() => (ultima ? enviar() : irPara(1))} />
+
+          {idade !== null && <p className="text-rc-blue font-semibold">Idade: {idade} {idade === 1 ? "ano" : "anos"}</p>}
+          {erro && <p role="alert" className="text-rc-coral font-medium text-sm">{erro}</p>}
+
+          <div className="flex items-center justify-between gap-3 pt-3">
+            <button type="button" onClick={() => irPara(-1)} className="rc-btn-secondary h-12" data-testid="preconsulta-voltar">
+              <ArrowLeft className="w-4 h-4" /> Voltar
+            </button>
+            {ultima ? (
+              <button type="button" onClick={enviar} disabled={enviando || bloqueado} className="rc-btn-primary h-12 px-6" data-testid="preconsulta-enviar">
+                {enviando ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Enviar respostas
+              </button>
+            ) : (!autoAvanca || !vazio(valor)) && (
+              <button type="button" onClick={() => irPara(1)} disabled={bloqueado} className="rc-btn-primary h-12 px-6" data-testid="preconsulta-continuar">
+                Continuar <ArrowRight className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <p className="text-[12px] text-gray-500">Suas respostas ficam salvas: se precisar sair, é só abrir o mesmo link depois.</p>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function Moldura({ children }) {
+  return (
+    <div className="min-h-screen bg-rc-ink">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6">
+        <Link to="/" aria-label="Página inicial"><Brand size="sm" /></Link>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const opcaoClasse = (on) =>
+  `w-full min-h-[52px] px-4 py-3 rounded-xl border text-left text-[15px] transition-colors duration-150 ${
+    on ? "bg-rc-blue/15 border-rc-blue text-white" : "bg-white/[0.03] border-white/[0.1] text-gray-200 hover:border-rc-blue/50"}`;
+
+function Entrada({ pergunta, valor, token, onChange, onEnter }) {
+  const { tipo } = pergunta;
+  if (tipo === "unica") {
+    return (
+      <div className="space-y-2.5" role="radiogroup" aria-label={pergunta.titulo}>
+        {pergunta.opcoes.map((o) => (
+          <button key={o} type="button" role="radio" aria-checked={valor === o} onClick={() => onChange(o, true)} className={opcaoClasse(valor === o)}>
+            {o}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  if (tipo === "multipla") {
+    const atual = Array.isArray(valor) ? valor : [];
+    const alternar = (o) => {
+      let novo;
+      if (atual.includes(o)) novo = atual.filter((x) => x !== o);
+      else if (o === pergunta.exclusivo) novo = [o];
+      else novo = atual.filter((x) => x !== pergunta.exclusivo).concat(o);
+      onChange(novo);
+    };
+    return (
+      <div className="space-y-2.5">
+        <p className="text-[12px] text-gray-500">Pode marcar mais de uma.</p>
+        {pergunta.opcoes.map((o) => (
+          <button key={o} type="button" aria-pressed={atual.includes(o)} onClick={() => alternar(o)} className={`${opcaoClasse(atual.includes(o))} flex items-center gap-3`}>
+            <span className={`w-5 h-5 shrink-0 rounded-md border flex items-center justify-center ${atual.includes(o) ? "bg-rc-blue border-rc-blue" : "border-white/25"}`}>
+              {atual.includes(o) && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
+            </span>
+            {o}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  if (tipo === "escala") {
+    const nums = Array.from({ length: (pergunta.max ?? 10) - (pergunta.min ?? 0) + 1 }, (_, i) => String((pergunta.min ?? 0) + i));
+    return (
+      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={pergunta.titulo}>
+        {nums.map((n) => (
+          <button key={n} type="button" role="radio" aria-checked={String(valor) === n} onClick={() => onChange(n, true)}
+            className={`w-12 h-12 rounded-xl border font-semibold tabular transition-colors ${String(valor) === n ? "bg-rc-blue border-rc-blue text-white" : "bg-white/[0.03] border-white/[0.1] text-gray-200 hover:border-rc-blue/50"}`}>
+            {n}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  if (tipo === "longo") {
+    return <textarea className="rc-input min-h-[120px] leading-relaxed resize-y" rows={pergunta.rows || 4} aria-label={pergunta.titulo}
+      value={valor || ""} onChange={(e) => onChange(e.target.value)} autoFocus />;
+  }
+  if (tipo === "arquivo") return <EntradaArquivo pergunta={pergunta} valor={valor} token={token} onChange={onChange} />;
+  const inputType = { email: "email", data: "date", numero: "text" }[tipo] || "text";
+  return (
+    <input className="rc-input h-14 text-[16px]" type={inputType} aria-label={pergunta.titulo} autoFocus
+      inputMode={tipo === "numero" ? "decimal" : undefined}
+      value={valor || ""} onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onEnter(); } }} />
+  );
+}
+
+function EntradaArquivo({ pergunta, valor, token, onChange }) {
+  const arquivos = Array.isArray(valor) ? valor : [];
+  const [enviando, setEnviando] = useState(false);
+  const enviar = async (files) => {
+    const lista = Array.from(files || []);
+    if (!lista.length) return;
+    setEnviando(true);
+    const novos = [...arquivos];
+    for (const f of lista) {
+      if (f.size > 10 * 1024 * 1024) { toast.error(`${f.name}: maior que 10 MB`); continue; }
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        const { data } = await api.post(`/public/lead/${token}/arquivo?destino=${pergunta.destino}`, fd);
+        novos.push({ id: data.id, nome: data.nome });
+      } catch (e) {
+        toast.error(`${f.name}: ${formatApiError(e.response?.data?.detail)}`);
+      }
+    }
+    onChange(novos);
+    setEnviando(false);
+  };
+  return (
+    <div className="space-y-3">
+      <label className="relative flex flex-col items-center justify-center gap-2 min-h-[110px] rounded-xl border-2 border-dashed border-white/[0.14] hover:border-rc-blue/50 bg-white/[0.02] cursor-pointer text-gray-300 transition-colors">
+        <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="absolute inset-0 opacity-0 cursor-pointer"
+          aria-label={pergunta.titulo} onChange={(e) => { enviar(e.target.files); e.target.value = ""; }} disabled={enviando} />
+        {enviando ? <Loader2 className="w-5 h-5 animate-spin text-rc-blue" /> : <Upload className="w-5 h-5 text-rc-blue" />}
+        <span className="text-sm">{enviando ? "Enviando…" : "Toque para escolher os arquivos"}</span>
+        <span className="text-[12px] text-gray-500">PDF, JPG ou PNG · até 10 MB cada</span>
+      </label>
+      {arquivos.length > 0 && (
+        <ul className="space-y-1.5">
+          {arquivos.map((a) => (
+            <li key={a.id} className="flex items-center gap-2 text-sm text-gray-200 bg-white/[0.03] rounded-lg px-3 py-2">
+              <FileText className="w-4 h-4 text-rc-blue shrink-0" /><span className="truncate flex-1">{a.nome}</span>
+              <button type="button" aria-label={`Remover ${a.nome}`} onClick={() => onChange(arquivos.filter((x) => x.id !== a.id))}
+                className="text-gray-500 hover:text-white p-1"><X className="w-4 h-4" /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function BoasVindas({ onComecar }) {
+  return (
+    <div className="min-h-screen bg-rc-ink text-white">
+      <section className="max-w-5xl mx-auto grid md:grid-cols-2 items-center">
+        <img src="/landing/rogerio.jpg" alt="Rogério Costa de braços cruzados em uma academia" className="w-full h-[46vh] md:h-[640px] object-cover object-top" />
+        <div className="px-5 sm:px-8 py-10 space-y-5">
+          <Brand size="sm" />
+          <h1 className="rc-display text-[clamp(32px,4.6vw,48px)] leading-[1.05]">Bem-vindo(a) à sua <span className="text-rc-blue">jornada de evolução!</span></h1>
+          <p className="text-[17px] text-gray-300 leading-relaxed">
+            Você está iniciando um caminho de transformação real. Estou ao seu lado para garantir resultados concretos e fazer de você o
+            próximo grande caso de sucesso do nosso time.
+          </p>
+          <p className="text-[13px] text-gray-500">Rogério Costa · Treinador e Nutricionista</p>
+        </div>
+      </section>
+      <section className="border-t border-white/[0.06] bg-white/[0.015]">
+        <div className="max-w-2xl mx-auto px-5 sm:px-8 py-14 text-center space-y-5">
+          <span className="inline-block rounded-full bg-rc-blue/15 text-rc-blue px-3 py-1 text-[12px] font-semibold uppercase tracking-[0.14em]">Primeiro passo</span>
+          <h2 className="rc-h2">Formulário pré-consulta</h2>
+          <p className="text-gray-300 leading-relaxed">
+            Antes de iniciarmos sua consultoria, preciso conhecer mais sobre você: seus hábitos, rotina, histórico e objetivos. Esse é o
+            ponto de partida para criar um plano totalmente personalizado, com estratégias que realmente funcionam para o seu estilo de vida.
+          </p>
+          <p className="text-[18px] font-semibold text-white">Para começar, preencha o questionário clicando no botão abaixo.</p>
+          <button type="button" onClick={onComecar} className="rc-btn-primary h-14 px-8 text-[15px]" data-testid="preconsulta-boas-vindas">
+            Preencher pré-consulta <ArrowRight className="w-4 h-4" />
+          </button>
+          <div className="space-y-3 text-[14px] text-gray-400 leading-relaxed pt-4 text-left sm:text-center">
+            <p>Reserve cerca de 10 minutos para responder com atenção e sinceridade.</p>
+            <p>Suas respostas são essenciais para entendermos quem você é e criarmos um plano que se adapte à sua rotina e às suas preferências.</p>
+            <p>Quanto mais detalhes você fornecer, melhor poderemos atender às suas necessidades e ajudá-lo(a) a alcançar seus objetivos.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+async function fotoReduzida(file, maxSize = 1280, quality = 0.78) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
         const ratio = Math.min(1, maxSize / Math.max(img.width, img.height));
-        const w = Math.round(img.width * ratio);
-        const h = Math.round(img.height * ratio);
         const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, w, h);
+        canvas.width = Math.round(img.width * ratio);
+        canvas.height = Math.round(img.height * ratio);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
         resolve(canvas.toDataURL("image/jpeg", quality));
       };
       img.onerror = reject;
@@ -335,544 +445,75 @@ async function fileToResizedBase64(file, maxSize = 1280, quality = 0.78) {
   });
 }
 
-// ========== Main page ==========
-export default function PreConsulta() {
-  const { token } = useParams();
-  const navigate = useNavigate();
-  const [step, setStep] = useState(0);
-  const [data, setData] = useState({});
-  const [submitting, setSubmitting] = useState(false);
-  const [lead, setLead] = useState(null);
-
-  useEffect(() => {
-    if (!token) return;
-    api
-      .get(`/public/lead/${token}`)
-      .then((r) => {
-        setLead(r.data);
-        const cached = localStorage.getItem(STORAGE_KEY(token));
-        if (cached) {
-          try { setData(JSON.parse(cached)); return; } catch (_) {}
-        }
-        // Pre-fill from atendimento data
-        const ld = r.data;
-        const prefill = {};
-        if (ld.nome)   prefill.nome       = ld.nome;
-        if (ld.email)  prefill.email      = ld.email;
-        if (ld.peso)   prefill.peso_atual = String(ld.peso);
-        if (ld.altura) prefill.estatura   = String(ld.altura);
-        if (ld.objetivo) prefill.objetivo = ld.objetivo;
-        const ad = ld.atendimento_dados || {};
-        if (ad.maior_dificuldade) prefill._maior_dificuldade = ad.maior_dificuldade;
-        if (Object.keys(prefill).length) { setData(prefill); persist(prefill); }
-      })
-      .catch(() => {
-        toast.error("Link inválido ou expirado");
-        navigate("/");
-      });
-  }, [token, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const persist = (d) => token && localStorage.setItem(STORAGE_KEY(token), JSON.stringify(d));
-
-  const idade = useMemo(() => calcAge(data.data_nascimento), [data.data_nascimento]);
-
-  if (!token) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-gray-300 bg-rc-ink">
-        <div className="text-center">
-          <p className="mb-4">Você precisa de um link de pré-consulta válido.</p>
-          <Link to="/" className="rc-btn-primary">
-            Voltar à página inicial
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const section = SECTIONS[step];
-  const total = SECTIONS.length;
-  const progress = ((step + 1) / total) * 100;
-
-  const update = (k, v) => {
-    const next = { ...data, [k]: v };
-    setData(next);
-    persist(next);
-  };
-
-  const canAdvance = () => {
-    return section.fields.every((f) => {
-      if (!f.req) return true;
-      const v = data[f.k];
-      if (f.type === "multi-check") return Array.isArray(v) && v.length > 0;
-      return v !== undefined && v !== "" && v !== null;
-    });
-  };
-
-  const submit = async () => {
-    setSubmitting(true);
-    try {
-      // Strip photos from JSON payload — too heavy. Send via separate route.
-      const { fotos, ...respostas } = data;
-      const idade = calcAge(data.data_nascimento);
-      if (idade !== "") respostas.idade = idade;
-
-      await api.post("/public/anamnesis", { token, respostas });
-      if (Array.isArray(fotos) && fotos.length > 0) {
-        try {
-          await api.post(`/public/lead/${token}/photos`, { fotos });
-        } catch (e) {
-          // Non-blocking: anamnesis is saved; photos optional
-          console.warn("Photo upload failed:", e);
-        }
-      }
-      localStorage.removeItem(STORAGE_KEY(token));
-      navigate(`/chat/${token}`);
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const Icon = section.icon || User;
-
-  return (
-    <div className="min-h-screen relative bg-rc-ink overflow-hidden">
-      <GlowOrb color="#0081FD" size={400} top="-10%" left="-5%" opacity={0.18} />
-      <GlowOrb color="#0066CC" size={350} top="50%" left="80%" opacity={0.12} />
-
-      <header className="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 pt-6 pb-4 flex items-center justify-between">
-        <Link to="/" aria-label="Voltar para a página inicial">
-          <Brand size="sm" />
-        </Link>
-        <div className="text-[10px] uppercase tracking-widest text-gray-500 font-bold" data-testid="autosave-indicator">
-          Progresso salvo
-        </div>
-      </header>
-
-      <main className="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 pb-20">
-        <div className="mb-6">
-          <div className="text-xs uppercase tracking-[0.2em] text-rc-blue font-bold mb-2">
-            Pré-consulta {lead?.nome ? `· Olá, ${lead.nome.split(" ")[0]}` : ""}
-          </div>
-          <h1 className="rc-h2">Vamos te conhecer</h1>
-          <p className="text-sm text-gray-400 mt-1">
-            Etapa {step + 1} de {total}: <span className="text-white">{section.title}</span>
-          </p>
-          <div className="mt-4 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-            <div
-              data-testid="progress-bar"
-              className="h-full bg-rc-blue transition-all duration-500"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          {/* Step pills */}
-          <div className="mt-4 flex gap-1 overflow-x-auto pb-2 -mx-1 px-1">
-            {SECTIONS.map((s, i) => {
-              const StepIcon = s.icon || User;
-              const isActive = i === step;
-              const isDone = i < step;
-              return (
-                <button
-                  key={s.id}
-                  data-testid={`step-pill-${s.id}`}
-                  onClick={() => setStep(i)}
-                  title={s.title}
-                  className={`flex-none w-9 h-9 rounded-full flex items-center justify-center border transition-all ${
-                    isActive
-                      ? "bg-rc-blue border-rc-blue text-black shadow-[0_4px_18px_rgba(0,129,253,0.5)]"
-                      : isDone
-                        ? "bg-rc-blue/15 border-rc-blue/40 text-rc-blue"
-                        : "bg-white/[0.03] border-white/[0.08] text-gray-500 hover:text-gray-300"
-                  }`}
-                >
-                  <StepIcon className="w-3.5 h-3.5" />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="rc-card p-6 sm:p-8 animate-fade-up" key={step}>
-          <div className="flex items-start gap-3 mb-2">
-            <div className="w-10 h-10 rounded-xl bg-rc-blue/10 border border-rc-blue/30 flex items-center justify-center flex-none">
-              <Icon className="w-5 h-5 text-rc-blue" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2 className="rc-h3">{section.title}</h2>
-              {section.helper && (
-                <p className="text-sm text-gray-400 mt-1 leading-relaxed">{section.helper}</p>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-6 space-y-6">
-            {section.fields.map((f) => (
-              <Field
-                key={f.k}
-                f={f}
-                value={data[f.k]}
-                onChange={(v) => update(f.k, v)}
-                derived={f.k === "data_nascimento" ? { idade } : null}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-6 flex items-center justify-between">
-          <button
-            data-testid="step-prev"
-            onClick={() => setStep((s) => Math.max(0, s - 1))}
-            disabled={step === 0}
-            className="rc-btn-secondary"
-          >
-            <ArrowLeft className="w-4 h-4" /> Voltar
-          </button>
-          {step < total - 1 ? (
-            <button
-              data-testid="step-next"
-              onClick={() =>
-                canAdvance() ? setStep((s) => s + 1) : toast.error("Preencha os campos obrigatórios")
-              }
-              className="rc-btn-primary"
-            >
-              Avançar <ArrowRight className="w-4 h-4" />
-            </button>
-          ) : (
-            <button data-testid="submit-anamnesis" onClick={submit} disabled={submitting} className="rc-btn-primary">
-              {submitting ? "Enviando..." : "Concluir anamnese"} <CheckCircle2 className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </main>
-    </div>
-  );
-}
-
-// ========== Field renderers ==========
-function Field({ f, value, onChange, derived }) {
-  const tid = `field-${f.k}`;
-  const required = !!f.req;
-  const Label = ({ children }) => (
-    <label className="rc-label flex items-center justify-between">
-      <span>
-        {f.l || children}
-        {required && <span className="text-red-400 ml-1">*</span>}
-      </span>
-    </label>
-  );
-
-  if (f.type === "radio") {
-    return (
-      <div>
-        <Label />
-        {f.helper && <p className="text-xs text-gray-500 mb-2">{f.helper}</p>}
-        <div className="space-y-2" data-testid={tid}>
-          {f.opts.map((opt) => {
-            const isSel = value === opt;
-            return (
-              <button
-                type="button"
-                key={opt}
-                onClick={() => onChange(opt)}
-                data-testid={`${tid}-opt-${opt.slice(0, 20)}`}
-                className={`w-full text-left px-4 py-3 rounded-lg border transition-all flex items-center gap-3 ${
-                  isSel
-                    ? "border-rc-blue bg-rc-blue/10 text-white shadow-[0_4px_18px_-6px_rgba(0,129,253,0.4)]"
-                    : "border-white/[0.08] bg-rc-surfaceAlt text-gray-300 hover:border-rc-blue/40"
-                }`}
-              >
-                <span
-                  className={`w-4 h-4 rounded-full border-2 flex-none flex items-center justify-center ${
-                    isSel ? "border-rc-blue" : "border-gray-500"
-                  }`}
-                >
-                  {isSel && <span className="w-1.5 h-1.5 rounded-full bg-rc-blue" />}
-                </span>
-                <span className="text-sm">{opt}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (f.type === "radio-card") {
-    return (
-      <div>
-        {f.l && <Label />}
-        <div className="grid sm:grid-cols-2 gap-2" data-testid={tid}>
-          {f.opts.map((o) => {
-            const isSel = value === o.v;
-            return (
-              <button
-                type="button"
-                key={o.v}
-                onClick={() => onChange(o.v)}
-                data-testid={`${tid}-opt-${o.v}`}
-                className={`text-left px-4 py-3 rounded-xl border transition-all ${
-                  isSel
-                    ? "border-rc-blue bg-rc-blue/10 shadow-[0_4px_18px_-6px_rgba(0,129,253,0.4)]"
-                    : "border-white/[0.08] bg-rc-surfaceAlt hover:border-rc-blue/40"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`w-4 h-4 rounded-full border-2 flex-none flex items-center justify-center ${
-                      isSel ? "border-rc-blue" : "border-gray-500"
-                    }`}
-                  >
-                    {isSel && <span className="w-1.5 h-1.5 rounded-full bg-rc-blue" />}
-                  </span>
-                  <span className={`font-bold uppercase tracking-wider text-sm ${isSel ? "text-rc-blue" : "text-white"}`}>
-                    {o.l}
-                  </span>
-                </div>
-                {o.desc && <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">{o.desc}</p>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (f.type === "multi-check") {
-    const arr = Array.isArray(value) ? value : [];
-    const toggle = (opt) => {
-      if (arr.includes(opt)) onChange(arr.filter((x) => x !== opt));
-      else onChange([...arr, opt]);
-    };
-    return (
-      <div>
-        {f.l && <Label />}
-        {f.helper && <p className="text-xs text-gray-500 mb-2">{f.helper}</p>}
-        <div className="grid sm:grid-cols-2 gap-2" data-testid={tid}>
-          {f.opts.map((opt) => {
-            const isSel = arr.includes(opt);
-            return (
-              <button
-                type="button"
-                key={opt}
-                onClick={() => toggle(opt)}
-                data-testid={`${tid}-opt-${opt.slice(0, 20)}`}
-                className={`text-left px-3.5 py-2.5 rounded-lg border transition-all flex items-center gap-2.5 ${
-                  isSel
-                    ? "border-rc-blue bg-rc-blue/10 text-white"
-                    : "border-white/[0.08] bg-rc-surfaceAlt text-gray-300 hover:border-rc-blue/40"
-                }`}
-              >
-                <span
-                  className={`w-4 h-4 rounded border flex-none flex items-center justify-center ${
-                    isSel ? "border-rc-blue bg-rc-blue" : "border-gray-500"
-                  }`}
-                >
-                  {isSel && <CheckCircle2 className="w-3 h-3 text-black" />}
-                </span>
-                <span className="text-sm">{opt}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (f.type === "yes-no") {
-    return (
-      <div>
-        <Label />
-        <div className="flex gap-2" data-testid={tid}>
-          {[
-            { v: "sim", l: "Sim" },
-            { v: "nao", l: "Não" },
-          ].map((o) => {
-            const isSel = value === o.v;
-            return (
-              <button
-                type="button"
-                key={o.v}
-                onClick={() => onChange(o.v)}
-                data-testid={`${tid}-${o.v}`}
-                className={`flex-1 px-4 py-3 rounded-lg border font-bold uppercase tracking-wider text-sm transition-all ${
-                  isSel
-                    ? o.v === "sim"
-                      ? "border-rc-blue bg-rc-blue text-black"
-                      : "border-white/40 bg-white/10 text-white"
-                    : "border-white/[0.08] bg-rc-surfaceAlt text-gray-400 hover:border-white/30"
-                }`}
-              >
-                {o.l}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (f.type === "slider") {
-    const v = typeof value === "number" ? value : 5;
-    return (
-      <div>
-        <Label />
-        <div className="rc-card p-4 mt-2">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs uppercase tracking-wider text-gray-400 font-bold">{f.min ?? 0}</span>
-            <span className="font-display text-3xl font-black text-rc-blue">{v}</span>
-            <span className="text-xs uppercase tracking-wider text-gray-400 font-bold">{f.max ?? 10}</span>
-          </div>
-          <input
-            data-testid={tid}
-            type="range"
-            min={f.min ?? 0}
-            max={f.max ?? 10}
-            step={1}
-            value={v}
-            onChange={(e) => onChange(Number(e.target.value))}
-            className="w-full accent-rc-blue cursor-pointer"
-            style={{
-              accentColor: "#0081FD",
-              background: `linear-gradient(to right, #0081FD ${(v / (f.max ?? 10)) * 100}%, rgba(255,255,255,0.08) ${
-                (v / (f.max ?? 10)) * 100
-              }%)`,
-            }}
-          />
-          <div className="flex justify-between mt-1 text-[10px] text-gray-500 font-bold uppercase tracking-wider">
-            <span>Muito baixo</span>
-            <span>Excelente</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (f.type === "textarea") {
-    return (
-      <div>
-        <Label />
-        {f.helper && <p className="text-xs text-gray-500 mb-2">{f.helper}</p>}
-        <textarea
-          data-testid={tid}
-          rows={f.rows ?? 4}
-          className="rc-input resize-none whitespace-pre-wrap"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={f.placeholder}
-        />
-      </div>
-    );
-  }
-
-  if (f.type === "date") {
-    return (
-      <div>
-        <Label />
-        <input
-          data-testid={tid}
-          type="date"
-          lang="pt-BR"
-          className="rc-input [color-scheme:dark]"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        />
-        {derived?.idade !== "" && derived?.idade !== undefined && (
-          <p className="text-xs text-rc-blue mt-1.5 font-bold uppercase tracking-wider">
-            Idade calculada: {derived.idade} anos
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  if (f.type === "photos") {
-    return <PhotoField value={value} onChange={onChange} testId={tid} />;
-  }
-
-  // text / email / number
-  return (
-    <div>
-      <Label />
-      <input
-        data-testid={tid}
-        type={f.type}
-        className="rc-input"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={f.placeholder}
-      />
-    </div>
-  );
-}
-
-function PhotoField({ value, onChange, testId }) {
-  const photos = Array.isArray(value) ? value : [];
+function Final({ token, nome, onAtendimento }) {
+  const [fotos, setFotos] = useState([]);
   const [busy, setBusy] = useState(false);
-
-  const handleFiles = async (filesList) => {
-    const files = Array.from(filesList || []).slice(0, 4 - photos.length);
-    if (files.length === 0) return;
+  const [enviadas, setEnviadas] = useState(false);
+  const adicionar = async (files) => {
+    const lista = Array.from(files || []).filter((f) => f.type.startsWith("image/")).slice(0, 4 - fotos.length);
+    if (!lista.length) return;
     setBusy(true);
     try {
-      const out = [];
-      for (const f of files) {
-        if (!f.type.startsWith("image/")) continue;
-        const dataUrl = await fileToResizedBase64(f, 1280, 0.78);
-        out.push({ name: f.name, data_url: dataUrl, size: dataUrl.length });
-      }
-      onChange([...photos, ...out].slice(0, 4));
-    } catch (e) {
-      toast.error("Erro ao processar imagem");
-    } finally {
-      setBusy(false);
-    }
+      const novas = [];
+      for (const f of lista) novas.push({ name: f.name, data_url: await fotoReduzida(f) });
+      setFotos((atual) => [...atual, ...novas].slice(0, 4));
+    } catch { toast.error("Não foi possível ler a imagem"); }
+    setBusy(false);
   };
-
-  const remove = (i) => onChange(photos.filter((_, idx) => idx !== i));
-
+  const enviarFotos = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/public/lead/${token}/photos`, { fotos: fotos.map((f) => ({ ...f, size: f.data_url.length })) });
+      setEnviadas(true);
+      toast.success("Fotos enviadas.");
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    setBusy(false);
+  };
   return (
-    <div>
-      <label className="rc-label">Suas fotos (até 4)</label>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid={testId}>
-        {photos.map((p, i) => (
-          <div key={i} className="relative group rounded-xl overflow-hidden border border-rc-blue/30 aspect-square bg-rc-surfaceAlt">
-            <img src={p.data_url} alt={p.name} className="w-full h-full object-cover" />
-            <button
-              type="button"
-              onClick={() => remove(i)}
-              data-testid={`${testId}-remove-${i}`}
-              className="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-black/70 backdrop-blur text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-              aria-label="Remover"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+    <Moldura>
+      <div className="mt-8 space-y-8 animate-fade-up">
+        <div className="space-y-3">
+          <CheckCircle2 className="w-9 h-9 text-rc-lime" />
+          <h1 className="rc-h2">{nome ? `Tudo certo, ${nome}!` : "Tudo certo!"}</h1>
+          <p className="text-gray-300 leading-relaxed">Suas respostas foram enviadas ao Rogério. Elas são a base do seu plano alimentar e do seu treino.</p>
+        </div>
+
+        <section className="rc-card p-5 sm:p-6 space-y-5">
+          <div>
+            <span className="inline-block rounded-full bg-rc-blue/15 text-rc-blue px-3 py-1 text-[12px] font-semibold uppercase tracking-[0.14em]">Segundo passo</span>
+            <h2 className="rc-h3 mt-3">Protocolo de fotos (opcional)</h2>
           </div>
-        ))}
-        {photos.length < 4 && (
-          <label
-            data-testid={`${testId}-upload`}
-            className="relative cursor-pointer rounded-xl border-2 border-dashed border-white/[0.12] hover:border-rc-blue/50 aspect-square flex flex-col items-center justify-center text-gray-400 hover:text-rc-blue transition-colors bg-rc-surfaceAlt/50"
-          >
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="absolute inset-0 opacity-0 cursor-pointer"
-              onChange={(e) => handleFiles(e.target.files)}
-            />
-            {busy ? (
-              <span className="w-5 h-5 rounded-full border-2 border-rc-blue border-t-transparent animate-spin" />
-            ) : (
-              <>
-                <Upload className="w-5 h-5" />
-                <span className="text-[10px] mt-1.5 uppercase tracking-wider font-bold">Adicionar</span>
-              </>
-            )}
-          </label>
-        )}
+          <ProtocoloFotos />
+          {!enviadas ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {fotos.map((f, i) => (
+                  <div key={i} className="relative rounded-xl overflow-hidden aspect-[3/4] bg-white/[0.03]">
+                    <img src={f.data_url} alt={f.name} className="w-full h-full object-cover" />
+                    <button type="button" aria-label="Remover foto" onClick={() => setFotos(fotos.filter((_, j) => j !== i))}
+                      className="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center"><X className="w-3.5 h-3.5" /></button>
+                  </div>
+                ))}
+                {fotos.length < 4 && (
+                  <label className="relative cursor-pointer rounded-xl border-2 border-dashed border-white/[0.14] hover:border-rc-blue/50 aspect-[3/4] flex flex-col items-center justify-center text-gray-400">
+                    <input type="file" accept="image/*" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => adicionar(e.target.files)} />
+                    {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Upload className="w-5 h-5" /><span className="text-[11px] mt-1.5">Adicionar</span></>}
+                  </label>
+                )}
+              </div>
+              {fotos.length > 0 && (
+                <button type="button" onClick={enviarFotos} disabled={busy} className="rc-btn-primary">Enviar fotos</button>
+              )}
+            </div>
+          ) : (
+            <p className="text-rc-lime text-sm font-medium">Fotos recebidas. Obrigado!</p>
+          )}
+        </section>
+
+        <button type="button" onClick={onAtendimento} className="rc-btn-secondary">
+          Ir para o atendimento <ArrowRight className="w-4 h-4" />
+        </button>
       </div>
-      <p className="text-xs text-gray-500 mt-2">Sugestão: frente, lateral, costas. Imagens são redimensionadas e enviadas com segurança.</p>
-    </div>
+    </Moldura>
   );
 }

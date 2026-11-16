@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, Plus, Save, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import PageHeader from "@/components/evonut/PageHeader";
@@ -7,6 +7,7 @@ import { api, formatApiError } from "@/lib/evo-api";
 import useDietaConfig from "@/components/evonut/dieta/useDietaConfig";
 import { BlocoAlimentos, LARGURA_MIN_EDITOR } from "@/components/evonut/dieta/EditorDieta";
 import { blocoDoSalvo, itensParaSalvar, nf0, totaisBloco } from "@/components/evonut/dieta/calculos";
+import { SEM_CATEGORIA, agruparPorCategoria } from "@/components/evonut/dieta/ModelosDietaModal";
 
 const SECOES = [
   ["geral", "Configurações da dieta"],
@@ -20,7 +21,7 @@ const SECOES = [
   ["listas", "Listas de substituição"],
 ];
 
-const TABELAS = [["TACO", "TACO"], ["IBGE", "IBGE"], ["TBCA", "TBCA"], ["Tucunduva", "Tucunduva"], ["Marcas", "Marcas comerciais"], ["Meus", "Meus alimentos"]];
+const TABELAS = [["TACO", "TACO"], ["IBGE", "IBGE"], ["TBCA", "TBCA"], ["Tucunduva", "Tucunduva"], ["Meus", "Meus alimentos"]];
 
 const erro = (e) => toast.error(formatApiError(e.response?.data?.detail));
 
@@ -239,29 +240,63 @@ function ItensSalvos({ rota, rotuloNovo, comObservacao, ajuda, config }) {
   );
 }
 
-function ModelosDieta() {
+function ModelosDieta({ config, salvar }) {
   const [itens, setItens] = useState(null);
+  const [nomes, setNomes] = useState({});
+  const categorias = config.categorias_modelos || [];
   const carregar = useCallback(() => api.get("/plano-templates").then((r) => setItens(r.data || [])).catch(() => setItens([])), []);
   useEffect(() => { carregar(); }, [carregar]);
+  const editar = async (t, campos) => {
+    try {
+      await api.patch(`/plano-templates/${t.id}`, campos);
+      setItens((lista) => lista.map((m) => (m.id === t.id ? { ...m, ...campos, categoria: "categoria" in campos ? campos.categoria || null : m.categoria } : m)));
+      toast.success("Modelo atualizado.");
+    } catch (e) { erro(e); }
+  };
+  const renomear = (t) => {
+    const nome = (nomes[t.id] ?? t.nome).trim();
+    if (nome && nome !== t.nome) editar(t, { nome });
+  };
+  const duplicar = async (t) => {
+    try { await api.post(`/plano-templates/${t.id}/duplicar`); toast.success("Modelo duplicado."); carregar(); } catch (e) { erro(e); }
+  };
   const apagar = async (t) => {
-    if (!window.confirm(`Apagar o modelo "${t.nome}"?`)) return;
+    if (!window.confirm(`Excluir o modelo "${t.nome}"?`)) return;
     try { await api.delete(`/plano-templates/${t.id}`); carregar(); } catch (e) { erro(e); }
   };
+  const grupos = agruparPorCategoria(itens || [], categorias).filter(([, l]) => l.length);
   return (
-    <div>
-      <p className="text-[13px] text-gray-400 mb-4 max-w-[70ch]">Para criar um modelo, monte a dieta em um paciente e use a estrela “Salvar como modelo”. Para usar, clique em Importar na dieta de qualquer paciente.</p>
-      {!itens && <div className="py-8 flex justify-center text-gray-400"><Loader2 className="w-4 h-4 animate-spin" /></div>}
-      {itens?.length === 0 && <p className="py-8 text-center text-[13px] text-gray-500">Nenhum modelo de dieta salvo.</p>}
-      <div className="divide-y divide-white/[0.05]">
-        {(itens || []).map((t) => (
-          <div key={t.id} className="flex items-center gap-3 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-[14px] text-white truncate">{t.nome}</div>
-              <div className="text-[12px] text-gray-500">{(t.refeicoes || []).length} refeições{t.objetivo ? ` · ${t.objetivo}` : ""}</div>
-            </div>
-            <button type="button" onClick={() => apagar(t)} className="rc-btn-ghost p-2 hover:text-rc-coral" aria-label={`Apagar ${t.nome}`}><Trash2 className="w-4 h-4" /></button>
-          </div>
-        ))}
+    <div className="space-y-8">
+      <ListaTextos campo="categorias_modelos" titulo="Categorias de modelo" config={config} salvar={salvar}
+        ajuda="Categorias que aparecem ao salvar um modelo e na lista Modelos de dieta da prescrição (ex.: Perda de gordura, Ganho de massa muscular)." />
+      <div>
+        <h3 className="text-[15px] font-semibold text-white mb-1">Modelos salvos</h3>
+        <p className="text-[13px] text-gray-400 mb-4 max-w-[70ch]">Para criar, monte a dieta em um paciente e use “Salvar modelo”. Para usar, clique em Modelos na dieta de qualquer paciente.</p>
+        {!itens && <div className="py-8 flex justify-center text-gray-400"><Loader2 className="w-4 h-4 animate-spin" /></div>}
+        {itens?.length === 0 && <p className="py-8 text-center text-[13px] text-gray-500">Nenhum modelo de dieta salvo.</p>}
+        <div className="space-y-5">
+          {grupos.map(([categoria, lista]) => (
+            <section key={categoria}>
+              <h4 className="text-[11px] uppercase tracking-[0.14em] text-gray-500 mb-1">{categoria} · {lista.length}</h4>
+              <div className="divide-y divide-white/[0.05]">
+                {lista.map((t) => (
+                  <div key={t.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                    <input className="rc-input h-9 flex-1 min-w-[200px]" value={nomes[t.id] ?? t.nome} aria-label="Nome do modelo"
+                      onChange={(e) => setNomes((n) => ({ ...n, [t.id]: e.target.value }))} onBlur={() => renomear(t)}
+                      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+                    <select className="rc-input h-9 w-auto" value={t.categoria || ""} aria-label="Categoria" onChange={(e) => editar(t, { categoria: e.target.value })}>
+                      {[...new Set([...categorias, ...(t.categoria && !categorias.includes(t.categoria) ? [t.categoria] : [])])].map((c) => <option key={c} value={c}>{c}</option>)}
+                      <option value="">{SEM_CATEGORIA}</option>
+                    </select>
+                    <span className="text-[12px] text-gray-500 tabular w-[150px]">{t.resumo?.kcal ?? "—"} kcal · {(t.refeicoes || []).length} refeições</span>
+                    <button type="button" onClick={() => duplicar(t)} className="rc-btn-ghost p-2" aria-label={`Duplicar ${t.nome}`} title="Duplicar"><Copy className="w-4 h-4" /></button>
+                    <button type="button" onClick={() => apagar(t)} className="rc-btn-ghost p-2 hover:text-rc-coral" aria-label={`Excluir ${t.nome}`} title="Excluir"><Trash2 className="w-4 h-4" /></button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -332,7 +367,7 @@ export default function ConfiguracoesDieta() {
             <ItensSalvos rota="/dieta/modelos-refeicao" rotuloNovo="Novo modelo de refeição" comObservacao config={config}
               ajuda="Refeições prontas para carregar na dieta pelo ícone de livro da refeição. Também dá para criar pela estrela de uma refeição já montada." />
           )}
-          {secao === "modelos_dieta" && <ModelosDieta />}
+          {secao === "modelos_dieta" && <ModelosDieta config={config} salvar={salvar} />}
           {secao === "listas" && (
             <ItensSalvos rota="/dieta/listas-substituicao" rotuloNovo="Nova lista" config={config}
               ajuda="Grupos de substituição (Carnes e ovos, Frutas…) para adicionar na aba Lista de substituição de qualquer dieta." />
