@@ -158,3 +158,33 @@ def calcular(protocolo: str, sexo: str, idade: Optional[float], peso: Optional[f
 def lista_publica() -> list:
     return [{"id": k, "nome": v["nome"], "faixa": v["faixa"], "dobras": v["dobras"], "perimetros": v.get("perimetros", {"M": [], "F": []})}
             for k, v in PROTOCOLOS.items()]
+
+
+# ── Cor das dobras (doc "Critérios de cor das dobras cutâneas", 02/11/2026) — igual a frontend dobrasCores.js ──
+DOBRAS_ORDEM = [("bicipital", "Bicipital"), ("abdominal", "Abdominal"), ("tricipital", "Tricipital"),
+                ("suprailiaca", "Suprailíaca"), ("axilar", "Axilar média"), ("subescapular", "Subescapular"),
+                ("peitoral", "Peitoral"), ("coxa", "Coxa"), ("panturrilha", "Panturrilha")]
+
+# [mínimo, máximo] em mm: mínimo = máximo Pré-contest, máximo = máximo Off-season. Total feminino limitado a 86.
+FAIXAS_ATLETA = {
+    "M": {"tricipital": (3, 6), "peitoral": (3, 6), "axilar": (4, 8), "subescapular": (8, 12), "abdominal": (5, 12),
+          "suprailiaca": (4, 10), "coxa": (5, 10), "total": (32, 64)},
+    "F": {"tricipital": (10, 14), "peitoral": (3, 6), "axilar": (7, 10), "subescapular": (9, 14), "abdominal": (6, 14),
+          "suprailiaca": (6, 12), "coxa": (14, 20), "total": (55, 86)},
+}
+
+
+def cor_dobra(atleta: bool, sexo: Optional[str], chave: str, valor: Optional[float], anterior: Optional[float] = None) -> Optional[str]:
+    """'vermelho' | 'branco' | 'verde' | 'cinza' | None (sem cor)."""
+    if valor is None:
+        return None
+    if atleta:
+        faixa = FAIXAS_ATLETA.get(sexo or "", {}).get(chave)
+        if not faixa:
+            return None
+        return "vermelho" if valor > faixa[1] else "verde" if valor < faixa[0] else "branco"
+    if anterior is None:
+        return "cinza"
+    d = valor - anterior
+    variacao = math.copysign(round(abs(d) * 10 + 1e-9) / 10, d)  # 1 casa, simétrico
+    return "vermelho" if variacao > 0.5 else "verde" if variacao < -0.5 else "branco"

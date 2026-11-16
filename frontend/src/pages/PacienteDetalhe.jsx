@@ -15,6 +15,7 @@ import PrescricaoDietetica from "@/components/evonut/PrescricaoDietetica";
 import AnalisesDieteticas from "@/components/evonut/AnalisesDieteticas";
 import MarkdownView from "@/components/evonut/MarkdownView";
 import AnamneseBlocos from "@/components/evonut/AnamneseBlocos";
+import { abrirAnexo } from "@/lib/anamnese";
 
 // Ordem das abas definida pelo Rogério (print de referência).
 const TABS = [
@@ -2607,7 +2608,10 @@ function ExamesPDF({ d, reload }) {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold text-sm truncate">{ex.file_name}</div>
-                      <div className="text-[11px] text-gray-500 mt-0.5">{new Date(ex.created_at).toLocaleString("pt-BR")}</div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">
+                        {new Date(ex.created_at).toLocaleString("pt-BR")}
+                        {ex.origem === "pre_consulta" && <span className="ml-1.5 text-rc-blue">· enviado pelo paciente</span>}
+                      </div>
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {(ex.markers || []).slice(0, 3).map((m, i) => (
@@ -2637,9 +2641,17 @@ function ExamesPDF({ d, reload }) {
                 <div className="text-xs text-gray-500">{new Date(open.created_at).toLocaleString("pt-BR")}</div>
                 <h3 className="evo-h3 mt-1 truncate">{open.file_name}</h3>
               </div>
-              <button data-testid={`delete-exam-${open.id}`} onClick={() => remove(open.id)} className="evo-btn-ghost text-evo-coral">
-                <Trash2 className="w-4 h-4" /> Remover
-              </button>
+              <div className="flex items-center gap-1">
+                {open.anexo_id && (
+                  <button type="button" data-testid={`abrir-exame-${open.id}`} className="evo-btn-ghost"
+                    onClick={() => abrirAnexo(d.patient.id, open.anexo_id).catch(() => toast.error("Não foi possível abrir o arquivo."))}>
+                    <FileText className="w-4 h-4" /> Abrir arquivo
+                  </button>
+                )}
+                <button data-testid={`delete-exam-${open.id}`} onClick={() => remove(open.id)} className="evo-btn-ghost text-evo-coral">
+                  <Trash2 className="w-4 h-4" /> Remover
+                </button>
+              </div>
             </div>
 
             {open.resumo && (

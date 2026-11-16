@@ -6076,23 +6076,129 @@ tr:nth-child(even) td{{background:#f8fafc;}}
 
 @api.get("/patients/{pid}/relatorios/antropometria")
 async def relatorio_antropometria(pid: str, user=Depends(require_nutritionist)):
+    """Todas as avaliações (sem limite), em ordem cronológica: resumo, dobras com as cores do doc
+    "Critérios de cor das dobras cutâneas" e perímetros. Tabelas largas são quebradas em grupos de 6 avaliações."""
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
         raise HTTPException(404, "Paciente não encontrado")
     nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
-    evals = [e async for e in db.evaluations.find({"paciente_id": pid}, {"_id": 0}).sort("data", -1).limit(5)]
-    rows = ""
-    for e in evals:
-        r = e.get("resultado", {})
-        rows += (f"<tr><td>{str(e.get('data',''))[:10]}</td>"
-                 f"<td>{r.get('peso_kg', e.get('peso','—'))}</td>"
-                 f"<td>{r.get('imc','—')}</td><td>{r.get('imc_classificacao','—')}</td>"
-                 f"<td>{r.get('pct_gordura','—')}</td>"
-                 f"<td>{r.get('tmb','—')}</td><td>{r.get('get_kcal','—')}</td></tr>")
-    conteudo = f"""<div class="sec"><div class="sec-title">Avaliações Antropométricas (últimas 5)</div>
-      <table><tr><th>Data</th><th>Peso (kg)</th><th>IMC</th><th>Classificação</th><th>%Gordura</th><th>TMB (kcal)</th><th>GET (kcal)</th></tr>
-      {rows or '<tr><td colspan="7" style="text-align:center;color:#888">Nenhuma avaliação registrada</td></tr>'}
-      </table></div>"""
+    evals = await db.evaluations.find({"paciente_id": pid}, {"_id": 0}).to_list(None)
+    evals.sort(key=lambda e: str(e.get("data_avaliacao") or e.get("created_at") or ""))
+    for i, e in enumerate(evals):
+        e["_numero"] = i + 1
+    esc = _pdf_escape
+
+    def num(v, casas=1):
+        f = _coerce_float(v)
+        return "—" if f is None else f"{f:.{casas}f}".replace(".", ",")
+
+    def data(e):
+        return _pdf_fmt_date(e.get("data_avaliacao") or e.get("created_at")) or "—"
+
+    if not evals:
+        conteudo = '<p style="color:#888">Nenhuma avaliação registrada.</p>'
+    else:
+        # 1) resumo
+        linhas = ""
+        for e in evals:
+            c = e.get("composicao") or {}
+            proto = protd.PROTOCOLOS.get(c.get("protocolo_dobras") or e.get("protocolo_dobras") or "", {}).get("nome", "")
+            linhas += (f"<tr><td>{e['_numero']}ª</td><td>{data(e)}</td><td>{num(e.get('peso'))}</td>"
+                       f"<td>{num(c.get('imc'))}{' · ' + esc(c.get('imc_classificacao')) if c.get('imc_classificacao') else ''}</td>"
+                       f"<td>{num(c.get('pct_gordura'))}{'<br/><span style=\"font-size:8pt;color:#777\">' + esc(proto) + '</span>' if proto else ''}</td>"
+                       f"<td>{num(c.get('massa_magra'))}</td><td>{num(c.get('get_kcal'), 0)}</td></tr>")
+        conteudo = (f'<div class="sec"><div class="sec-title">Avaliações ({len(evals)})</div><table>'
+                    "<tr><th>Nº</th><th>Data</th><th>Peso (kg)</th><th>IMC</th><th>% Gordura</th><th>Massa magra (kg)</th><th>GET (kcal)</th></tr>"
+                    f"{linhas}</table></div>")
+
+        # 2) dobras: protocolo da avaliação mais recente; cores pelo critério do doc (versão para impressão)
+        ultimo = evals[-1]
+        protocolo = (ultimo.get("composicao") or {}).get("protocolo_dobras") or ultimo.get("protocolo_dobras") or "pollock7"
+        sexo = p.get("sexo") if p.get("sexo") in ("M", "F") else None
+        atleta = bool(p.get("atleta"))
+        do_protocolo = protd.PROTOCOLOS.get(protocolo, {}).get("dobras", {}).get(sexo or "F", [])
+        cores = {"vermelho": "#DC2626", "verde": "#16A34A", "branco": "#111827", "cinza": "#9CA3AF"}
+        valor = lambda e, k: _coerce_float((e.get("dobras") or {}).get(k) if k != "tricipital" else
+                                           ((e.get("dobras") or {}).get("tricipital") or (e.get("dobras") or {}).get("triceps")))
+
+        def total(e):
+            vals = [valor(e, k) for k in do_protocolo]
+            return round(sum(vals), 1) if do_protocolo and all(v is not None for v in vals) else None
+
+        def celula(v, cor):
+            if v is None:
+                return "<td style=\"text-align:center\"></td>"
+            estilo = f"color:{cores[cor]};font-weight:bold" if cor else "color:#9CA3AF"
+            return f'<td style="text-align:center;{estilo}">{num(v)}</td>'
+
+        tem_dobras = any(valor(e, k) is not None for e in evals for k, _ in protd.DOBRAS_ORDEM)
+        if tem_dobras:
+            perfil = f"{ {'M': 'Homem', 'F': 'Mulher'}.get(sexo, 'Sexo não informado') } · {'Atleta' if atleta else 'Não atleta'} · " \
+                     f"{esc(protd.PROTOCOLOS.get(protocolo, {}).get('nome', protocolo))}"
+            legenda = ("<b style='color:#DC2626'>Vermelho</b> acima da faixa · <b>Preto</b> dentro da faixa · "
+                       "<b style='color:#16A34A'>Verde</b> abaixo da faixa (perfil atleta)") if atleta else \
+                      ("<b style='color:#DC2626'>Vermelho</b> aumentou · <b>Preto</b> igual (até 0,5 mm) · "
+                       "<b style='color:#16A34A'>Verde</b> diminuiu · <b style='color:#9CA3AF'>Cinza</b> 1ª avaliação")
+            blocos = ""
+            for ini_g in range(0, len(evals), 6):
+                grupo = evals[ini_g:ini_g + 6]
+                cab = "".join(f'<th style="text-align:center">{e["_numero"]}ª<br/><span style="font-weight:normal">{data(e)}</span></th>' for e in grupo)
+                corpo = ""
+                for chave, rotulo in protd.DOBRAS_ORDEM:
+                    if not any(valor(e, chave) is not None for e in evals):
+                        continue
+                    no_prot = chave in do_protocolo
+                    nome = f'<b style="color:#2563EB">{rotulo}</b>' if no_prot else f'<span style="color:#9CA3AF">{rotulo}</span>'
+                    tds = ""
+                    for e in grupo:
+                        v = valor(e, chave)
+                        ant = evals[e["_numero"] - 2] if e["_numero"] > 1 else None
+                        cor = protd.cor_dobra(atleta, sexo, chave, v, valor(ant, chave) if ant else None) if no_prot else None
+                        tds += celula(v, cor) if no_prot else (f'<td style="text-align:center;color:#9CA3AF">{num(v)}</td>' if v is not None else "<td></td>")
+                    corpo += f"<tr><td>{nome}</td>{tds}</tr>"
+                tds = ""
+                for e in grupo:
+                    t = total(e)
+                    ant = evals[e["_numero"] - 2] if e["_numero"] > 1 else None
+                    if t is None:
+                        cor = None
+                    elif atleta:
+                        cor = protd.cor_dobra(True, sexo, "total", t) if protocolo == "pollock7" else None
+                    else:
+                        cor = "cinza" if not ant else (protd.cor_dobra(False, sexo, "total", t, total(ant)) if total(ant) is not None else None)
+                    tds += celula(t, cor) if t is not None else "<td></td>"
+                corpo += f"<tr><td><b>Total</b></td>{tds}</tr>"
+                blocos += f"<table><tr><th>Dobras (mm)</th>{cab}</tr>{corpo}</table>"
+            conteudo += (f'<div class="sec"><div class="sec-title">Dobras cutâneas</div>'
+                         f'<p style="font-size:9pt;color:#555;margin:0 0 6px">{perfil}</p>{blocos}'
+                         f'<p style="font-size:8.5pt;color:#555"><b style="color:#2563EB">Nome azul</b> entra no protocolo · {legenda}</p></div>')
+
+        # 3) perímetros medidos
+        rot_per = {"braco_relaxado_d": "Braço relaxado direito", "braco_relaxado_e": "Braço relaxado esquerdo",
+                   "braco_contraido_d": "Braço contraído direito", "braco_contraido_e": "Braço contraído esquerdo",
+                   "antebraco_d": "Antebraço direito", "antebraco_e": "Antebraço esquerdo", "punho_d": "Punho direito",
+                   "punho_e": "Punho esquerdo", "pescoco": "Pescoço", "ombro": "Ombro", "torax": "Tórax", "cintura": "Cintura",
+                   "abdomen": "Abdômen", "quadril": "Quadril", "panturrilha_d": "Panturrilha direita",
+                   "panturrilha_e": "Panturrilha esquerda", "coxa_d": "Coxa direita", "coxa_e": "Coxa esquerda",
+                   "coxa_proximal_d": "Coxa proximal direita", "coxa_proximal_e": "Coxa proximal esquerda"}
+        chaves = []
+        for e in evals:
+            for k, v in (e.get("perimetria") or {}).items():
+                if _coerce_float(v) is not None and k not in chaves:
+                    chaves.append(k)
+        chaves.sort(key=lambda k: list(rot_per).index(k) if k in rot_per else 99)
+        if chaves:
+            blocos = ""
+            for ini_g in range(0, len(evals), 6):
+                grupo = evals[ini_g:ini_g + 6]
+                cab = "".join(f'<th style="text-align:center">{e["_numero"]}ª<br/><span style="font-weight:normal">{data(e)}</span></th>' for e in grupo)
+                corpo = "".join(
+                    f"<tr><td>{esc(rot_per.get(k, k))}</td>" + "".join(
+                        f'<td style="text-align:center">{num((e.get("perimetria") or {}).get(k)) if _coerce_float((e.get("perimetria") or {}).get(k)) is not None else ""}</td>'
+                        for e in grupo) + "</tr>" for k in chaves)
+                blocos += f"<table><tr><th>Perímetros (cm)</th>{cab}</tr>{corpo}</table>"
+            conteudo += f'<div class="sec"><div class="sec-title">Perímetros</div>{blocos}</div>'
+
     html = _pdf_html_base("Relatório Antropométrico", p, nutri, conteudo)
     pdf_bytes = HTML(string=html).write_pdf()
     fname = f"antropometria_{p.get('nome','p').replace(' ','_')}_{datetime.now(TZ_BR).strftime('%Y%m%d')}.pdf"
