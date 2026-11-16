@@ -9,6 +9,7 @@ import MacroRings from "@/components/evonut/MacroRings";
 import { API, api } from "@/lib/evo-api";
 import { Reveal, SectionLabel, CheckItem } from "@/components/landing/LandingParts";
 import { Phone, WorkoutScreen, SetScreen, ProgressScreen, NutritionScreen } from "@/components/landing/AppScreens";
+import { POSES } from "@/components/evonut/ProtocoloFotos";
 
 const WHATSAPP = "5511983692815";
 const waLink = (msg) => `https://wa.me/${WHATSAPP}?text=${encodeURIComponent(msg)}`;
@@ -114,7 +115,7 @@ function Nav({ onStart }) {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  const links = [["#app", "O app"], ["#metodo", "Método"], ["#resultados", "Resultados"], ["#planos", "Planos"], ["#duvidas", "Dúvidas"]];
+  const links = [["#app", "O app"], ["#metodo", "Método"], ["#resultados", "Resultados"], ["#provas-de-vida", "Provas de vida"], ["#planos", "Planos"], ["#duvidas", "Dúvidas"]];
   return (
     <header className={`fixed top-0 inset-x-0 z-50 transition-colors duration-300 ${scrolled || open ? "bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]" : "border-b border-transparent"}`}>
       <div className="max-w-[1240px] mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
@@ -452,6 +453,41 @@ function Depoimentos({ itens }) {
   );
 }
 
+/** Provas de vida: o padrão de fotos que todo aluno segue para registrar a evolução (fotos do protocolo do Rogério). */
+function ProvasDeVida() {
+  return (
+    <section id="provas-de-vida" className="py-24 sm:py-32 scroll-mt-16" data-testid="landing-provas-de-vida">
+      <div className="max-w-[1240px] mx-auto px-5 sm:px-8">
+        <Reveal className="max-w-3xl">
+          <SectionLabel n="06">Provas de vida</SectionLabel>
+          <h2 className="rc-display text-[clamp(44px,5.6vw,80px)] text-white mt-6">Evolução registrada <span className="text-rc-lime">foto a foto.</span></h2>
+          <p className="text-[17px] text-gray-300 mt-6 leading-relaxed max-w-[60ch]">
+            Toda semana você envia seu peso e as fotos no mesmo padrão: frente, costas e os dois perfis, no mesmo lugar e com a mesma
+            luz. É assim que comparamos sua evolução de verdade e ajustamos o plano sem achismo.
+          </p>
+        </Reveal>
+        {[["homem", "Homens"], ["mulher", "Mulheres"]].map(([g, rotulo], gi) => (
+          <div key={g} className="mt-12">
+            <h3 className="text-[13px] uppercase tracking-[0.16em] text-gray-400 mb-4">{rotulo}</h3>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              {POSES.map(([k, l], i) => (
+                <Reveal key={k} delay={(gi * 4 + i) * 40}>
+                  <figure className="rounded-2xl overflow-hidden bg-rc-surface shadow-[var(--shadow-card)]">
+                    <img src={`/protocolo-fotos/${g}-${k}.jpg`} alt={`${rotulo === "Homens" ? "Homem" : "Mulher"}, foto de ${l.toLowerCase()}`} loading="lazy"
+                      className="w-full aspect-[3/4] object-cover" />
+                    <figcaption className="px-4 py-3 text-[13px] text-gray-400">{l}</figcaption>
+                  </figure>
+                </Reveal>
+              ))}
+            </div>
+          </div>
+        ))}
+        <p className="text-[12.5px] text-gray-500 mt-6">Fotos sempre de corpo inteiro, câmera na altura do abdômen e, de preferência, luz natural.</p>
+      </div>
+    </section>
+  );
+}
+
 function Sobre({ onStart }) {
   const [foto, setFoto] = useState(true);
   return (
@@ -476,7 +512,7 @@ function Sobre({ onStart }) {
           </div>
         </Reveal>
         <Reveal>
-          <SectionLabel n="06">Quem vai te acompanhar</SectionLabel>
+          <SectionLabel n="07">Quem vai te acompanhar</SectionLabel>
           <h2 className="rc-display text-[clamp(44px,5.6vw,80px)] text-white mt-6">Treino e nutrição em <span className="text-rc-blue">um só</span> profissional.</h2>
           <div className="space-y-4 text-gray-300 text-[16.5px] leading-relaxed mt-7 max-w-[54ch]">
             <p>Sou treinador e nutricionista, especializado em treinamento de força e nutrição esportiva. Ajudo pessoas a conquistar um corpo forte e definido sem abrir mão da vida social.</p>
@@ -501,7 +537,7 @@ function Planos({ onStart }) {
       <div className="absolute left-1/2 top-1/3 -translate-x-1/2 w-[900px] h-[600px] bg-[radial-gradient(closest-side,rgba(195,245,60,0.07),transparent)] pointer-events-none" />
       <div className="relative max-w-[1240px] mx-auto px-5 sm:px-8">
         <Reveal className="text-center max-w-3xl mx-auto">
-          <div className="flex justify-center"><SectionLabel n="07">Planos</SectionLabel></div>
+          <div className="flex justify-center"><SectionLabel n="08">Planos</SectionLabel></div>
           <h2 className="rc-display text-[clamp(44px,5.6vw,80px)] text-white mt-6">Escolha o seu <span className="text-rc-lime">plano.</span></h2>
           <p className="text-gray-400 text-[17px] mt-5">Treino, nutrição ou os dois integrados. Mesmo método, 2 meses de acompanhamento com o Rogério.</p>
         </Reveal>
@@ -580,7 +616,7 @@ function Duvidas() {
     <section id="duvidas" className="pb-24 sm:pb-32 scroll-mt-20">
       <div className="max-w-[1240px] mx-auto px-5 sm:px-8 grid lg:grid-cols-[0.8fr_1.2fr] gap-12">
         <Reveal>
-          <SectionLabel n="08">Dúvidas</SectionLabel>
+          <SectionLabel n="09">Dúvidas</SectionLabel>
           <h2 className="rc-display text-[clamp(44px,5.6vw,80px)] text-white mt-6">Antes de <span className="text-rc-blue">começar.</span></h2>
           <a href={waLink("Olá, Rogério! Vim pelo site e tenho uma dúvida sobre a consultoria.")} target="_blank" rel="noopener noreferrer" className="rc-btn-secondary h-12 px-5 mt-8">
             <MessageCircle className="w-4 h-4" /> Perguntar no WhatsApp
@@ -663,6 +699,7 @@ export default function Landing() {
         <Metodo />
         <Entregas />
         <Depoimentos itens={depoimentos} />
+        <ProvasDeVida />
         <Sobre onStart={onStart} />
         <Planos onStart={onStart} />
         <Garantia onStart={onStart} />
