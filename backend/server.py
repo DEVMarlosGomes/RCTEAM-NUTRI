@@ -3253,6 +3253,52 @@ async def list_nudges(pid: str, user=Depends(require_nutritionist)):
     return out
 
 
+@api.get("/acompanhamento/lembretes")
+async def acompanhamento_lembretes(user=Depends(require_nutritionist)):
+    """Central de lembretes de todos os pacientes: enviados, respostas e quem está sem responder."""
+    nudges = await db.patient_nudges.find({"nutricionista_id": user["id"]}, {"_id": 0}).to_list(2000)
+    pids = list({n["patient_id"] for n in nudges})
+    pacs = {p["id"]: p for p in await db.patients.find({"id": {"$in": pids}}, {"_id": 0, "id": 1, "nome": 1, "telefone": 1}).to_list(None)}
+    ultimas = {}
+    async for m in db.patient_messages.aggregate([
+        {"$match": {"patient_id": {"$in": pids}, "role": "user"}},
+        {"$group": {"_id": "$patient_id", "ultima": {"$max": "$created_at"}}},
+    ]):
+        ultimas[m["_id"]] = m["ultima"]
+    por_paciente = {}
+    for n in nudges:
+        pid = n["patient_id"]
+        if pid not in pacs:
+            continue
+        item = por_paciente.setdefault(pid, {"paciente_id": pid, "nome": pacs[pid].get("nome"), "telefone": pacs[pid].get("telefone"),
+                                              "ativos": 0, "ultimo_envio": None, "ultima_resposta": ultimas.get(pid), "lembretes": []})
+        if n.get("active"):
+            item["ativos"] += 1
+        if n.get("last_fired_at") and str(n["last_fired_at"]) > str(item["ultimo_envio"] or ""):
+            item["ultimo_envio"] = n["last_fired_at"]
+        item["lembretes"].append({"id": n["id"], "label": n.get("label"), "active": n.get("active"), "last_fired_at": n.get("last_fired_at"), "origem": n.get("origem")})
+    out = list(por_paciente.values())
+    for it in out:
+        it["sem_resposta"] = bool(it["ultimo_envio"] and not (it["ultima_resposta"] and str(it["ultima_resposta"]) > str(it["ultimo_envio"])))
+    out.sort(key=lambda x: (not x["sem_resposta"], str(x["ultimo_envio"] or "")), reverse=False)
+    return out
+
+
+@api.get("/acompanhamento/formularios")
+async def acompanhamento_formularios(user=Depends(require_nutritionist)):
+    """Pré-consultas e retornos: enviados, respondidos e pendentes (com reenviar na tela)."""
+    pacs = await db.patients.find({"nutricionista_id": user["id"]}, {"_id": 0, "id": 1, "nome": 1, "telefone": 1, "formulario": 1,
+                                                                     "preconsulta_enviada_em": 1, "status_funil": 1, "lead_token": 1, "created_at": 1}).to_list(None)
+    out = []
+    for p in pacs:
+        f = _estado_formulario(p)
+        out.append({"paciente_id": p["id"], "nome": p.get("nome"), "telefone": p.get("telefone"), "lead_token": p.get("lead_token"),
+                    "tipo": f.get("tipo"), "estado": f.get("estado"), "enviado_em": f.get("enviado_em") or p.get("created_at"),
+                    "respondido_em": f.get("respondido_em"), "status_funil": p.get("status_funil")})
+    out.sort(key=lambda x: (x["estado"] == "respondido", str(x["respondido_em"] or x["enviado_em"] or "")), reverse=False)
+    return out
+
+
 class LembretesRefeicaoIn(BaseModel):
     ativo: bool = True
     minutos_antes: int = Field(default=15, ge=0, le=120)

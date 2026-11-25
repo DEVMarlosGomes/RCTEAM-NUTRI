@@ -49,6 +49,24 @@ function FoodModal({ food, onClose, onSaved }) {
   </form></div>;
 }
 
+/** Medidas caseiras dentro de cada alimento (ajuste sb1: sai o menu separado de Medidas caseiras). */
+function MedidasDoAlimento({ food }) {
+  const [medidas, setMedidas] = useState(null);
+  useEffect(() => { api.get(`/alimentos/${food.id}/medidas`).then((r) => setMedidas(r.data.medidas || [])).catch(() => setMedidas([])); }, [food.id]);
+  if (!medidas) return <span className="text-[12px] text-gray-500">Carregando medidas…</span>;
+  const lista = medidas.filter((m) => String(m.nome).toLowerCase() !== "gramas");
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" data-testid={`medidas-${food.id}`}>
+      {lista.length ? lista.map((m) => (
+        <span key={m.nome} className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-[12px] text-gray-200">
+          {m.nome}{m.ml ? "" : <span className="text-gray-500"> · {m.estimada ? "≈" : ""}{String(m.gramas).replace(".", ",")} g</span>}
+        </span>
+      )) : <span className="text-[12px] text-gray-500">Sem medidas caseiras: só gramas.</span>}
+      <a href="/cadastro-medidas" className="ml-2 text-[12px] text-rc-blue hover:underline">Editar medidas</a>
+    </div>
+  );
+}
+
 /** Sólido (g) ou líquido (ml) + densidade em g/ml (ex.: leite desnatado 1,03). Ajuste ml1 do Rogério. */
 function TipoLiquido({ food }) {
   const [liquido, setLiquido] = useState(Boolean(food.liquido));
@@ -77,6 +95,7 @@ function TipoLiquido({ food }) {
 }
 
 export default function CadastroAlimentos() {
+  const [medidasAbertas, setMedidasAbertas] = useState({});
   const [foods, setFoods] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -214,13 +233,16 @@ export default function CadastroAlimentos() {
                     </tr>
                   )}
                   {filteredFoods.map((food, index) => (
+                    <React.Fragment key={`${food.id}-${index}`}>
                     <tr
-                      key={`${food.id}-${index}`}
                       className="border-t border-white/[0.05] odd:bg-white/[0.015]"
                       data-testid={`food-row-${index}`}
                     >
                       <td className="px-4 py-3">
                         <div className="font-semibold text-white">{food.nome}</div>
+                        <button type="button" onClick={() => setMedidasAbertas((s) => ({ ...s, [food.id]: !s[food.id] }))} className="mt-1 text-[11.5px] text-rc-blue hover:underline" data-testid={`ver-medidas-${food.id}`}>
+                          {medidasAbertas[food.id] ? "Esconder medidas caseiras" : "Medidas caseiras"}
+                        </button>
                         <div className="text-xs text-gray-500 mt-1">
                           {food.grupo_display || food.categoria || "-"}
                           {food.fonte ? ` · ${food.fonte}` : ""}
@@ -235,6 +257,10 @@ export default function CadastroAlimentos() {
                       <td className="px-4 py-3"><TipoLiquido food={food} /></td>
                       <td className="px-4 py-3"><div className="flex justify-end gap-1">{food.fonte === "CUSTOM" ? <><button onClick={() => setModal(food)} className="rc-btn-secondary p-2" title="Editar"><Pencil className="w-4 h-4" /></button><button onClick={() => remove(food)} className="rc-btn-secondary p-2 text-red-400" title="Excluir"><Trash2 className="w-4 h-4" /></button></> : <span className="text-[10px] uppercase text-gray-600">Base protegida</span>}</div></td>
                     </tr>
+                    {medidasAbertas[food.id] && (
+                      <tr className="bg-white/[0.02]"><td colSpan={spotlightFields.length + 3} className="px-4 pb-3"><MedidasDoAlimento food={food} /></td></tr>
+                    )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

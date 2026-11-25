@@ -2,44 +2,44 @@ import React, { useEffect, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import {
-  LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope, Settings, Quote, Database,
-  Ruler, FileText, BookOpenText, PackagePlus, Menu, X, Wallet, SlidersHorizontal,
+  LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope, Settings, Database,
+  BookOpenText, PackagePlus, Menu, X, Wallet, SlidersHorizontal, MessageCircle, ClipboardList,
 } from "lucide-react";
 import RCLogo from "./RCLogo";
 
+// Menu reorganizado (ajuste sb1): Configurações no rodapé; Depoimentos, Rótulos e Medidas caseiras saem do menu
+// (as telas continuam existindo pelo link direto).
 const groups = [
   {
     label: "Clínica",
     links: [
       { to: "/dashboard", label: "Painel", icon: LayoutDashboard, testid: "nav-dashboard" },
-      { to: "/pacientes", label: "Pacientes", icon: Users, testid: "nav-pacientes" },
       { to: "/agenda", label: "Agenda", icon: CalendarDays, testid: "nav-agenda" },
-      { to: "/pagamentos", label: "Pagamentos", icon: Wallet, testid: "nav-pagamentos" },
+      { to: "/pacientes", label: "Pacientes", icon: Users, testid: "nav-pacientes" },
       { to: "/consultorio", label: "Consultório", icon: Stethoscope, testid: "nav-consultorio" },
+      { to: "/pagamentos", label: "Pagamentos", icon: Wallet, testid: "nav-pagamentos" },
     ],
   },
   {
-    label: "Inteligência",
+    label: "Acompanhamento",
     links: [
-      { to: "/agentes", label: "Agentes IA", icon: Bot, testid: "nav-agentes" },
+      { to: "/acompanhamento/mensagens", label: "Mensagens e lembretes", icon: MessageCircle, testid: "nav-mensagens" },
+      { to: "/acompanhamento/formularios", label: "Formulários", icon: ClipboardList, testid: "nav-formularios" },
     ],
   },
   {
     label: "Base nutricional",
     links: [
       { to: "/cadastro-alimentos", label: "Alimentos", icon: Database, testid: "nav-cadastro-alimentos" },
-      { to: "/cadastro-insumos", label: "Insumos", icon: PackagePlus, testid: "nav-cadastro-insumos" },
-      { to: "/cadastro-medidas", label: "Medidas caseiras", icon: Ruler, testid: "nav-cadastro-medidas" },
-      { to: "/rotulos-nutricionais", label: "Rótulos", icon: FileText, testid: "nav-rotulos-nutricionais" },
+      { to: "/cadastro-insumos", label: "Suplementos e fórmulas", icon: PackagePlus, testid: "nav-cadastro-insumos" },
       { to: "/orientacoes", label: "Orientações", icon: BookOpenText, testid: "nav-orientacoes" },
       { to: "/configuracoes-dieta", label: "Padrões da dieta", icon: SlidersHorizontal, testid: "nav-configuracoes-dieta" },
     ],
   },
   {
-    label: "Marca",
+    label: "Inteligência",
     links: [
-      { to: "/depoimentos", label: "Depoimentos", icon: Quote, testid: "nav-depoimentos" },
-      { to: "/configuracoes", label: "Configurações", icon: Settings, testid: "nav-configuracoes" },
+      { to: "/agentes", label: "Agentes IA", icon: Bot, testid: "nav-agentes" },
     ],
   },
 ];
@@ -99,7 +99,8 @@ function SidebarContent({ user, onLogout, onNavigate, compacto }) {
       </nav>
 
       <div className={`border-t border-white/[0.05] ${compacto ? "p-2" : "p-3"}`}>
-        <div className={`flex items-center gap-3 rounded-xl ${compacto ? "flex-col p-1" : "p-2"}`}>
+        <NavItem link={{ to: "/configuracoes", label: "Configurações", icon: Settings, testid: "nav-configuracoes" }} onNavigate={onNavigate} compacto={compacto} />
+        <div className={`mt-1 flex items-center gap-3 rounded-xl ${compacto ? "flex-col p-1" : "p-2"}`}>
           <div className="w-9 h-9 rounded-[10px] bg-rc-raised text-rc-lime flex items-center justify-center font-display font-bold text-sm shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
             {(user?.name || "U").slice(0, 1).toUpperCase()}
           </div>

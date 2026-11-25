@@ -327,7 +327,7 @@ function PadroesSugeridos({ onAplicado }) {
       <div className="min-w-0 max-w-[78ch]">
         <div className="text-[14px] text-white font-medium">Modelos e listas prontos para usar</div>
         <p className="text-[13px] text-gray-400 mt-1">
-          {info.modelos_refeicao.length} modelos de refeição ({info.modelos_refeicao.slice(0, 3).join(", ")}…) e {info.listas_substituicao.length} listas de substituição ({info.listas_substituicao.join(", ")}), já ligados aos alimentos da base. Depois você pode editar ou apagar qualquer um.
+          {info.modelos_refeicao.length} modelos de refeição ({info.modelos_refeicao.slice(0, 3).join(", ")}…) e {info.listas_substituicao.length} listas de substituição ({info.listas_substituicao.join(" · ")}), já ligados aos alimentos da base. Depois você pode editar ou apagar qualquer um.
         </p>
       </div>
       <button type="button" onClick={aplicar} disabled={aplicando} className="rc-btn-primary shrink-0">
