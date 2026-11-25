@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api, formatApiError } from "@/lib/evo-api";
 import RCLogo from "@/components/evonut/RCLogo";
 import MacroRings from "@/components/evonut/MacroRings";
-import { LogOut, Salad, MessageCircle, Send, Loader2, Utensils, FlaskConical, FileText, ChevronDown, ChevronUp } from "lucide-react";
+import { LogOut, Salad, MessageCircle, Send, Loader2, Utensils, FlaskConical, FileText, ChevronDown, ChevronUp, Download } from "lucide-react";
 import { toast } from "sonner";
 
 // Minimal markdown render for the diet plan content (re-uses same logic as backend PDF)
@@ -46,6 +46,20 @@ export default function PatientArea() {
   const [tab, setTab] = useState("diet"); // diet | chat | exams
   const [diet, setDiet] = useState(null);
   const [loadingDiet, setLoadingDiet] = useState(true);
+  const [baixandoPlano, setBaixandoPlano] = useState(false);
+  // "Baixar plano em PDF": sempre a versão mais nova que o nutricionista liberou
+  const baixarPlano = async () => {
+    setBaixandoPlano(true);
+    try {
+      const r = await api.get("/patient/diet/pdf", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      const a = document.createElement("a"); a.href = url; a.download = "meu-plano-alimentar.pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      toast.error(e.response?.status === 404 ? "Seu plano ainda não foi liberado em PDF." : "Não foi possível baixar o plano agora.");
+    } finally { setBaixandoPlano(false); }
+  };
   const [exams, setExams] = useState([]);
   const [loadingExams, setLoadingExams] = useState(false);
   const [expandedExam, setExpandedExam] = useState(null);
@@ -152,6 +166,11 @@ export default function PatientArea() {
 
         {tab === "diet" && (
           <div data-testid="patient-diet-panel" className="animate-fade-up">
+            <div className="mb-4 flex justify-end">
+              <button type="button" onClick={baixarPlano} disabled={baixandoPlano} className="rc-btn-primary h-11" data-testid="baixar-plano-pdf">
+                {baixandoPlano ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Baixar plano em PDF
+              </button>
+            </div>
             {loadingDiet ? (
               <div className="rc-card p-10 text-center text-gray-500 text-sm">
                 <Loader2 className="w-5 h-5 animate-spin inline mr-2" /> Carregando seu plano alimentar…

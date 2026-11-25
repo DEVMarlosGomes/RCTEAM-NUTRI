@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+
+import pdf_plano
 from pydantic import BaseModel, Field
 
 # ── Configurações padrão ────────────────────────────────────────────────────
@@ -721,7 +723,15 @@ table {{ width: 100%; border-collapse: collapse; }}
                         headers={"Content-Disposition": f'inline; filename="{nome}"'})
 
     @router.get("/patients/{pid}/relatorios/dieta/{pmid}")
-    async def pdf_dieta(pid: str, pmid: str, user=Depends(require_nutritionist)):
+    async def pdf_dieta(pid: str, pmid: str, ou: bool = True, macros: bool = True, orientacoes: bool = True, total: bool = True,
+                        modelo: str = "marca", user=Depends(require_nutritionist)):
+        """PDF do plano. Padrão: modelo da marca (pdf_plano.py), com as opções do diálogo "Gerar PDF do plano".
+        `modelo=classico` mantém o layout antigo (configurações de impressão da dieta)."""
+        if modelo != "classico":
+            paciente, plano, _ = await _carregar(pid, pmid, user)
+            html_str = pdf_plano.html_plano(paciente, plano, {"ou": ou, "macros": macros, "orientacoes": orientacoes, "total": total},
+                                            hoje=datetime.now(h.TZ_BR))
+            return _pdf(html_str, f"plano_{(paciente.get('nome') or 'paciente').replace(' ', '_')}.pdf")
         paciente, plano, nutri = await _carregar(pid, pmid, user)
         cfg = await _config(user["id"])
         cor = (nutri.get("cor_relatorio") or "#0068D1").strip() or "#0068D1"
@@ -773,6 +783,47 @@ table {{ width: 100%; border-collapse: collapse; }}
                 corpo += "</div>"
         nome_arq = f"dieta_{(paciente.get('nome') or 'paciente').replace(' ', '_')}.pdf"
         return _pdf(_documento(corpo, nutri, cor), nome_arq)
+
+    class EnviarAppIn(BaseModel):
+        ou: bool = True
+        macros: bool = True
+        orientacoes: bool = True
+        total: bool = True
+
+    @router.post("/patients/{pid}/planos-manuais/{pmid}/enviar-app")
+    async def enviar_plano_app(pid: str, pmid: str, payload: EnviarAppIn, user=Depends(require_nutritionist)):
+        """Deixa este plano (com estas opções) disponível no app do aluno em "Baixar plano em PDF"."""
+        await _paciente(pid, user)
+        if not await db.planos_manuais.find_one({"id": pmid, "paciente_id": pid}):
+            raise HTTPException(404, "Plano não encontrado")
+        agora = h.iso(h.now_utc())
+        await db.patients.update_one({"id": pid}, {"$set": {"plano_app": {"plano_id": pmid, "opcoes": payload.model_dump(), "enviado_em": agora}}})
+        pu = await db.users.find_one({"role": "patient", "patient_id": pid}, {"_id": 0})
+        await db.patient_messages.insert_one({
+            "id": str(uuid.uuid4()), "session_id": f"patient-{pu['id']}" if pu else f"patient-pending-{pid}",
+            "user_id": (pu or {}).get("id"), "patient_id": pid, "role": "assistant", "kind": "plano_pdf",
+            "content": "📄 Seu plano alimentar novo já está no app. Em \"Minha dieta\", toque em \"Baixar plano em PDF\".",
+            "created_at": agora})
+        return {"ok": True, "enviado_em": agora}
+
+    async def pdf_plano_do_aluno(pid: str) -> Response:
+        """PDF da versão mais nova do plano para o app do aluno (o enviado pelo nutricionista ou o último salvo)."""
+        paciente = await db.patients.find_one({"id": pid}, {"_id": 0})
+        if not paciente:
+            raise HTTPException(404, "Paciente não encontrado")
+        envio = paciente.get("plano_app") or {}
+        doc = None
+        if envio.get("plano_id"):
+            doc = await db.planos_manuais.find_one({"id": envio["plano_id"], "paciente_id": pid}, {"_id": 0})
+        if not doc:
+            doc = await db.planos_manuais.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("atualizado_em", -1), ("criado_em", -1)])
+        if not doc:
+            raise HTTPException(404, "Seu plano ainda não foi liberado")
+        plano = await h.enrich_plano(doc)
+        html_str = pdf_plano.html_plano(paciente, plano, envio.get("opcoes") or {}, hoje=datetime.now(h.TZ_BR))
+        return _pdf(html_str, "meu_plano_alimentar.pdf")
+
+    router.pdf_plano_do_aluno = pdf_plano_do_aluno
 
     @router.get("/patients/{pid}/relatorios/dieta/{pmid}/nutrientes")
     async def pdf_nutrientes(pid: str, pmid: str, user=Depends(require_nutritionist)):

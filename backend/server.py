@@ -7003,11 +7003,20 @@ async def health_base():
     return {"versao_esperada": BASE_VERSAO, **marcador}
 
 api.include_router(build_financeiro_router(db, require_nutritionist))
-api.include_router(build_dieta_router(db, require_nutritionist, SimpleNamespace(
+_dieta_router = build_dieta_router(db, require_nutritionist, SimpleNamespace(
     enrich_plano=_enrich_plano, coerce_float=_coerce_float, macros_100g=_macros_100g,
     medidas_do_alimento=_medidas_do_alimento, pdf_escape=_pdf_escape, pdf_nl2br=_pdf_nl2br,
     HTML=HTML, TZ_BR=TZ_BR, iso=iso, now_utc=now_utc,
-)))
+))
+
+
+@api.get("/patient/diet/pdf")
+async def patient_diet_pdf(user=Depends(require_patient)):
+    """App do aluno: "Baixar plano em PDF" (sempre a versão mais nova)."""
+    return await _dieta_router.pdf_plano_do_aluno(user.get("patient_id"))
+
+
+api.include_router(_dieta_router)
 app.include_router(api)
 _frontend_urls = [
     url.strip().rstrip("/")

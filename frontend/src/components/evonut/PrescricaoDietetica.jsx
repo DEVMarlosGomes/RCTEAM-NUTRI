@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 import EditorRefeicoes, { BarraTotal, LARGURA_EDITOR } from "./dieta/EditorRefeicoes";
 import { termosRestritos } from "./dieta/grupos";
+import GerarPdfDialogo from "./dieta/GerarPdfDialogo";
 import OutrasOpcoes from "./dieta/OutrasOpcoes";
 import ImportarDieta from "./dieta/ImportarDieta";
 import AlimentacaoPaciente, { usePainelAlimentacao } from "./dieta/AlimentacaoPaciente";
@@ -66,6 +67,7 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
   const [estatistica, setEstatistica] = useState(null);
   const [outras, setOutras] = useState(null);
   const [importar, setImportar] = useState(false);
+  const [gerarPdf, setGerarPdf] = useState(false);
   const [donato, setDonato] = useState(false);
   const [alimentacao, setAlimentacao] = usePainelAlimentacao();
   const [modelosDieta, setModelosDieta] = useState(false);
@@ -325,12 +327,13 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
               {salvando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Salvar
             </button>
             <button type="button" onClick={apagar} className="rc-btn-secondary"><Trash2 className="w-4 h-4" /> Apagar</button>
-            <button type="button" onClick={() => pdf("dieta")} className="rc-btn-secondary"><FileDown className="w-4 h-4" /> PDF</button>
+            <button type="button" onClick={() => setGerarPdf(true)} className="rc-btn-secondary" data-testid="gerar-pdf"><FileDown className="w-4 h-4" /> Gerar PDF do plano</button>
             {sujo && <span className="text-[12.5px] text-rc-amber ml-1">Alterações não salvas</span>}
           </div>
         </section>
       </div>
 
+      {gerarPdf && <GerarPdfDialogo pid={pid} titulo={draft.titulo} garantirSalvo={garantirSalvo} onClose={() => setGerarPdf(false)} />}
       {importar && <ImportarDieta d={d} onImportado={aposImportar} onClose={() => setImportar(false)} />}
       {modelosDieta && (
         <ModelosDietaModal pid={pid} draft={draft} categorias={config.categorias_modelos || []}
