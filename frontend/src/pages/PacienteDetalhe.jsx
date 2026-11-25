@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
 import StatusBadge from "@/components/evonut/StatusBadge";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
+import { CalendarPlus, MessageCircle, Send } from "lucide-react";
 import { Activity, Brain, Utensils, FileText, Sparkles, ArrowDown, ArrowUp, Minus, Printer, FlaskConical, Upload, Trash2, Download, BellRing, Zap, ClipboardList, Plus, ChevronDown, ChevronRight, Save, X, Scale, Edit2, Search, Loader2, PieChart } from "lucide-react";
 import { toast } from "sonner";
 import NudgeManager from "@/components/evonut/NudgeManager";
@@ -83,7 +84,7 @@ export default function PacienteDetalhe() {
             </div>
             <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[12.5px] text-gray-400 mt-1.5">
               {p.email && <span className="truncate">{p.email}</span>}
-              {p.telefone && <span className="tabular">{p.telefone}</span>}
+              {p.telefone && <span className="tabular">{(() => { const t = String(p.telefone).replace(/\D/g, "").replace(/^55(?=\d{10,11}$)/, ""); return t.length === 11 ? `${t.slice(0, 2)} ${t.slice(2, 7)}-${t.slice(7)}` : t.length === 10 ? `${t.slice(0, 2)} ${t.slice(2, 6)}-${t.slice(6)}` : p.telefone; })()}</span>}
               <span className="tabular">{[idade != null && `${idade} anos`, pesoAtual && `${String(pesoAtual).replace(".", ",")} kg`, alturaAtual && `${alturaAtual} cm`, imc && `IMC ${String(Math.round(imc * 10) / 10).replace(".", ",")}`].filter(Boolean).join(" · ")}</span>
             </div>
           </div>
@@ -98,6 +99,7 @@ export default function PacienteDetalhe() {
           </div>
           <Relatorios pid={p.id} />
         </div>
+        <ResumoFicha d={d} onPrescricao={() => setTab("plano")} reload={reload} />
       </header>
 
       <nav className="sticky top-14 md:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10 mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]" aria-label="Seções do paciente">
@@ -127,6 +129,54 @@ export default function PacienteDetalhe() {
       {tab === "comparativo" && <Comparativo d={d} />}
       </div>
     </NutriLayout>
+  );
+}
+
+/** Linha do cabeçalho (ajuste pac1): última/próxima consulta, situação do plano, evolução desde a 1ª avaliação e ações rápidas. */
+function ResumoFicha({ d, onPrescricao, reload }) {
+  const p = d.patient;
+  const agora = new Date().toISOString().slice(0, 16);
+  const consultas = (d.consultations || []).filter((c) => c.data_hora && !/CANCEL/i.test(c.status || "")).map((c) => String(c.data_hora));
+  const ultima = consultas.filter((x) => x.slice(0, 16) < agora).sort().pop();
+  const proxima = consultas.filter((x) => x.slice(0, 16) >= agora).sort()[0];
+  const fmtData = (v) => (v ? `${v.slice(8, 10)}/${v.slice(5, 7)}/${v.slice(0, 4)}${v.length > 10 ? ` ${v.slice(11, 16)}` : ""}` : "—");
+  const venc = p.assinatura?.vencimento ? new Date(`${String(p.assinatura.vencimento).slice(0, 10)}T12:00:00`) : null;
+  const dias = venc ? Math.round((venc - new Date()) / 86400000) : null;
+  const plano = !venc ? ["sem plano", "text-gray-500"] : p.assinatura?.ativo === false ? ["cancelado", "text-gray-500"]
+    : dias < 0 ? [`vencido há ${-dias} d`, "text-rc-coral"] : dias <= 7 ? [`vence em ${dias} d`, "text-rc-amber"] : [`ativo · vence em ${dias} d`, "text-[#4ADE80]"];
+  const avs = [...(d.evaluations || [])].sort((a, b) => String(a.data_avaliacao || a.created_at || "").localeCompare(String(b.data_avaliacao || b.created_at || "")));
+  const delta = (fn) => (avs.length >= 2 && fn(avs[0]) != null && fn(avs[avs.length - 1]) != null ? fn(avs[avs.length - 1]) - fn(avs[0]) : null);
+  const dPeso = delta((e) => (e.peso != null ? Number(e.peso) : null));
+  const dMM = delta((e) => (e.composicao?.massa_magra != null ? Number(e.composicao.massa_magra) : null));
+  const sinal = (v, un) => (v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(1).replace(".", ",")} ${un}`);
+  const fone = String(p.telefone || "").replace(/\D/g, "");
+  const zap = fone ? `https://wa.me/${fone.length <= 11 ? `55${fone}` : fone}` : null;
+  const enviarFormulario = async () => {
+    try {
+      const { data } = await api.post(`/patients/${p.id}/formulario/enviar`, { tipo: "inicial" });
+      const url = `${window.location.origin}/pre-consulta/${data.token}`;
+      try { await navigator.clipboard.writeText(url); } catch { /* sem área de transferência */ }
+      if (zap) window.open(`${zap}?text=${encodeURIComponent(`Oi, ${(p.nome || "").split(" ")[0]}! Segue o formulário pré-consulta: ${url}`)}`, "_blank", "noopener");
+      toast.success("Formulário enviado. Link copiado.");
+      reload?.();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+  const item = (rot, val, cls = "text-gray-100") => (
+    <div className="min-w-0"><div className="text-[10.5px] uppercase tracking-[0.14em] text-gray-500">{rot}</div><div className={`mt-0.5 text-[13.5px] font-medium tabular ${cls}`}>{val}</div></div>
+  );
+  return (
+    <div className="mt-3 flex flex-wrap items-end gap-x-6 gap-y-3 border-t border-white/[0.05] pt-3" data-testid="resumo-ficha">
+      {item("Última consulta", fmtData(ultima))}
+      {item("Próxima consulta", fmtData(proxima))}
+      {item("Plano", plano[0], plano[1])}
+      {item("Desde a 1ª avaliação", avs.length >= 2 ? `peso ${sinal(dPeso, "kg")} · massa magra ${sinal(dMM, "kg")}` : "—")}
+      <div className="ml-auto flex flex-wrap gap-1.5">
+        {zap && <a href={zap} target="_blank" rel="noopener noreferrer" className="rc-btn-ghost h-9 text-[12.5px]"><MessageCircle className="h-4 w-4" /> WhatsApp</a>}
+        <Link to="/agenda" className="rc-btn-ghost h-9 text-[12.5px]"><CalendarPlus className="h-4 w-4" /> Agendar retorno</Link>
+        <button type="button" onClick={enviarFormulario} className="rc-btn-ghost h-9 text-[12.5px]"><Send className="h-4 w-4" /> Enviar formulário</button>
+        <button type="button" onClick={onPrescricao} className="rc-btn-secondary h-9 text-[12.5px]"><Utensils className="h-4 w-4" /> Abrir prescrição</button>
+      </div>
+    </div>
   );
 }
 
@@ -335,8 +385,8 @@ function DadosPessoais({ patient, reload }) {
 function Anamnese({ d, reload }) {
   return (
     <div className="space-y-3">
-      <FormularioStatus d={d} reload={reload} />
       <DadosPessoais patient={d.patient} reload={reload} />
+      <FormularioStatus d={d} reload={reload} />
       <AnamneseBlocos pacienteId={d.patient.id} sexoPaciente={d.patient.sexo} inicial={d.anamnese_v2} />
     </div>
   );

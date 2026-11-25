@@ -8,6 +8,8 @@ const styles = {
   CONSULTA_REALIZADA: "bg-rc-blue/[0.14] text-rc-blueLight",
   PLANO_ENTREGUE: "bg-rc-lime/[0.12] text-rc-lime",
   EM_ACOMPANHAMENTO: "bg-rc-lime/[0.12] text-rc-lime",
+  INATIVO: "bg-white/[0.04] text-gray-500",
+  PERDIDO: "bg-rc-coral/[0.12] text-rc-coral",
 };
 
 const labels = {
@@ -17,6 +19,8 @@ const labels = {
   CONSULTA_REALIZADA: "Consulta feita",
   PLANO_ENTREGUE: "Plano entregue",
   EM_ACOMPANHAMENTO: "Acompanhamento",
+  INATIVO: "Inativo",
+  PERDIDO: "Perdido",
 };
 
 export const STATUS_LABELS = labels;

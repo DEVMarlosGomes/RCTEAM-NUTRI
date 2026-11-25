@@ -13,7 +13,7 @@ import SeletorObjetivos from "./SeletorObjetivos";
 export default function AnamneseBlocos({ pacienteId, sexoPaciente, inicial }) {
   const [estrutura, setEstrutura] = useState(null);
   const [doc, setDoc] = useState(inicial || {});
-  const [abertos, setAbertos] = useState(() => new Set(["objetivos_treinamento"]));
+  const [abertos, setAbertos] = useState(() => new Set());
   const [estado, setEstado] = useState("");
   // respostas do cliente em modo leitura; "Editar respostas" libera a edição (sem formulário, já abre editando)
   const [editando, setEditando] = useState(() => !(inicial?.enviado_em));
@@ -77,6 +77,11 @@ export default function AnamneseBlocos({ pacienteId, sexoPaciente, inicial }) {
 
   const enviadoEm = doc.enviado_em ? new Date(doc.enviado_em).toLocaleDateString("pt-BR") : null;
   // numeração contínua só das perguntas que aparecem (não pula número de pergunta escondida)
+  const blocosVisiveis = estrutura.blocos.filter((b) => b.key !== "dados_pessoais" && b.key !== "fotos");
+  const totais = blocosVisiveis.reduce((t, b) => {
+    const ps = b.perguntas.filter((q) => q.tipo !== "interno" && q.tipo !== "fotos" && visivel(q, planas));
+    return { total: t.total + ps.length, respondidas: t.respondidas + ps.filter((q) => !vazio(planas[q.id])).length };
+  }, { total: 0, respondidas: 0 });
   const numeros = {};
   let contador = 0;
   estrutura.blocos.forEach((b) => b.perguntas.forEach((p) => {
@@ -86,8 +91,20 @@ export default function AnamneseBlocos({ pacienteId, sexoPaciente, inicial }) {
 
   return (
     <div className="space-y-3" data-testid="anamnese-blocos">
-      <div className="flex items-center justify-between gap-3 px-1 text-[12px] text-gray-500 min-h-[20px]">
-        <span>{enviadoEm ? `Formulário pré-consulta respondido pelo paciente em ${enviadoEm}.` : "O paciente ainda não enviou o formulário pré-consulta. Você pode preencher manualmente."}</span>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1 text-[12px] text-gray-500 min-h-[20px]">
+        <span data-testid="formulario-resumo">
+          {enviadoEm ? `Formulário respondido em ${enviadoEm}` : "Formulário ainda não respondido (pode preencher manualmente)"}
+          {` · ${totais.respondidas} de ${totais.total} respondidas`}
+        </span>
+        <span className="flex flex-wrap items-center gap-1.5">
+          {blocosVisiveis.map((b, i) => (
+            <button key={b.key} type="button" onClick={() => { setAbertos((s) => new Set(s).add(b.key)); setTimeout(() => document.querySelector(`[data-testid=anamnese-bloco-${b.key}]`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }}
+              className="rounded-md bg-white/[0.05] px-2 py-1 text-[11.5px] text-gray-300 hover:text-white">{i + 2}. {b.titulo}</button>
+          ))}
+          <button type="button" onClick={() => setAbertos((s) => (s.size >= blocosVisiveis.length ? new Set() : new Set(blocosVisiveis.map((b) => b.key))))} className="rc-btn-ghost h-7 text-[11.5px]" data-testid="expandir-tudo">
+            {abertos.size >= blocosVisiveis.length ? "Recolher tudo" : "Expandir tudo"}
+          </button>
+        </span>
         <span className="flex items-center gap-3">
           <EstadoSalvar estado={estado} />
           <button type="button" onClick={() => setEditando((v) => !v)} className="rc-btn-ghost h-8 text-[12.5px]" data-testid="editar-respostas">
@@ -114,6 +131,13 @@ export default function AnamneseBlocos({ pacienteId, sexoPaciente, inicial }) {
               {extras.length > 0 && <span className="text-[11px] text-gray-400 bg-white/[0.05] rounded-full px-2 py-0.5">+{extras.length} outras</span>}
               <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${aberto ? "rotate-180" : ""}`} />
             </button>
+            {!aberto && respondidas > 0 && (
+              <ul className="-mt-1 px-4 pb-3 pl-12 space-y-0.5 text-[12.5px]" data-testid={`previa-${b.key}`}>
+                {perguntas.filter((q) => !vazio(planas[q.id])).slice(0, 3).map((q) => (
+                  <li key={q.id} className="truncate text-gray-400"><span className="text-gray-500">{q.titulo.replace(/\?.*$/, "?")}</span> <span className="text-gray-200">{textoResposta(q, planas[q.id])}</span></li>
+                ))}
+              </ul>
+            )}
             {aberto && (
               <div className="px-4 pb-5 divide-y divide-white/[0.05]">
                 {perguntas.map((p) => (
@@ -180,7 +204,7 @@ function TextoAuto({ valor, onChange, label, id }) {
 }
 
 function Leitura({ pergunta: p, valor, planas }) {
-  if (vazio(valor)) return <span className="text-[13.5px] text-gray-600">—</span>;
+  if (vazio(valor)) return <span className="text-[13px] italic text-rc-amber/80">perguntar na consulta</span>;
   if (p.tipo === "objetivos") {
     const lista = Array.isArray(valor) ? valor : [String(valor)];
     const princ = lista.includes(planas.objetivo_principal) ? planas.objetivo_principal : lista[0];

@@ -221,6 +221,7 @@ class PatientCreateIn(BaseModel):
     peso: Optional[float] = None
     altura: Optional[float] = None
     status_funil: str = "LEAD_INICIADO"
+    origem: Optional[str] = None  # instagram | site | whatsapp | indicacao | outro
 
 class PatientUpdateIn(BaseModel):
     nome: Optional[str] = Field(default=None, min_length=2)
@@ -242,6 +243,7 @@ class PatientUpdateIn(BaseModel):
     modelo_avaliacao: Optional[Literal["rc", "donatto"]] = None
     # objetivos marcados (o principal fica em `objetivo`)
     objetivos: Optional[List[str]] = None
+    origem: Optional[str] = None
     peso_desejado: Optional[float] = None
 
 class AnamnesisIn(BaseModel):
@@ -1710,8 +1712,12 @@ async def schedule(payload: ScheduleIn):
 # ---------- Authenticated CRM ----------
 PATIENT_STATUSES = {
     "LEAD_INICIADO", "ANAMNESE_COMPLETA", "CONSULTA_AGENDADA",
-    "CONSULTA_REALIZADA", "PLANO_ENTREGUE", "EM_ACOMPANHAMENTO",
+    "CONSULTA_REALIZADA", "PLANO_ENTREGUE", "EM_ACOMPANHAMENTO", "INATIVO", "PERDIDO",
 }
+# etapa da lista de Pacientes (ajuste pac1): lead não conta como paciente
+_ETAPA_DO_STATUS = {"LEAD_INICIADO": "lead", "ANAMNESE_COMPLETA": "atendimento", "CONSULTA_AGENDADA": "atendimento",
+                    "CONSULTA_REALIZADA": "atendimento", "PLANO_ENTREGUE": "atendimento", "EM_ACOMPANHAMENTO": "acompanhamento",
+                    "INATIVO": "inativo", "PERDIDO": "perdido"}
 
 def _validate_patient_status(value: Optional[str]) -> Optional[str]:
     if value is not None and value not in PATIENT_STATUSES:
@@ -1758,9 +1764,77 @@ async def dashboard(user=Depends(get_current_user)):
 @api.get("/patients")
 async def list_patients(user=Depends(get_current_user)):
     rows = await db.patients.find(
-        {"nutricionista_id": user["id"]}, {"_id": 0, "lead_token": 0}
-    ).sort("created_at", -1).to_list(500)
+        {"nutricionista_id": user["id"]}, {"_id": 0, "lead_token": 0, "fotos": 0, "comprovante": 0}
+    ).sort("created_at", -1).to_list(2000)
+    # etapa, última/próxima consulta e situação do plano para a lista (ajuste pac1)
+    from financeiro import situacao_plano
+    agora = iso(now_utc())[:16]
+    pids = [r["id"] for r in rows]
+    ultima, proxima = {}, {}
+    async for c in db.consultations.find({"paciente_id": {"$in": pids}, "status": {"$nin": ["CANCELADA", "CANCELADO"]}},
+                                         {"_id": 0, "paciente_id": 1, "data_hora": 1}):
+        dh = str(c.get("data_hora") or "")
+        if not dh:
+            continue
+        pid = c["paciente_id"]
+        if dh[:16] < agora:
+            if dh > ultima.get(pid, ""):
+                ultima[pid] = dh
+        elif not proxima.get(pid) or dh < proxima[pid]:
+            proxima[pid] = dh
+    hoje = now_utc().astimezone(TZ_BR).date()
+    for r in rows:
+        r["etapa"] = _ETAPA_DO_STATUS.get(r.get("status_funil"), "atendimento")
+        r["ultima_consulta"] = ultima.get(r["id"])
+        r["proxima_consulta"] = proxima.get(r["id"])
+        r["plano"] = situacao_plano(r.get("assinatura"), 7, hoje)
     return rows
+
+
+def _so_digitos(v) -> str:
+    return re.sub(r"\D", "", str(v or ""))
+
+
+@api.get("/patients/duplicados")
+async def patients_duplicados(nome: str = "", telefone: str = "", user=Depends(require_nutritionist)):
+    """Aviso de duplicado ao cadastrar: mesmo telefone (últimos 8 dígitos) ou nome muito parecido."""
+    alvo_tel = _so_digitos(telefone)[-8:]
+    alvo_nome = _normalize_food_lookup(nome)
+    if len(alvo_nome) < 4 and len(alvo_tel) < 8:
+        return []
+    out = []
+    async for p in db.patients.find({"nutricionista_id": user["id"]}, {"_id": 0, "id": 1, "nome": 1, "telefone": 1, "status_funil": 1}):
+        n = _normalize_food_lookup(p.get("nome") or "")
+        mesmo_tel = alvo_tel and len(alvo_tel) == 8 and _so_digitos(p.get("telefone"))[-8:] == alvo_tel
+        parecido = len(alvo_nome) >= 4 and n and (n == alvo_nome or (n.split()[:2] == alvo_nome.split()[:2] and len(alvo_nome.split()) >= 2))
+        if mesmo_tel or parecido:
+            out.append({**p, "motivo": "telefone" if mesmo_tel else "nome"})
+    return out[:5]
+
+
+class JuntarIn(BaseModel):
+    origem_id: str
+
+
+@api.post("/patients/{pid}/juntar")
+async def juntar_pacientes(pid: str, payload: JuntarIn, user=Depends(require_nutritionist)):
+    """Junta o cadastro duplicado (`origem_id`) neste paciente: tudo do duplicado passa para cá e ele é apagado."""
+    if payload.origem_id == pid:
+        raise HTTPException(400, "Escolha outro cadastro")
+    destino = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    origem = await db.patients.find_one({"id": payload.origem_id, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not destino or not origem:
+        raise HTTPException(404, "Paciente não encontrado")
+    for col in ("anamneses", "consultations", "evaluations", "avaliacao_fotos", "meal_plans", "planos_manuais", "ai_analyses", "exams",
+                "exames_manuais", "drhouse_exam_analyses", "recordatorios", "pagamentos"):
+        await db[col].update_many({"paciente_id": payload.origem_id}, {"$set": {"paciente_id": pid}})
+    for col in ("patient_nudges", "patient_messages"):
+        await db[col].update_many({"patient_id": payload.origem_id}, {"$set": {"patient_id": pid}})
+    faltando = {k: v for k, v in origem.items() if k not in ("id", "_id", "created_at", "lead_token") and v not in (None, "", [], {}) and destino.get(k) in (None, "", [], {})}
+    if faltando:
+        await db.patients.update_one({"id": pid}, {"$set": faltando})
+    await db.patients.delete_one({"id": payload.origem_id})
+    return {"ok": True, "campos_copiados": sorted(faltando)}
 
 @api.post("/patients", status_code=201)
 async def create_patient(payload: PatientCreateIn, user=Depends(require_nutritionist)):
