@@ -1661,6 +1661,7 @@ async def delete_patient(pid: str, user=Depends(require_nutritionist)):
         "anamneses": {"paciente_id": pid},
         "consultations": {"paciente_id": pid},
         "evaluations": {"paciente_id": pid},
+        "avaliacao_fotos": {"paciente_id": pid},
         "meal_plans": {"paciente_id": pid},
         "ai_analyses": {"paciente_id": pid},
         "exams": {"paciente_id": pid},
@@ -1774,7 +1775,8 @@ async def comparativo(pid: str, user=Depends(get_current_user)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
         raise HTTPException(404, "Paciente não encontrado")
-    rows = await db.evaluations.find({"paciente_id": pid}, {"_id": 0}).sort("created_at", 1).to_list(50)
+    rows = await db.evaluations.find({"paciente_id": pid}, {"_id": 0}).to_list(None)
+    rows.sort(key=lambda e: str(e.get("data_avaliacao") or e.get("created_at") or ""))
     return rows
 
 @api.get("/agenda")
@@ -3904,6 +3906,57 @@ async def add_evaluation_v2(pid: str, payload: EvaluationV2In, user=Depends(requ
     }})
     return {"ok": True, "evaluation_id": eid, "composicao": comp}
 
+@api.post("/calculos/composicao-preview")
+async def preview_composicao(payload: EvaluationV2In, user=Depends(require_nutritionist)):
+    """Resultado ao vivo da Nova avaliação (mesma conta que salva, sem gravar)."""
+    try:
+        return calc_bodycomp_v2(payload.model_dump())
+    except (ValueError, ZeroDivisionError, TypeError) as e:
+        raise HTTPException(400, f"Não foi possível calcular: {e}")
+
+
+# ── Fotos por avaliação (frente, lado e costas) ─────────────────────────────
+_POSES_FOTO = ("frente", "lado", "costas")
+
+
+class FotoAvaliacaoIn(BaseModel):
+    pose: Literal["frente", "lado", "costas"]
+    data_url: str
+
+
+@api.get("/patients/{pid}/fotos-avaliacoes")
+async def listar_fotos_avaliacoes(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    return await db.avaliacao_fotos.find({"paciente_id": pid}, {"_id": 0}).to_list(None)
+
+
+@api.put("/patients/{pid}/evaluations/{eid}/fotos")
+async def salvar_foto_avaliacao(pid: str, eid: str, payload: FotoAvaliacaoIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    if not await db.evaluations.find_one({"id": eid, "paciente_id": pid}):
+        raise HTTPException(404, "Avaliação não encontrada")
+    if not payload.data_url.startswith("data:image/") or len(payload.data_url) > 4_500_000:
+        raise HTTPException(400, "Envie uma imagem de até 3 MB")
+    doc = {"id": str(uuid.uuid4()), "paciente_id": pid, "avaliacao_id": eid, "pose": payload.pose,
+           "data_url": payload.data_url, "enviado_em": iso(now_utc())}
+    await db.avaliacao_fotos.delete_many({"paciente_id": pid, "avaliacao_id": eid, "pose": payload.pose})
+    await db.avaliacao_fotos.insert_one(dict(doc))
+    return doc
+
+
+@api.delete("/patients/{pid}/evaluations/{eid}/fotos/{pose}")
+async def apagar_foto_avaliacao(pid: str, eid: str, pose: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    await db.avaliacao_fotos.delete_many({"paciente_id": pid, "avaliacao_id": eid, "pose": pose})
+    return {"ok": True}
+
+
 @api.put("/patients/{pid}/evaluations/{eid}")
 async def update_evaluation(pid: str, eid: str, payload: EvaluationV2In, user=Depends(require_nutritionist)):
     patient = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
@@ -3927,6 +3980,7 @@ async def delete_evaluation(pid: str, eid: str, user=Depends(require_nutritionis
     result = await db.evaluations.delete_one({"id": eid, "paciente_id": pid})
     if result.deleted_count == 0:
         raise HTTPException(404, "Avaliação não encontrada")
+    await db.avaliacao_fotos.delete_many({"paciente_id": pid, "avaliacao_id": eid})
     latest = await db.evaluations.find_one({"paciente_id": pid}, sort=[("created_at", -1)])
     if latest:
         await db.patients.update_one({"id": pid}, {"$set": {"peso": latest.get("peso"), "altura": latest.get("altura"), "ultima_avaliacao": latest.get("created_at")}})

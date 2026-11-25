@@ -131,7 +131,7 @@ export default function PacienteDetalhe() {
       {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} onAbrirAnamnese={() => { setTab("anamnese"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
       {tab === "recordatorio" && <RecordatorioDia d={d} reload={reload} onIrPrescricao={() => { setTab("plano"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
       {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
-      {tab === "comparativo" && <Comparativo id={d.patient.id} />}
+      {tab === "comparativo" && <Comparativo id={d.patient.id} objetivo={d.patient.objetivo} />}
       </div>
     </NutriLayout>
   );
@@ -2167,45 +2167,51 @@ function GastoEnergeticoLegado({ d }) {
 
 // ── Recordatório ─────────────────────────────────────────────────
 
-function Comparativo({ id }) {
+function Comparativo({ id, objetivo }) {
   const [rows, setRows] = useState([]);
   useEffect(() => { api.get(`/patients/${id}/comparativo`).then((r) => setRows(r.data || [])); }, [id]);
   if (rows.length < 2) return <div className="evo-card p-8 text-gray-400 text-sm">Cadastre ao menos duas avaliações para ver o comparativo.</div>;
   const a = rows[rows.length - 2];
   const b = rows[rows.length - 1];
-  const diff = (k, lower = false) => {
-    const va = a.composicao?.[k]; const vb = b.composicao?.[k];
+  const hipertrofia = /hipertrof|ganho|massa|bulking/i.test(objetivo || "");
+  // seta = sentido real da mudança (subiu ▲ / desceu ▼); cor = bom (verde) ou ruim (vermelho) para o objetivo
+  const item = (va, vb, melhorSobe) => {
     if (va == null || vb == null) return { va, vb, dir: "—" };
     const d = +(vb - va).toFixed(2);
-    if (d === 0) return { va, vb, d, dir: "eq" };
-    const positive = lower ? d < 0 : d > 0;
-    return { va, vb, d, dir: positive ? "up" : "down" };
+    if (d === 0) return { va, vb, d, dir: "eq", bom: null };
+    return { va, vb, d, dir: d > 0 ? "up" : "down", bom: melhorSobe == null ? null : (d > 0) === melhorSobe };
   };
+  const c = (r, k) => r.composicao?.[k];
   const items = [
-    { l: "Peso (kg)", k: "imc", get: () => ({ va: a.peso, vb: b.peso, d: +(b.peso - a.peso).toFixed(2), dir: a.peso === b.peso ? "eq" : (b.peso < a.peso ? "up" : "down") }) },
-    { l: "IMC", k: "imc", lower: true },
-    { l: "% Gordura", k: "pct_gordura", lower: true },
-    { l: "Massa Magra", k: "massa_magra", lower: false },
-    { l: "Massa Gorda", k: "massa_gorda", lower: true },
-    { l: "TMB", k: "tmb_mifflin" },
+    { l: "Peso (kg)", r: item(a.peso, b.peso, hipertrofia) },
+    { l: "IMC", r: item(c(a, "imc"), c(b, "imc"), hipertrofia ? null : false) },
+    { l: "% Gordura", r: item(c(a, "pct_gordura"), c(b, "pct_gordura"), false) },
+    { l: "Massa Magra", r: item(c(a, "massa_magra"), c(b, "massa_magra"), true) },
+    { l: "Massa Gorda", r: item(c(a, "massa_gorda"), c(b, "massa_gorda"), false) },
+    { l: "TMB", r: item(c(a, "tmb_mifflin"), c(b, "tmb_mifflin"), null) },
   ];
+  const modelos = new Set(rows.map((r) => r.modelo_avaliacao || "rc"));
   return (
     <div className="evo-card p-5">
       <h3 className="evo-h3 mb-4">Comparativo evolutivo</h3>
+      {modelos.size > 1 && (
+        <p className="mb-4 rounded-lg bg-rc-amber/10 px-3 py-2 text-[12.5px] text-rc-amber" data-testid="aviso-modelos">
+          As avaliações usaram modelos diferentes (RC e Donatto): o % de gordura pode mudar só pela forma de calcular.
+        </p>
+      )}
       <div className="grid sm:grid-cols-2 gap-4">
-        {items.map((it) => {
-          const r = it.get ? it.get() : diff(it.k, it.lower);
+        {items.map(({ l, r }) => {
           const Icon = r.dir === "up" ? ArrowUp : r.dir === "down" ? ArrowDown : Minus;
-          const cl = r.dir === "up" ? "text-evo-teal" : r.dir === "down" ? "text-evo-coral" : "text-gray-500";
+          const cl = r.bom === true ? "text-[#4ADE80]" : r.bom === false ? "text-evo-coral" : "text-gray-400";
           return (
-            <div key={it.l} className="p-4 rounded-lg bg-evo-bg border border-white/[0.04] flex items-center justify-between">
+            <div key={l} className="p-4 rounded-lg bg-evo-bg border border-white/[0.04] flex items-center justify-between" data-testid={`comp-${l}`}>
               <div>
-                <div className="text-xs text-gray-500 uppercase tracking-wide">{it.l}</div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide">{l}</div>
                 <div className="text-sm text-gray-300 mt-1">{r.va ?? "—"} → <span className="font-semibold text-white">{r.vb ?? "—"}</span></div>
               </div>
-              <div className={`flex items-center gap-1 ${cl} font-semibold text-sm`}>
+              <div className={`flex items-center gap-1 ${cl} font-semibold text-sm`} data-dir={r.dir}>
                 <Icon className="w-4 h-4" />
-                {typeof r.d === "number" ? r.d : "—"}
+                {typeof r.d === "number" ? `${r.d > 0 ? "+" : ""}${String(r.d).replace(".", ",")}` : "—"}
               </div>
             </div>
           );

@@ -71,6 +71,9 @@ CONFIG_PADRAO: dict = {
     "alimentos_favoritos": [],
     "equivalentes_automaticos": True,
     "modelo_avaliacao_padrao": "rc",
+    "protocolo_dobras_padrao": "pollock7",
+    # perímetros que já aparecem na Nova avaliação (o resto fica em "+ outras medidas"); A CONFIRMAR
+    "medidas_padrao": ["braco_contraido", "cintura", "abdomen", "quadril", "coxa", "panturrilha"],
 }
 _LISTAS_CONFIG = ("objetivos", "titulos", "nomes_refeicao", "observacoes_refeicao", "observacoes_alimento", "categorias_modelos")
 
@@ -110,6 +113,8 @@ class DietaConfigIn(BaseModel):
     alimentos_favoritos: Optional[List[dict]] = None
     equivalentes_automaticos: Optional[bool] = None
     modelo_avaliacao_padrao: Optional[str] = None
+    medidas_padrao: Optional[List[str]] = None
+    protocolo_dobras_padrao: Optional[str] = None
 
 
 class ItemModeloIn(BaseModel):
