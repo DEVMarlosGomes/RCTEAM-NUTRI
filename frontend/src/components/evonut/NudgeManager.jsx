@@ -1,272 +1,199 @@
-import React, { useEffect, useState } from "react";
-import { api, formatApiError } from "@/lib/evo-api";
-import { BellRing, Plus, Trash2, Send, Power, PowerOff, Loader2, Clock } from "lucide-react";
+import React, { useCallback, useEffect, useState } from "react";
+import { Bell, Eye, Loader2, Pencil, Play, Plus, Save, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { api, formatApiError } from "@/lib/evo-api";
 
-const WEEKDAYS = [
-  { v: 0, l: "Seg" }, { v: 1, l: "Ter" }, { v: 2, l: "Qua" },
-  { v: 3, l: "Qui" }, { v: 4, l: "Sex" }, { v: 5, l: "Sáb" }, { v: 6, l: "Dom" },
+/**
+ * Lembretes (ajuste lem1 do Rogério): modelos com um clique, "antes de cada refeição" pelos horários da Prescrição,
+ * prévia da mensagem da IA, repetição (todo dia, dias da semana, a cada X dias, data única, até o fim do plano),
+ * horário num campo só, silêncio, canal e lista com liga/desliga, último envio e se o paciente respondeu.
+ */
+const MODELOS = [
+  { modelo: "agua", label: "Água", trigger_text: "Lembrar de beber água agora e da meta do dia do plano.", horario: "10:00", repeticao: "diario" },
+  { modelo: "pre_treino", label: "Pré-treino", trigger_text: "Lembrar da refeição pré-treino do plano, 1 hora antes do treino.", horario: "17:00", repeticao: "semanal", weekdays: [0, 1, 2, 3, 4] },
+  { modelo: "pesagem", label: "Pesagem semanal", trigger_text: "Pedir a pesagem em jejum, logo após acordar, e que mande o peso aqui.", horario: "07:30", repeticao: "semanal", weekdays: [0] },
+  { modelo: "foto", label: "Foto de evolução", trigger_text: "Pedir as fotos de evolução (frente, lado e costas) seguindo o protocolo de fotos.", horario: "08:00", repeticao: "intervalo", intervalo_dias: 15 },
+  { modelo: "checkin", label: "Check-in de adesão", trigger_text: "Perguntar de 0 a 10 quanto conseguiu seguir o plano esta semana e o que foi mais difícil.", horario: "19:00", repeticao: "semanal", weekdays: [6] },
+  { modelo: "vencendo", label: "Plano vencendo", trigger_text: "Avisar que o plano está perto de vencer e convidar para agendar o retorno.", horario: "10:00", repeticao: "unica" },
 ];
+const DIAS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+const vazio = { label: "", trigger_text: "", horario: "08:00", repeticao: "diario", weekdays: [], intervalo_dias: 7, data_unica: "", ate: "", canal: "app", silencio_inicio: "22:00", silencio_fim: "07:00", modelo: null };
+const dataHora = (v) => (v ? new Date(v).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+const diasDesde = (v) => (v ? Math.floor((Date.now() - new Date(v).getTime()) / 86400000) : null);
+const hh = (n) => `${String(n.hour).padStart(2, "0")}:${String(n.minute).padStart(2, "0")}`;
+
+function descricaoRepeticao(n) {
+  if (n.repeticao === "unica") return `uma vez em ${n.data_unica ? n.data_unica.split("-").reverse().join("/") : "—"}`;
+  if (n.repeticao === "intervalo") return `a cada ${n.intervalo_dias} dias`;
+  if (n.repeticao === "semanal" && n.weekdays?.length) return n.weekdays.map((d) => DIAS[d]).join(", ");
+  return "todo dia";
+}
 
 export default function NudgeManager({ patientId }) {
-  const [nudges, setNudges] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [firing, setFiring] = useState(null);
-  const [form, setForm] = useState({
-    label: "",
-    trigger_text: "",
-    hour: 9,
-    minute: 0,
-    weekdays: null,
-  });
+  const [lista, setLista] = useState(null);
+  const [form, setForm] = useState(null);
+  const [editId, setEditId] = useState(null);
+  const [previa, setPrevia] = useState("");
+  const [carregandoPrevia, setCarregandoPrevia] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [refeicoes, setRefeicoes] = useState({ ativo: false, minutos_antes: 15, canal: "app" });
 
-  const reload = () => {
-    setLoading(true);
-    api.get(`/patients/${patientId}/nudges`)
-      .then((r) => setNudges(r.data || []))
-      .catch((e) => toast.error(formatApiError(e.response?.data?.detail)))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    setLoading(true);
-    api.get(`/patients/${patientId}/nudges`)
-      .then((r) => setNudges(r.data || []))
-      .catch((e) => toast.error(formatApiError(e.response?.data?.detail)))
-      .finally(() => setLoading(false));
+  const carregar = useCallback(async () => {
+    try {
+      const [{ data: ls }, { data: d }] = await Promise.all([api.get(`/patients/${patientId}/nudges`), api.get(`/patients/${patientId}`)]);
+      setLista(ls || []);
+      if (d?.patient?.lembretes_refeicao) setRefeicoes((s) => ({ ...s, ...d.patient.lembretes_refeicao }));
+    } catch { setLista([]); }
   }, [patientId]);
+  useEffect(() => { carregar(); }, [carregar]);
 
-  const onCreate = async (e) => {
-    e.preventDefault();
-    if (!form.label.trim() || !form.trigger_text.trim()) {
-      toast.error("Preencha rótulo e instrução");
-      return;
-    }
-    setCreating(true);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const abrirNovo = (m) => { setEditId(null); setPrevia(""); setForm({ ...vazio, ...(m || {}) }); };
+  const editar = (n) => {
+    setEditId(n.id); setPrevia("");
+    setForm({ ...vazio, ...n, horario: hh(n), weekdays: n.weekdays || [], data_unica: n.data_unica || "", ate: n.ate || "", silencio_inicio: n.silencio_inicio || "", silencio_fim: n.silencio_fim || "" });
+  };
+  const payload = () => {
+    const [h, m] = String(form.horario || "08:00").split(":").map(Number);
+    return {
+      label: form.label.trim(), trigger_text: form.trigger_text.trim(), hour: h || 0, minute: m || 0,
+      weekdays: form.repeticao === "semanal" && form.weekdays.length ? form.weekdays : null,
+      repeticao: form.repeticao, intervalo_dias: form.repeticao === "intervalo" ? Number(form.intervalo_dias) || 7 : null,
+      data_unica: form.repeticao === "unica" ? form.data_unica || null : null, ate: form.ate || null,
+      canal: form.canal, silencio_inicio: form.silencio_inicio || null, silencio_fim: form.silencio_fim || null, modelo: form.modelo || null,
+    };
+  };
+  const salvar = async () => {
+    if (!form.label.trim() || form.trigger_text.trim().length < 3) { toast.error("Dê um nome e escreva a instrução da mensagem."); return; }
+    if (form.repeticao === "unica" && !form.data_unica) { toast.error("Escolha a data do envio."); return; }
+    setSalvando(true);
     try {
-      await api.post(`/patients/${patientId}/nudges`, {
-        label: form.label,
-        trigger_text: form.trigger_text,
-        hour: Number(form.hour),
-        minute: Number(form.minute),
-        weekdays: form.weekdays && form.weekdays.length ? form.weekdays : null,
-        active: true,
-      });
-      toast.success("Lembrete criado");
-      setForm({ label: "", trigger_text: "", hour: 9, minute: 0, weekdays: null });
-      reload();
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail));
-    } finally {
-      setCreating(false);
-    }
+      if (editId) await api.patch(`/patients/${patientId}/nudges/${editId}`, payload());
+      else await api.post(`/patients/${patientId}/nudges`, { ...payload(), active: true });
+      toast.success("Lembrete salvo."); setForm(null); carregar();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); } finally { setSalvando(false); }
+  };
+  const verPrevia = async () => {
+    setCarregandoPrevia(true); setPrevia("");
+    try { const { data } = await api.post(`/patients/${patientId}/nudges-previa`, { trigger_text: form.trigger_text }); setPrevia(data.mensagem); }
+    catch (e) { toast.error(formatApiError(e.response?.data?.detail)); } finally { setCarregandoPrevia(false); }
+  };
+  const alternar = async (n) => { await api.patch(`/patients/${patientId}/nudges/${n.id}`, { active: !n.active }).catch(() => {}); carregar(); };
+  const apagar = async (n) => { if (!window.confirm(`Apagar o lembrete "${n.label}"?`)) return; await api.delete(`/patients/${patientId}/nudges/${n.id}`).catch(() => {}); carregar(); };
+  const enviarAgora = async (n) => {
+    try { await api.post(`/patients/${patientId}/nudges/${n.id}/run-now`); toast.success("Enviado agora."); carregar(); }
+    catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+  const salvarRefeicoes = async (novo) => {
+    const v = { ...refeicoes, ...novo };
+    setRefeicoes(v);
+    try { const { data } = await api.put(`/patients/${patientId}/nudges-refeicoes`, v); toast.success(v.ativo ? `${data.criados} lembretes antes das refeições do plano.` : "Lembretes das refeições desligados."); carregar(); }
+    catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
-  const onToggle = async (n) => {
-    try {
-      await api.patch(`/patients/${patientId}/nudges/${n.id}`, { active: !n.active });
-      reload();
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail));
-    }
-  };
-
-  const onDelete = async (n) => {
-    if (!window.confirm(`Remover "${n.label}"?`)) return;
-    try {
-      await api.delete(`/patients/${patientId}/nudges/${n.id}`);
-      toast.success("Lembrete removido");
-      reload();
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail));
-    }
-  };
-
-  const onFireNow = async (n) => {
-    setFiring(n.id);
-    try {
-      const { data } = await api.post(`/patients/${patientId}/nudges/${n.id}/run-now`);
-      toast.success("Mensagem enviada ao paciente");
-      // Show the generated message briefly
-      console.log("Generated:", data.message);
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail));
-    } finally {
-      setFiring(null);
-    }
-  };
-
-  const toggleWeekday = (v) => {
-    setForm((f) => {
-      const wd = f.weekdays || [];
-      if (wd.includes(v)) return { ...f, weekdays: wd.filter((x) => x !== v) };
-      return { ...f, weekdays: [...wd, v].sort() };
-    });
-  };
+  const manuais = (lista || []).filter((n) => n.origem !== "plano");
+  const doPlano = (lista || []).filter((n) => n.origem === "plano");
 
   return (
-    <div className="space-y-5" data-testid="nudge-manager">
-      <div className="evo-card p-5">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-9 h-9 rounded-lg bg-emerald-400/15 border border-emerald-400/30 flex items-center justify-center">
-            <BellRing className="w-4 h-4 text-emerald-300" />
-          </div>
-          <div>
-            <h3 className="font-display font-black text-lg tracking-wide">Lembretes pró-ativos (Agente 3)</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Configure mensagens automáticas que a IA enviará ao paciente nos horários definidos (BRT).
-            </p>
-          </div>
+    <div className="space-y-4" data-testid="lembretes">
+      <section className="rc-card p-5">
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <h3 className="font-display font-bold uppercase text-[16px] text-white" style={{ fontStretch: "86%" }}>Modelos prontos</h3>
+          <button type="button" onClick={() => abrirNovo()} className="rc-btn-ghost ml-auto h-9"><Plus className="h-4 w-4" /> Lembrete em branco</button>
         </div>
-
-        <form onSubmit={onCreate} className="grid sm:grid-cols-2 gap-3" data-testid="nudge-form">
-          <div className="sm:col-span-2">
-            <label className="rc-label">Rótulo (uso interno)</label>
-            <input
-              data-testid="nudge-label"
-              className="rc-input"
-              value={form.label}
-              onChange={(e) => setForm({ ...form, label: e.target.value })}
-              placeholder="Ex: Hidratação 14h"
-              maxLength={120}
-            />
-          </div>
-          <div className="sm:col-span-2">
-            <label className="rc-label">Instrução para a IA</label>
-            <textarea
-              data-testid="nudge-trigger-text"
-              className="rc-input min-h-[70px] text-sm"
-              value={form.trigger_text}
-              onChange={(e) => setForm({ ...form, trigger_text: e.target.value })}
-              placeholder="Ex: Lembre o paciente de tomar 500ml de água e perguntar como está a fome."
-              maxLength={1000}
-            />
-            <p className="text-[11px] text-gray-500 mt-1">
-              Isto NÃO é o texto enviado ao paciente — é a diretriz interna. A IA compõe uma mensagem natural baseada nela.
-            </p>
-          </div>
-          <div>
-            <label className="rc-label flex items-center gap-1"><Clock className="w-3 h-3" /> Hora</label>
-            <select data-testid="nudge-hour" className="rc-input" value={form.hour} onChange={(e) => setForm({ ...form, hour: e.target.value })}>
-              {Array.from({ length: 24 }).map((_, i) => <option key={i} value={i}>{i.toString().padStart(2, "0")}h</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="rc-label">Minuto</label>
-            <select data-testid="nudge-minute" className="rc-input" value={form.minute} onChange={(e) => setForm({ ...form, minute: e.target.value })}>
-              {[0, 15, 30, 45].map((m) => <option key={m} value={m}>{m.toString().padStart(2, "0")}</option>)}
-            </select>
-          </div>
-          <div className="sm:col-span-2">
-            <label className="rc-label">Dias da semana <span className="text-gray-500 font-normal">(vazio = todos os dias)</span></label>
-            <div className="flex flex-wrap gap-1.5 mt-1">
-              {WEEKDAYS.map((w) => {
-                const on = (form.weekdays || []).includes(w.v);
-                return (
-                  <button
-                    key={w.v}
-                    type="button"
-                    data-testid={`nudge-wd-${w.v}`}
-                    onClick={() => toggleWeekday(w.v)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all border ${
-                      on
-                        ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/40"
-                        : "border-white/10 text-gray-400 hover:text-white hover:border-white/20"
-                    }`}
-                  >
-                    {w.l}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="sm:col-span-2 flex justify-end">
-            <button
-              data-testid="nudge-create-submit"
-              type="submit"
-              disabled={creating}
-              className="rc-btn-primary"
-            >
-              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-              Criar lembrete
+        <div className="flex flex-wrap gap-2">
+          {MODELOS.map((m) => (
+            <button key={m.modelo} type="button" onClick={() => abrirNovo(m)} className="rounded-xl bg-white/[0.04] px-3.5 py-2 text-[13px] text-gray-200 ring-1 ring-white/[0.08] hover:ring-rc-blue/60" data-testid={`modelo-lembrete-${m.modelo}`}>
+              <Bell className="mr-1.5 inline h-3.5 w-3.5 text-rc-lime" />{m.label}
             </button>
-          </div>
-        </form>
-      </div>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.03] px-4 py-3 ring-1 ring-white/[0.06]" data-testid="antes-refeicoes">
+          <label className="flex cursor-pointer items-center gap-2 text-[13.5px] text-gray-100">
+            <input type="checkbox" className="h-4 w-4 accent-[#0081FD]" checked={Boolean(refeicoes.ativo)} onChange={(e) => salvarRefeicoes({ ativo: e.target.checked })} />
+            Antes de cada refeição
+          </label>
+          <input className="rc-input h-9 w-20 tabular" inputMode="numeric" value={refeicoes.minutos_antes} onChange={(e) => setRefeicoes((s) => ({ ...s, minutos_antes: e.target.value }))}
+            onBlur={() => refeicoes.ativo && salvarRefeicoes({ minutos_antes: Number(refeicoes.minutos_antes) || 15 })} aria-label="Minutos antes" />
+          <span className="text-[13px] text-gray-400">min antes, pelos horários da Prescrição. Se o plano mudar, os lembretes mudam juntos.</span>
+          {doPlano.length > 0 && <span className="text-[12px] text-gray-500">{doPlano.map((n) => `${hh(n)} ${n.refeicao}`).join(" · ")}</span>}
+        </div>
+      </section>
 
-      <div className="evo-card p-5" data-testid="nudge-list">
-        <h4 className="font-bold uppercase tracking-wider text-xs text-gray-300 mb-3">
-          Lembretes ativos · {nudges.length}
-        </h4>
-        {loading ? (
-          <div className="text-center py-6 text-gray-500 text-sm">
-            <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Carregando…
+      {form && (
+        <section className="rc-card p-5" data-testid="form-lembrete">
+          <div className="mb-4 flex items-center gap-2">
+            <h3 className="text-[15px] font-semibold text-white flex-1">{editId ? "Editar lembrete" : "Novo lembrete"}</h3>
+            <button type="button" onClick={() => setForm(null)} className="rc-btn-ghost p-1.5" aria-label="Fechar"><X className="h-4 w-4" /></button>
           </div>
-        ) : nudges.length === 0 ? (
-          <p className="text-sm text-gray-500 text-center py-6">Nenhum lembrete configurado ainda.</p>
-        ) : (
-          <ul className="space-y-2">
-            {nudges.map((n) => (
-              <li
-                key={n.id}
-                data-testid={`nudge-row-${n.id}`}
-                className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-lg border ${
-                  n.active ? "bg-white/[0.02] border-white/5" : "bg-white/[0.01] border-white/[0.03] opacity-60"
-                }`}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <BellRing className={`w-3.5 h-3.5 ${n.active ? "text-emerald-300" : "text-gray-500"} flex-shrink-0`} />
-                    <span className="font-bold text-sm truncate">{n.label}</span>
-                    <span className="text-[10px] uppercase tracking-wider text-gray-500 font-bold whitespace-nowrap">
-                      {n.hour.toString().padStart(2, "0")}:{n.minute.toString().padStart(2, "0")} BRT
-                    </span>
-                    {n.weekdays && n.weekdays.length > 0 && (
-                      <span className="text-[10px] text-gray-500">
-                        · {n.weekdays.map((v) => WEEKDAYS[v].l).join(" ")}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-400 mt-1 line-clamp-2 pl-5">{n.trigger_text}</div>
-                  {n.last_fired_at && (
-                    <div className="text-[10px] text-gray-500 mt-1 pl-5">
-                      Último envio: {new Date(n.last_fired_at).toLocaleString("pt-BR")}
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px_160px]">
+            <label className="block"><span className="rc-label">Nome</span><input className="rc-input h-10" value={form.label} onChange={(e) => set("label", e.target.value)} /></label>
+            <label className="block"><span className="rc-label">Horário</span><input type="time" className="rc-input h-10" value={form.horario} onChange={(e) => set("horario", e.target.value)} data-testid="horario-lembrete" /></label>
+            <label className="block"><span className="rc-label">Canal</span>
+              <select className="rc-input h-10" value={form.canal} onChange={(e) => set("canal", e.target.value)}><option value="app">App do aluno</option><option value="whatsapp">WhatsApp</option></select>
+            </label>
+          </div>
+          <label className="mt-3 block"><span className="rc-label">O que a IA deve dizer</span>
+            <textarea className="rc-input min-h-[70px] py-2" value={form.trigger_text} onChange={(e) => { set("trigger_text", e.target.value); setPrevia(""); }} />
+          </label>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <label className="block"><span className="rc-label">Repetir</span>
+              <select className="rc-input h-10" value={form.repeticao} onChange={(e) => set("repeticao", e.target.value)} data-testid="repeticao">
+                <option value="diario">Todo dia</option><option value="semanal">Dias da semana</option><option value="intervalo">A cada X dias</option><option value="unica">Data única</option>
+              </select>
+            </label>
+            {form.repeticao === "semanal" && (
+              <div className="flex gap-1">{DIAS.map((d, i) => (
+                <button key={d} type="button" aria-pressed={form.weekdays.includes(i)} onClick={() => set("weekdays", form.weekdays.includes(i) ? form.weekdays.filter((x) => x !== i) : [...form.weekdays, i].sort())}
+                  className={`h-10 w-11 rounded-lg text-[12.5px] font-semibold ${form.weekdays.includes(i) ? "bg-rc-blue text-white" : "bg-white/[0.05] text-gray-400"}`}>{d}</button>
+              ))}</div>
+            )}
+            {form.repeticao === "intervalo" && <label className="block"><span className="rc-label">A cada (dias)</span><input className="rc-input h-10 w-24" inputMode="numeric" value={form.intervalo_dias} onChange={(e) => set("intervalo_dias", e.target.value)} /></label>}
+            {form.repeticao === "unica" && <label className="block"><span className="rc-label">Data</span><input type="date" className="rc-input h-10" value={form.data_unica} onChange={(e) => set("data_unica", e.target.value)} /></label>}
+            {form.repeticao !== "unica" && <label className="block"><span className="rc-label">Até (fim do plano)</span><input type="date" className="rc-input h-10" value={form.ate} onChange={(e) => set("ate", e.target.value)} /></label>}
+            <label className="block"><span className="rc-label">Silêncio</span>
+              <span className="flex items-center gap-1.5"><input type="time" className="rc-input h-10 w-28" value={form.silencio_inicio} onChange={(e) => set("silencio_inicio", e.target.value)} aria-label="Início do silêncio" /><span className="text-gray-500">às</span><input type="time" className="rc-input h-10 w-28" value={form.silencio_fim} onChange={(e) => set("silencio_fim", e.target.value)} aria-label="Fim do silêncio" /></span>
+            </label>
+          </div>
+          {previa && <div className="mt-4 rounded-xl bg-rc-blue/10 px-4 py-3 text-[13.5px] text-gray-100 ring-1 ring-rc-blue/30" data-testid="previa-lembrete"><div className="mb-1 text-[11px] uppercase tracking-[0.12em] text-rc-blueLight">Prévia da mensagem</div>{previa}</div>}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" onClick={verPrevia} disabled={carregandoPrevia || form.trigger_text.trim().length < 3} className="rc-btn-secondary h-10" data-testid="ver-previa">
+              {carregandoPrevia ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />} Prévia
+            </button>
+            <button type="button" onClick={salvar} disabled={salvando} className="rc-btn-primary h-10" data-testid="salvar-lembrete"><Save className="h-4 w-4" /> Salvar lembrete</button>
+          </div>
+        </section>
+      )}
+
+      <section className="rc-card p-5">
+        <h3 className="mb-3 font-display font-bold uppercase text-[16px] text-white" style={{ fontStretch: "86%" }}>Ativos</h3>
+        {lista === null ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" /> : !manuais.length ? <p className="text-[13px] text-gray-500">Nenhum lembrete. Comece por um modelo acima.</p> : (
+          <ul className="divide-y divide-white/[0.05]">
+            {manuais.map((n) => {
+              const semResposta = n.last_fired_at && !n.respondeu_em ? diasDesde(n.last_fired_at) : null;
+              return (
+                <li key={n.id} className="flex flex-wrap items-center gap-3 py-3" data-testid={`lembrete-${n.id}`}>
+                  <button type="button" role="switch" aria-checked={n.active} onClick={() => alternar(n)} aria-label={n.active ? "Desligar" : "Ligar"}
+                    className={`relative h-6 w-11 rounded-full transition-colors ${n.active ? "bg-rc-lime" : "bg-white/[0.12]"}`}>
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-rc-ink transition-[left] ${n.active ? "left-[22px]" : "left-0.5"}`} />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[14px] font-semibold text-white">{n.label} <span className="font-normal text-gray-400">· {hh(n)} · {descricaoRepeticao(n)} · {n.canal === "whatsapp" ? "WhatsApp" : "app"}</span></div>
+                    <div className="text-[12px] text-gray-500">
+                      Último envio {dataHora(n.last_fired_at)}
+                      {n.respondeu_em && <span className="text-[#4ADE80]"> · respondeu {dataHora(n.respondeu_em)}</span>}
+                      {semResposta != null && <span className={semResposta >= 3 ? "text-rc-amber" : ""}> · sem resposta há {semResposta} {semResposta === 1 ? "dia" : "dias"}</span>}
                     </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    data-testid={`nudge-fire-${n.id}`}
-                    onClick={() => onFireNow(n)}
-                    disabled={firing === n.id}
-                    title="Enviar agora"
-                    className="rc-btn-ghost p-2"
-                  >
-                    {firing === n.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                  </button>
-                  <button
-                    data-testid={`nudge-toggle-${n.id}`}
-                    onClick={() => onToggle(n)}
-                    title={n.active ? "Pausar" : "Ativar"}
-                    className="rc-btn-ghost p-2"
-                  >
-                    {n.active ? <Power className="w-4 h-4 text-emerald-300" /> : <PowerOff className="w-4 h-4 text-gray-500" />}
-                  </button>
-                  <button
-                    data-testid={`nudge-delete-${n.id}`}
-                    onClick={() => onDelete(n)}
-                    title="Remover"
-                    className="rc-btn-ghost p-2 hover:text-red-400"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </li>
-            ))}
+                  </div>
+                  <button type="button" onClick={() => enviarAgora(n)} className="rc-btn-ghost h-8 text-[12.5px]" title="Enviar agora"><Play className="h-3.5 w-3.5" /> Agora</button>
+                  <button type="button" onClick={() => editar(n)} className="rc-btn-ghost p-2" aria-label="Editar"><Pencil className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => apagar(n)} className="rc-btn-ghost p-2 text-rc-coral" aria-label="Apagar"><Trash2 className="h-4 w-4" /></button>
+                </li>
+              );
+            })}
           </ul>
         )}
-      </div>
+      </section>
     </div>
   );
 }

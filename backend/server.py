@@ -346,6 +346,15 @@ class NudgeIn(BaseModel):
     minute: int = Field(ge=0, le=59)
     weekdays: Optional[List[int]] = None  # 0=Mon..6=Sun; None = every day
     active: bool = True
+    # repetição: diario | semanal (weekdays) | intervalo (a cada X dias) | unica (data) ; `ate` = até o fim do plano/data
+    repeticao: Optional[str] = None
+    intervalo_dias: Optional[int] = Field(default=None, ge=1, le=90)
+    data_unica: Optional[str] = None
+    ate: Optional[str] = None
+    canal: Optional[str] = "app"  # app | whatsapp
+    silencio_inicio: Optional[str] = None  # "22:00"
+    silencio_fim: Optional[str] = None  # "07:00"
+    modelo: Optional[str] = None
 
 class NudgeUpdate(BaseModel):
     label: Optional[str] = None
@@ -354,6 +363,13 @@ class NudgeUpdate(BaseModel):
     minute: Optional[int] = Field(default=None, ge=0, le=59)
     weekdays: Optional[List[int]] = None
     active: Optional[bool] = None
+    repeticao: Optional[str] = None
+    intervalo_dias: Optional[int] = Field(default=None, ge=1, le=90)
+    data_unica: Optional[str] = None
+    ate: Optional[str] = None
+    canal: Optional[str] = None
+    silencio_inicio: Optional[str] = None
+    silencio_fim: Optional[str] = None
 
 # ---------- Calculations ----------
 def calc_imc(peso, altura_cm):
@@ -3099,7 +3115,72 @@ def _nudge_view(n: dict) -> dict:
         "last_fired_at": n.get("last_fired_at"),
         "next_run_at": n.get("next_run_at"),
         "created_at": n.get("created_at"),
+        "repeticao": n.get("repeticao") or ("semanal" if n.get("weekdays") else "diario"),
+        "intervalo_dias": n.get("intervalo_dias"), "data_unica": n.get("data_unica"), "ate": n.get("ate"),
+        "canal": n.get("canal") or "app", "silencio_inicio": n.get("silencio_inicio"), "silencio_fim": n.get("silencio_fim"),
+        "modelo": n.get("modelo"), "origem": n.get("origem"), "refeicao": n.get("refeicao"),
+        "respondeu_em": n.get("respondeu_em"),
     }
+
+
+def _hm(txt: Optional[str]) -> Optional[tuple]:
+    try:
+        h, m = str(txt).split(":")[:2]
+        return int(h), int(m)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _proximo_lembrete(n: dict, from_dt: Optional[datetime] = None) -> Optional[datetime]:
+    """Próximo disparo conforme a repetição; None = encerrado (data única passada ou passou do 'até')."""
+    rep = n.get("repeticao") or ("semanal" if n.get("weekdays") else "diario")
+    base = (from_dt or now_utc()).astimezone(TZ_BR)
+    hour, minute = int(n.get("hour") or 0), int(n.get("minute") or 0)
+    if rep == "unica":
+        try:
+            d = datetime.strptime(str(n.get("data_unica"))[:10], "%Y-%m-%d").replace(hour=hour, minute=minute, tzinfo=TZ_BR)
+        except ValueError:
+            return None
+        return d.astimezone(timezone.utc) if d > base else None
+    if rep == "intervalo":
+        passo = int(n.get("intervalo_dias") or 1)
+        ultimo = n.get("last_fired_at")
+        if ultimo:
+            cand = datetime.fromisoformat(str(ultimo)).astimezone(TZ_BR).replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=passo)
+            while cand <= base:
+                cand += timedelta(days=passo)
+        else:
+            cand = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if cand <= base:
+                cand += timedelta(days=1)
+        prox = cand.astimezone(timezone.utc)
+    else:
+        prox = _compute_next_run(hour, minute, n.get("weekdays") if rep == "semanal" else None, from_dt=from_dt)
+    if n.get("ate"):
+        try:
+            limite = datetime.strptime(str(n["ate"])[:10], "%Y-%m-%d").replace(hour=23, minute=59, tzinfo=TZ_BR)
+            if prox.astimezone(TZ_BR) > limite:
+                return None
+        except ValueError:
+            pass
+    return prox
+
+
+def _no_silencio(n: dict, quando: datetime) -> Optional[datetime]:
+    """Se cair no horário de silêncio, devolve o fim do silêncio (próximo disparo); senão None."""
+    ini, fim = _hm(n.get("silencio_inicio")), _hm(n.get("silencio_fim"))
+    if not ini or not fim:
+        return None
+    local = quando.astimezone(TZ_BR)
+    minutos = local.hour * 60 + local.minute
+    a, b = ini[0] * 60 + ini[1], fim[0] * 60 + fim[1]
+    dentro = (a <= minutos < b) if a < b else (minutos >= a or minutos < b)
+    if not dentro:
+        return None
+    alvo = local.replace(hour=fim[0], minute=fim[1], second=0, microsecond=0)
+    if alvo <= local:
+        alvo += timedelta(days=1)
+    return alvo.astimezone(timezone.utc)
 
 def _compute_next_run(hour: int, minute: int, weekdays: Optional[List[int]], from_dt: Optional[datetime] = None) -> datetime:
     """Compute next firing in America/Sao_Paulo timezone. Returns aware UTC datetime."""
@@ -3160,8 +3241,74 @@ async def list_nudges(pid: str, user=Depends(require_nutritionist)):
         raise HTTPException(404, "Paciente não encontrado")
     rows = await db.patient_nudges.find(
         {"patient_id": pid}, {"_id": 0}
-    ).sort("created_at", 1).to_list(50)
-    return [_nudge_view(n) for n in rows]
+    ).sort("created_at", 1).to_list(100)
+    # última resposta do paciente (mensagem dele no atendimento) para "respondeu?" / "sem resposta há X dias"
+    ultima = await db.patient_messages.find_one({"patient_id": pid, "role": "user"}, {"_id": 0, "created_at": 1}, sort=[("created_at", -1)])
+    resp = (ultima or {}).get("created_at")
+    out = []
+    for n in rows:
+        v = _nudge_view(n)
+        v["respondeu_em"] = resp if resp and n.get("last_fired_at") and str(resp) > str(n["last_fired_at"]) else None
+        out.append(v)
+    return out
+
+
+class LembretesRefeicaoIn(BaseModel):
+    ativo: bool = True
+    minutos_antes: int = Field(default=15, ge=0, le=120)
+    canal: Optional[str] = "app"
+
+
+async def _sincronizar_lembretes_refeicao(pid: str) -> int:
+    """'Antes de cada refeição': um lembrete X min antes de cada horário da dieta mais recente; refeito quando o plano muda."""
+    p = await db.patients.find_one({"id": pid}, {"_id": 0, "lembretes_refeicao": 1, "nutricionista_id": 1}) or {}
+    cfg = p.get("lembretes_refeicao") or {}
+    await db.patient_nudges.delete_many({"patient_id": pid, "origem": "plano"})
+    if not cfg.get("ativo"):
+        return 0
+    plano = await db.planos_manuais.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("atualizado_em", -1), ("criado_em", -1)])
+    criados = 0
+    for ref in (plano or {}).get("refeicoes") or []:
+        hm = _hm(ref.get("horario"))
+        if not hm:
+            continue
+        total = hm[0] * 60 + hm[1] - int(cfg.get("minutos_antes") or 0)
+        total %= 24 * 60
+        nome = (ref.get("nome") or "refeição").strip()
+        doc = {"id": str(uuid.uuid4()), "patient_id": pid, "nutricionista_id": p.get("nutricionista_id"),
+               "label": f"Antes: {nome}", "trigger_text": f"Lembrar o paciente de que daqui a {cfg.get('minutos_antes')} minutos é hora de {nome} ({ref.get('horario')}), com o que está no plano.",
+               "hour": total // 60, "minute": total % 60, "weekdays": None, "active": True, "last_fired_at": None,
+               "repeticao": "diario", "canal": cfg.get("canal") or "app", "origem": "plano", "refeicao": nome, "created_at": iso(now_utc())}
+        doc["next_run_at"] = iso(_proximo_lembrete(doc))
+        await db.patient_nudges.insert_one(doc)
+        criados += 1
+    return criados
+
+
+@api.put("/patients/{pid}/nudges-refeicoes")
+async def configurar_lembretes_refeicao(pid: str, payload: LembretesRefeicaoIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    await db.patients.update_one({"id": pid}, {"$set": {"lembretes_refeicao": payload.model_dump()}})
+    return {"ok": True, "criados": await _sincronizar_lembretes_refeicao(pid)}
+
+
+class PreviaLembreteIn(BaseModel):
+    trigger_text: str = Field(min_length=3, max_length=1000)
+
+
+@api.post("/patients/{pid}/nudges-previa")
+async def previa_lembrete(pid: str, payload: PreviaLembreteIn, user=Depends(require_nutritionist)):
+    """Prévia da mensagem que a IA vai mandar (não envia nem salva)."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    try:
+        texto = await ai_patient_proactive(f"previa-{pid}-{uuid.uuid4().hex[:6]}", payload.trigger_text, await _patient_context_for_nudge(pid))
+    except Exception as e:
+        raise HTTPException(503, f"IA indisponível agora: {str(e)[:120]}")
+    return {"mensagem": texto}
 
 @api.post("/patients/{pid}/nudges")
 async def create_nudge(pid: str, payload: NudgeIn, user=Depends(require_nutritionist)):
@@ -3169,14 +3316,17 @@ async def create_nudge(pid: str, payload: NudgeIn, user=Depends(require_nutritio
     if not p:
         raise HTTPException(404, "Paciente não encontrado")
     nid = str(uuid.uuid4())
-    next_run = _compute_next_run(payload.hour, payload.minute, payload.weekdays)
     doc = {
         "id": nid, "patient_id": pid, "nutricionista_id": user["id"],
         "label": payload.label[:120], "trigger_text": payload.trigger_text[:1000],
         "hour": payload.hour, "minute": payload.minute, "weekdays": payload.weekdays,
-        "active": payload.active, "last_fired_at": None,
-        "next_run_at": iso(next_run), "created_at": iso(now_utc()),
+        "active": payload.active, "last_fired_at": None, "created_at": iso(now_utc()),
+        **{k: getattr(payload, k) for k in ("repeticao", "intervalo_dias", "data_unica", "ate", "canal", "silencio_inicio", "silencio_fim", "modelo")},
     }
+    prox = _proximo_lembrete(doc)
+    doc["next_run_at"] = iso(prox) if prox else None
+    if not prox:
+        doc["active"] = False
     await db.patient_nudges.insert_one(doc)
     return _nudge_view(doc)
 
@@ -3188,12 +3338,10 @@ async def update_nudge(pid: str, nid: str, payload: NudgeUpdate, user=Depends(re
     existing = await db.patient_nudges.find_one({"id": nid, "patient_id": pid}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Lembrete não encontrado")
-    upd = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
-    if any(k in upd for k in ("hour", "minute", "weekdays")) or upd.get("active") is True:
-        hour = upd.get("hour", existing["hour"])
-        minute = upd.get("minute", existing["minute"])
-        weekdays = upd.get("weekdays", existing.get("weekdays"))
-        upd["next_run_at"] = iso(_compute_next_run(hour, minute, weekdays))
+    upd = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None or k in ("ate", "weekdays", "silencio_inicio", "silencio_fim")}
+    if any(k in upd for k in ("hour", "minute", "weekdays", "repeticao", "intervalo_dias", "data_unica", "ate")) or upd.get("active") is True:
+        prox = _proximo_lembrete({**existing, **upd})
+        upd["next_run_at"] = iso(prox) if prox else None
     await db.patient_nudges.update_one({"id": nid}, {"$set": upd})
     updated = await db.patient_nudges.find_one({"id": nid}, {"_id": 0})
     return _nudge_view(updated)
@@ -3351,14 +3499,20 @@ async def nudge_scheduler_loop():
                     nxt = _compute_next_run(nudge["hour"], nudge["minute"], nudge.get("weekdays"), from_dt=now)
                     await db.patient_nudges.update_one({"id": nudge["id"]}, {"$set": {"next_run_at": iso(nxt)}})
                     continue
+                adiar = _no_silencio(nudge, now)
+                if adiar:
+                    await db.patient_nudges.update_one({"id": nudge["id"]}, {"$set": {"next_run_at": iso(adiar)}})
+                    continue
                 logging.info(f"Firing nudge {nudge['id']} for patient {nudge['patient_id']}")
                 text = await _fire_nudge(nudge)
-                next_run = _compute_next_run(nudge["hour"], nudge["minute"], nudge.get("weekdays"), from_dt=now)
+                depois = {**nudge, "last_fired_at": iso(now) if text else nudge.get("last_fired_at")}
+                next_run = _proximo_lembrete(depois, from_dt=now)
                 await db.patient_nudges.update_one(
                     {"id": nudge["id"]},
                     {"$set": {
-                        "last_fired_at": iso(now) if text else nudge.get("last_fired_at"),
-                        "next_run_at": iso(next_run),
+                        "last_fired_at": depois["last_fired_at"],
+                        "next_run_at": iso(next_run) if next_run else None,
+                        **({} if next_run else {"active": False}),
                     }},
                 )
         except Exception:
@@ -5780,6 +5934,7 @@ async def create_plano_manual(pid: str, payload: PlanoManualIn, user=Depends(req
     }
     await db.planos_manuais.insert_one(doc)
     await _create_plano_snapshot(doc, "create", user["id"])
+    await _sincronizar_lembretes_refeicao(pid)  # 'antes de cada refeição' acompanha o plano
     return await _enrich_plano({k: v for k, v in doc.items() if k != "_id"})
 
 @api.get("/patients/{pid}/planos-manuais/{pmid}")
@@ -5805,6 +5960,7 @@ async def update_plano_manual(pid: str, pmid: str, payload: PlanoManualIn, user=
     await db.planos_manuais.update_one({"id": pmid}, {"$set": upd})
     updated = await db.planos_manuais.find_one({"id": pmid}, {"_id": 0})
     await _create_plano_snapshot(updated, "update_after", user["id"])
+    await _sincronizar_lembretes_refeicao(pid)  # 'antes de cada refeição' acompanha o plano
     return await _enrich_plano(updated)
 
 @api.get("/patients/{pid}/planos-manuais/{pmid}/historico")
