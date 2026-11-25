@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, FileText, Loader2 } from "lucide-react";
+import { Check, ChevronDown, FileText, Loader2, Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
-import { abrirAnexo, carregarEstrutura, respostasPlanas, vazio, visivel } from "@/lib/anamnese";
+import { abrirAnexo, carregarEstrutura, respostasPlanas, textoResposta, vazio, visivel } from "@/lib/anamnese";
+import SeletorObjetivos from "./SeletorObjetivos";
 
 /**
  * Anamnese organizada pelos blocos do formulário pré-consulta (o Bloco 1, dados pessoais, fica no card do topo).
@@ -14,6 +15,8 @@ export default function AnamneseBlocos({ pacienteId, sexoPaciente, inicial }) {
   const [doc, setDoc] = useState(inicial || {});
   const [abertos, setAbertos] = useState(() => new Set(["objetivos_treinamento"]));
   const [estado, setEstado] = useState("");
+  // respostas do cliente em modo leitura; "Editar respostas" libera a edição (sem formulário, já abre editando)
+  const [editando, setEditando] = useState(() => !(inicial?.enviado_em));
   const pendente = useRef({ respostas: {}, outras: {} });
   const timer = useRef(null);
 
@@ -73,15 +76,28 @@ export default function AnamneseBlocos({ pacienteId, sexoPaciente, inicial }) {
   if (!estrutura) return <div className="evo-card p-5 text-sm text-gray-500"><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Carregando anamnese…</div>;
 
   const enviadoEm = doc.enviado_em ? new Date(doc.enviado_em).toLocaleDateString("pt-BR") : null;
+  // numeração contínua só das perguntas que aparecem (não pula número de pergunta escondida)
+  const numeros = {};
+  let contador = 0;
+  estrutura.blocos.forEach((b) => b.perguntas.forEach((p) => {
+    if (p.tipo === "interno" || p.tipo === "fotos") return;
+    if (visivel(p, planas) || !vazio(planas[p.id])) { contador += 1; numeros[p.id] = contador; }
+  }));
 
   return (
     <div className="space-y-3" data-testid="anamnese-blocos">
       <div className="flex items-center justify-between gap-3 px-1 text-[12px] text-gray-500 min-h-[20px]">
         <span>{enviadoEm ? `Formulário pré-consulta respondido pelo paciente em ${enviadoEm}.` : "O paciente ainda não enviou o formulário pré-consulta. Você pode preencher manualmente."}</span>
-        <EstadoSalvar estado={estado} />
+        <span className="flex items-center gap-3">
+          <EstadoSalvar estado={estado} />
+          <button type="button" onClick={() => setEditando((v) => !v)} className="rc-btn-ghost h-8 text-[12.5px]" data-testid="editar-respostas">
+            {editando ? <><Check className="h-3.5 w-3.5" /> Concluir edição</> : <><Pencil className="h-3.5 w-3.5" /> Editar respostas</>}
+          </button>
+        </span>
       </div>
       {estrutura.blocos.filter((b) => b.key !== "dados_pessoais").map((b, i) => {
-        const perguntas = b.perguntas.filter((p) => visivel(p, planas) || !vazio(planas[p.id]));
+        const perguntas = b.perguntas.filter((p) => p.tipo !== "interno" && p.tipo !== "fotos" && (visivel(p, planas) || !vazio(planas[p.id])));
+        if (!perguntas.length) return null;
         const respondidas = perguntas.filter((p) => !vazio(planas[p.id])).length;
         const extras = Object.entries(outras[b.key] || {});
         const aberto = abertos.has(b.key);
@@ -103,9 +119,14 @@ export default function AnamneseBlocos({ pacienteId, sexoPaciente, inicial }) {
                 {perguntas.map((p) => (
                   <div key={p.id} className="py-3.5 grid md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-6 gap-y-2">
                     <label className="text-[13px] text-gray-400 leading-snug" htmlFor={`anam-${p.id}`}>
-                      <span className="text-gray-600 tabular mr-1.5">{p.n}.</span>{p.titulo}
+                      <span className="text-gray-600 tabular mr-1.5">{numeros[p.id]}.</span>{p.titulo}
                     </label>
-                    <Editor pergunta={p} valor={planas[p.id]} pacienteId={pacienteId} onChange={(v) => mudarResposta(b.key, p.id, v)} />
+                    {editando || p.tipo === "arquivo" ? (
+                      <Editor pergunta={p} valor={planas[p.id]} planas={planas} pacienteId={pacienteId}
+                        onChange={(v, extra) => { mudarResposta(b.key, p.id, v); if (extra) Object.entries(extra).forEach(([k, x]) => mudarResposta(b.key, k, x)); }} />
+                    ) : (
+                      <Leitura pergunta={p} valor={planas[p.id]} planas={planas} />
+                    )}
                   </div>
                 ))}
                 {extras.length > 0 && (
@@ -158,8 +179,49 @@ function TextoAuto({ valor, onChange, label, id }) {
   );
 }
 
-function Editor({ pergunta: p, valor, pacienteId, onChange }) {
+function Leitura({ pergunta: p, valor, planas }) {
+  if (vazio(valor)) return <span className="text-[13.5px] text-gray-600">—</span>;
+  if (p.tipo === "objetivos") {
+    const lista = Array.isArray(valor) ? valor : [String(valor)];
+    const princ = lista.includes(planas.objetivo_principal) ? planas.objetivo_principal : lista[0];
+    return <span className="flex flex-wrap gap-1.5">{lista.map((o) => <span key={o} className={`rounded-lg px-2 py-0.5 text-[12.5px] ${o === princ ? "bg-rc-lime/15 font-semibold text-rc-lime" : "bg-white/[0.05] text-gray-200"}`}>{o === princ ? `★ ${o}` : o}</span>)}</span>;
+  }
+  if (p.tipo === "rotina" && Array.isArray(valor)) {
+    return (
+      <ul className="space-y-1 text-[13.5px] text-gray-100">
+        {valor.map((r, i) => <li key={i}><span className="tabular text-gray-400">{r.horario}</span> {r.refeicao && <b className="font-semibold">{r.refeicao}:</b>} {r.alimentos}</li>)}
+      </ul>
+    );
+  }
+  return <span className="whitespace-pre-line text-[13.5px] text-gray-100">{textoResposta(p, valor)}</span>;
+}
+
+function EditorRotina({ valor, onChange }) {
+  const linhas = Array.isArray(valor) ? valor : [];
+  if (!Array.isArray(valor) && !vazio(valor)) return <TextoAuto valor={valor} onChange={onChange} label="Rotina alimentar" />;
+  const set = (i, k, v) => onChange(linhas.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  return (
+    <div className="space-y-1.5">
+      {linhas.map((r, i) => (
+        <div key={i} className="grid grid-cols-[70px_minmax(0,140px)_minmax(0,1fr)_28px] gap-1.5">
+          <input className="evo-input h-9" value={r.horario || ""} onChange={(e) => set(i, "horario", e.target.value)} placeholder="07:00" aria-label="Horário" />
+          <input className="evo-input h-9" value={r.refeicao || ""} onChange={(e) => set(i, "refeicao", e.target.value)} placeholder="Refeição" aria-label="Refeição" />
+          <input className="evo-input h-9" value={r.alimentos || ""} onChange={(e) => set(i, "alimentos", e.target.value)} placeholder="O que come" aria-label="O que come" />
+          <button type="button" onClick={() => onChange(linhas.filter((_, j) => j !== i))} className="text-gray-500 hover:text-white" aria-label="Remover refeição"><X className="h-4 w-4" /></button>
+        </div>
+      ))}
+      <button type="button" onClick={() => onChange([...linhas, { horario: "", refeicao: "", alimentos: "" }])} className="rc-btn-ghost h-8 -ml-2 text-[12.5px] text-rc-lime"><Plus className="h-3.5 w-3.5" /> Refeição</button>
+    </div>
+  );
+}
+
+function Editor({ pergunta: p, valor, planas, pacienteId, onChange }) {
   const id = `anam-${p.id}`;
+  if (p.tipo === "objetivos") {
+    const lista = Array.isArray(valor) ? valor : vazio(valor) ? [] : [String(valor)];
+    return <SeletorObjetivos valor={lista} principal={planas?.objetivo_principal} onChange={(l, princ) => onChange(l, { objetivo_principal: princ })} />;
+  }
+  if (p.tipo === "rotina") return <EditorRotina valor={valor} onChange={onChange} />;
   if (p.tipo === "unica" || p.tipo === "escala") {
     const opcoes = p.tipo === "escala" ? Array.from({ length: (p.max ?? 10) - (p.min ?? 0) + 1 }, (_, i) => String((p.min ?? 0) + i)) : p.opcoes;
     const legado = !vazio(valor) && !opcoes.includes(String(valor)); // resposta antiga em texto livre

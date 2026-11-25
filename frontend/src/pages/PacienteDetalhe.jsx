@@ -18,18 +18,24 @@ import AnamneseBlocos from "@/components/evonut/AnamneseBlocos";
 import PrevisaoMacros from "@/components/evonut/PrevisaoMacros";
 import RecordatorioDia from "@/components/evonut/RecordatorioDia";
 import { abrirAnexo } from "@/lib/anamnese";
+import SeletorObjetivos from "@/components/evonut/SeletorObjetivos";
+import FormularioStatus from "@/components/evonut/FormularioStatus";
 
-// Ordem das abas definida pelo Rogério (print de referência).
-const TABS = [
-  { k: "anamnese", l: "Anamnese", icon: FileText },
-  { k: "exames", l: "Exames", icon: FlaskConical },
-  { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
-  { k: "antropometria", l: "Antropometria", icon: Activity },
-  { k: "gasto", l: "Gasto Energético", icon: Zap },
-  { k: "macros", l: "Previsão de Macros", icon: PieChart },
-  { k: "plano", l: "Prescrição Dietética", icon: Utensils },
-  { k: "lembretes", l: "Lembretes", icon: BellRing },
-  { k: "comparativo", l: "Comparativo", icon: Sparkles },
+// Abas em dois grupos (ajustes do Rogério): Avaliação | Plano — nada fica escondido.
+const GRUPOS_TABS = [
+  ["Avaliação", [
+    { k: "anamnese", l: "Anamnese", icon: FileText },
+    { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
+    { k: "exames", l: "Exames", icon: FlaskConical },
+    { k: "antropometria", l: "Antropometria", icon: Activity },
+    { k: "comparativo", l: "Comparativo", icon: Sparkles },
+  ]],
+  ["Plano", [
+    { k: "gasto", l: "Gasto energético", icon: Zap },
+    { k: "macros", l: "Macros", icon: PieChart },
+    { k: "plano", l: "Prescrição", icon: Utensils },
+    { k: "lembretes", l: "Lembretes", icon: BellRing },
+  ]],
 ];
 
 export default function PacienteDetalhe() {
@@ -68,54 +74,48 @@ export default function PacienteDetalhe() {
 
   return (
     <NutriLayout compacto={tab === "plano" || tab === "recordatorio"}>
-      <header className="rc-card mb-5 overflow-hidden">
-        <div className="p-5 sm:p-7">
-          <div className="flex items-start gap-4 sm:gap-5 min-w-0">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-2xl bg-rc-raised flex items-center justify-center rc-num text-2xl text-rc-lime uppercase shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
-              {(iniciais[0]?.[0] || "P") + (iniciais.length > 1 ? iniciais[iniciais.length - 1][0] : "")}
-            </div>
-            <div className="min-w-0">
+      <header className="rc-card mb-4 px-5 py-4 sm:px-6" data-testid="cabecalho-paciente">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+          <div className="w-12 h-12 shrink-0 rounded-xl bg-rc-raised flex items-center justify-center rc-num text-xl text-rc-lime uppercase shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+            {(iniciais[0]?.[0] || "P") + (iniciais.length > 1 ? iniciais[iniciais.length - 1][0] : "")}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="font-display font-black uppercase text-[24px] leading-none text-white break-words" style={{ fontStretch: "82%" }}>{p.nome}</h1>
               <StatusBadge status={p.status_funil} />
-              <h1 className="rc-h2 mt-2 break-words">{p.nome}</h1>
-              <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[13px] text-gray-400 mt-2">
-                {p.email && <span className="truncate">{p.email}</span>}
-                {p.email && p.telefone && <span className="text-gray-600">·</span>}
-                {p.telefone && <span className="tabular">{p.telefone}</span>}
-              </div>
+            </div>
+            <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[12.5px] text-gray-400 mt-1.5">
+              {p.email && <span className="truncate">{p.email}</span>}
+              {p.telefone && <span className="tabular">{p.telefone}</span>}
+              <span className="tabular">{[idade != null && `${idade} anos`, pesoAtual && `${String(pesoAtual).replace(".", ",")} kg`, alturaAtual && `${alturaAtual} cm`, imc && `IMC ${String(Math.round(imc * 10) / 10).replace(".", ",")}`].filter(Boolean).join(" · ")}</span>
             </div>
           </div>
-          <dl className="grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-5 mt-6 pt-5 border-t border-white/[0.05]">
-            <Pill l="Peso" v={pesoAtual} u="kg" />
-            <Pill l="Altura" v={alturaAtual} u="cm" />
-            <Pill l="IMC" v={imc ? Math.round(imc * 10) / 10 : null} />
-            <Pill l="Idade" v={idade} u="anos" />
-            <Pill l="Objetivo" v={p.objetivo} text />
-          </dl>
-        </div>
-        <div className="px-5 sm:px-7 py-3 border-t border-white/[0.05] bg-black/[0.15] flex items-center gap-1 flex-wrap">
-          <span className="text-[11px] uppercase tracking-[0.14em] text-gray-500 mr-2">Relatórios</span>
-          <PdfBtn pid={p.id} tipo="anamnese" label="Anamnese" />
-          <PdfBtn pid={p.id} tipo="antropometria" label="Antropometria" />
-          <PdfBtn pid={p.id} tipo="exames" label="Exames" />
+          <div className="min-w-0" data-testid="objetivo-destaque">
+            <div className="text-[10.5px] uppercase tracking-[0.14em] text-gray-500">Objetivo</div>
+            {p.objetivo ? (
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1.5 rounded-lg bg-rc-lime/15 px-2.5 py-1 text-[13.5px] font-semibold text-rc-lime">★ {p.objetivo}</span>
+                {(p.objetivos || []).filter((o) => o !== p.objetivo).map((o) => <span key={o} className="rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-gray-300">{o}</span>)}
+              </div>
+            ) : <div className="mt-1 text-[13px] text-gray-500">aguardando o formulário</div>}
+          </div>
+          <Relatorios pid={p.id} />
         </div>
       </header>
 
       <nav className="sticky top-14 md:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10 mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]" aria-label="Seções do paciente">
-        <div role="tablist" className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {TABS.map((t) => (
-            <button
-              key={t.k}
-              role="tab"
-              aria-selected={tab === t.k}
-              data-testid={`tab-${t.k}`}
-              onClick={() => setTab(t.k)}
-              className={`relative shrink-0 inline-flex items-center gap-2 h-12 px-3 text-[13.5px] transition-colors duration-150 ${
-                tab === t.k ? "text-white font-medium" : "text-gray-400 hover:text-gray-100"
-              }`}
-            >
-              <t.icon className={`w-4 h-4 ${tab === t.k ? "text-rc-lime" : ""}`} strokeWidth={1.75} /> {t.l}
-              <span aria-hidden className={`absolute left-2 right-2 -bottom-px h-[2px] rounded-full bg-rc-lime transition-transform duration-200 ease-out origin-center ${tab === t.k ? "scale-x-100" : "scale-x-0"}`} />
-            </button>
+        <div role="tablist" className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {GRUPOS_TABS.map(([grupo, tabs], gi) => (
+            <React.Fragment key={grupo}>
+              <span className={`shrink-0 text-[10.5px] uppercase tracking-[0.16em] text-gray-500 pr-1 ${gi ? "pl-3 ml-2 border-l border-white/[0.08]" : ""}`}>{grupo}</span>
+              {tabs.map((t) => (
+                <button key={t.k} role="tab" aria-selected={tab === t.k} data-testid={`tab-${t.k}`} onClick={() => setTab(t.k)}
+                  className={`relative shrink-0 inline-flex items-center gap-2 h-12 px-3 text-[13.5px] transition-colors duration-150 ${tab === t.k ? "text-white font-medium" : "text-gray-400 hover:text-gray-100"}`}>
+                  <t.icon className={`w-4 h-4 ${tab === t.k ? "text-rc-lime" : ""}`} strokeWidth={1.75} /> {t.l}
+                  <span aria-hidden className={`absolute left-2 right-2 -bottom-px h-[2px] rounded-full bg-rc-lime transition-transform duration-200 ease-out origin-center ${tab === t.k ? "scale-x-100" : "scale-x-0"}`} />
+                </button>
+              ))}
+            </React.Fragment>
           ))}
         </div>
       </nav>
@@ -137,20 +137,32 @@ export default function PacienteDetalhe() {
   );
 }
 
-function Pill({ l, v, u, text }) {
-  const empty = v === null || v === undefined || v === "";
+function Relatorios({ pid }) {
+  const [aberto, setAberto] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!aberto) return undefined;
+    const fora = (e) => { if (!ref.current?.contains(e.target)) setAberto(false); };
+    document.addEventListener("mousedown", fora);
+    return () => document.removeEventListener("mousedown", fora);
+  }, [aberto]);
   return (
-    <div className="min-w-0">
-      <dt className="text-[11px] uppercase tracking-[0.12em] text-gray-500">{l}</dt>
-      <dd className={`mt-1 truncate ${text ? "text-[15px] font-medium text-gray-100 first-letter:uppercase pt-1.5" : "rc-num text-[28px] leading-none text-white"}`}>
-        {empty ? <span className="text-gray-600">–</span> : typeof v === "number" ? v.toLocaleString("pt-BR", { maximumFractionDigits: 1 }) : v}
-        {!empty && u && <span className="text-[12px] font-sans font-normal not-italic text-gray-500 ml-1">{u}</span>}
-      </dd>
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setAberto((v) => !v)} aria-expanded={aberto} className="rc-btn-secondary h-10" data-testid="relatorios">
+        <Download className="w-4 h-4" /> Relatórios <ChevronDown className="w-4 h-4" />
+      </button>
+      {aberto && (
+        <div className="absolute right-0 top-full mt-1.5 z-30 w-56 rounded-xl bg-rc-raised p-1.5 shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_16px_40px_-16px_rgba(0,0,0,0.8)]">
+          <PdfBtn pid={pid} tipo="anamnese" label="Anamnese" bloco />
+          <PdfBtn pid={pid} tipo="antropometria" label="Antropometria" bloco />
+          <PdfBtn pid={pid} tipo="exames" label="Exames" bloco />
+        </div>
+      )}
     </div>
   );
 }
 
-function PdfBtn({ pid, tipo, label }) {
+function PdfBtn({ pid, tipo, label, bloco }) {
   const [loading, setLoading] = useState(false);
   const download = async () => {
     setLoading(true);
@@ -163,7 +175,7 @@ function PdfBtn({ pid, tipo, label }) {
     finally { setLoading(false); }
   };
   return (
-    <button onClick={download} disabled={loading} className="rc-btn-ghost text-[12.5px] px-2.5 py-1.5">
+    <button onClick={download} disabled={loading} className={`rc-btn-ghost text-[12.5px] px-2.5 py-1.5 ${bloco ? "w-full justify-start" : ""}`}>
       {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" strokeWidth={1.75} />} {label}
     </button>
   );
@@ -187,12 +199,13 @@ const dadosPessoaisDe = (p) => ({
   data_nascimento: p.data_nascimento ? String(p.data_nascimento).slice(0, 10) : "",
   email: p.email || "",
   telefone: p.telefone || "",
-  sexo: p.sexo || "",
+  sexo: ["F", "M"].includes(p.sexo) ? p.sexo : "",
   gestante: Boolean(p.gestante),
   atleta: Boolean(p.atleta),
   altura: p.altura != null ? String(p.altura) : "",
   peso: p.peso != null ? String(p.peso).replace(".", ",") : "",
   objetivo: p.objetivo || "",
+  objetivos: p.objetivos?.length ? p.objetivos : p.objetivo ? [p.objetivo] : [],
   data_primeira_consulta: p.data_primeira_consulta || (p.created_at ? String(p.created_at).slice(0, 10) : ""),
   observacoes: p.observacoes || "",
 });
@@ -269,21 +282,17 @@ function DadosPessoais({ patient, reload }) {
           <input type="tel" className="evo-input" value={form.telefone} onChange={(e) => set("telefone", e.target.value)} placeholder="(11) 90000-0000" data-testid="dp-telefone" />
         </label>
         <label className="block">
-          <span className="evo-label">Objetivo</span>
-          <input className="evo-input" list="dp-objetivos" value={form.objetivo} onChange={(e) => set("objetivo", e.target.value)} placeholder="Ex.: definição muscular" />
-          <datalist id="dp-objetivos">
-            {["Emagrecimento", "Definição muscular", "Hipertrofia", "Manutenção", "Saúde e qualidade de vida", "Performance esportiva"].map((o) => <option key={o} value={o} />)}
-          </datalist>
-        </label>
-        <label className="block">
           <span className="evo-label">Sexo biológico</span>
-          <select className="evo-input" value={form.sexo} onChange={(e) => set("sexo", e.target.value)}>
-            <option value="">Não informado</option>
+          <select className="evo-input" value={form.sexo} onChange={(e) => set("sexo", e.target.value)} data-testid="dp-sexo">
+            <option value="">Aguardando o formulário</option>
             <option value="F">Feminino</option>
             <option value="M">Masculino</option>
-            <option value="O">Outro</option>
           </select>
         </label>
+        <div className="block sm:col-span-2 lg:col-span-4">
+          <span className="evo-label">Objetivos <span className="normal-case tracking-normal font-normal text-gray-500">· vêm do formulário; ajuste se precisar (★ = principal)</span></span>
+          <SeletorObjetivos valor={form.objetivos} principal={form.objetivo} onChange={(lista, princ) => setForm((f) => ({ ...f, objetivos: lista, objetivo: princ }))} />
+        </div>
         <label className="block">
           <span className="evo-label">Estatura (cm)</span>
           <input className="evo-input" inputMode="numeric" value={form.altura} onChange={(e) => set("altura", e.target.value)} placeholder="ex.: 178" data-testid="dp-altura" />
@@ -329,10 +338,11 @@ function DadosPessoais({ patient, reload }) {
   );
 }
 
-// Anamnese = Bloco 1 (dados pessoais, no card) + blocos 2 a 5 do formulário pré-consulta.
+// Anamnese = status do formulário com alertas + Bloco 1 (dados pessoais, no card) + blocos do formulário.
 function Anamnese({ d, reload }) {
   return (
     <div className="space-y-3">
+      <FormularioStatus d={d} reload={reload} />
       <DadosPessoais patient={d.patient} reload={reload} />
       <AnamneseBlocos pacienteId={d.patient.id} sexoPaciente={d.patient.sexo} inicial={d.anamnese_v2} />
     </div>

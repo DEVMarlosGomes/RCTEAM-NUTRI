@@ -11,7 +11,7 @@ import Flutuante from "./Flutuante";
 import PainelTotais from "./PainelTotais";
 import PorcoesDialogo from "./PorcoesDialogo";
 import {
-  GruposContext, ROTULO_CRITERIO, grupoDoItem, opcoesDoGrupo, porcaoEquivalente, substitutosDoGrupo, useGruposSubstituicao, valorCriterio,
+  GruposContext, ROTULO_CRITERIO, gruposSemRestricoes, grupoDoItem, opcoesDoGrupo, porcaoEquivalente, substitutosDoGrupo, useGruposSubstituicao, valorCriterio,
 } from "./grupos";
 import { metasDoPlanejamento } from "./plano";
 import {
@@ -795,10 +795,13 @@ export function BarraTotal({ refeicoes, planejamento, peso, modoRecordatorio, on
 // ── Editor ─────────────────────────────────────────────────────────────────
 
 export default function EditorRefeicoes({
-  refeicoes, onChange, config, modelos, planejamento, peso, favoritos, onFavoritar, onSalvarModelo, onEstatistica, modoRecordatorio = false,
+  refeicoes, onChange, config, modelos, planejamento, peso, favoritos, onFavoritar, onSalvarModelo, onEstatistica, modoRecordatorio = false, restricoes = [],
 }) {
   const [equiv, setEquiv] = useState(null);
-  const { grupos } = useGruposSubstituicao();
+  const { grupos: gruposBase } = useGruposSubstituicao();
+  // alergias e aversões do paciente tiram as opções das trocas automáticas e do ⇄
+  const grupos = useMemo(() => gruposSemRestricoes(gruposBase, restricoes), [gruposBase, restricoes]);
+  const removidas = grupos.flatMap((g) => g._removidas || []);
   const setRef = (i, nova) => onChange(refeicoes.map((r, k) => (k === i ? nova : r)));
   const blocoDe = ({ r, o }) => (o == null ? refeicoes[r] : refeicoes[r].opcoes[o]);
   const comBloco = (lista, { r, o }, fn) => lista.map((ref, k) => {
@@ -887,6 +890,11 @@ export default function EditorRefeicoes({
   return (
     <GruposContext.Provider value={grupos}>
     <div className="space-y-2" data-testid="editor-refeicoes">
+      {!modoRecordatorio && removidas.length > 0 && (
+        <p className="rounded-lg bg-rc-amber/10 px-3 py-2 text-[12px] text-rc-amber" data-testid="aviso-restricoes">
+          Fora das trocas por alergia ou aversão do paciente: {removidas.join(", ")}.
+        </p>
+      )}
       {equiv && (
         <EquivalentesModal item={equiv.item} refeicaoNome={refeicoes[equiv.r]?.nome || "Refeição"} onAddSubstitutos={aplicarEquivalentes} onTrocar={trocar} onClose={() => setEquiv(null)} />
       )}

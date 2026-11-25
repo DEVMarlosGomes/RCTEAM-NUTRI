@@ -5,10 +5,11 @@ import { Link } from "react-router-dom";
 import StatusBadge from "@/components/evonut/StatusBadge";
 import { Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import SeletorObjetivos from "@/components/evonut/SeletorObjetivos";
 
 const emptyForm = {
   nome: "", telefone: "", email: "", data_nascimento: "", sexo: "",
-  objetivo: "", peso: "", altura: "", status_funil: "LEAD_INICIADO",
+  objetivo: "", objetivos: [], peso: "", altura: "", status_funil: "LEAD_INICIADO",
 };
 
 const statuses = [
@@ -20,6 +21,8 @@ function PatientModal({ patient, onClose, onSaved }) {
   const [form, setForm] = useState(patient ? {
     ...emptyForm,
     ...Object.fromEntries(Object.entries(patient).map(([key, value]) => [key, value ?? ""])),
+    objetivos: patient.objetivos?.length ? patient.objetivos : patient.objetivo ? [patient.objetivo] : [],
+    sexo: ["F", "M"].includes(patient.sexo) ? patient.sexo : "",
   } : emptyForm);
   const [saving, setSaving] = useState(false);
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
@@ -31,6 +34,9 @@ function PatientModal({ patient, onClose, onSaved }) {
       const payload = {
         ...form,
         email: form.email || null,
+        sexo: form.sexo || null,
+        objetivos: form.objetivos,
+        objetivo: form.objetivo || form.objetivos[0] || null,
         peso: form.peso === "" ? null : Number(form.peso),
         altura: form.altura === "" ? null : Number(form.altura),
       };
@@ -60,8 +66,11 @@ function PatientModal({ patient, onClose, onSaved }) {
           <label><span className="evo-label">E-mail</span><input type="email" className="evo-input" value={form.email} onChange={(e) => set("email", e.target.value)} /></label>
           <label><span className="evo-label">Telefone</span><input className="evo-input" value={form.telefone} onChange={(e) => set("telefone", e.target.value)} /></label>
           <label><span className="evo-label">Nascimento</span><input type="date" className="evo-input" value={form.data_nascimento} onChange={(e) => set("data_nascimento", e.target.value)} /></label>
-          <label><span className="evo-label">Sexo</span><select className="evo-input" value={form.sexo} onChange={(e) => set("sexo", e.target.value)}><option value="">Não informado</option><option value="F">Feminino</option><option value="M">Masculino</option><option value="O">Outro</option></select></label>
-          <label><span className="evo-label">Objetivo</span><input className="evo-input" value={form.objetivo} onChange={(e) => set("objetivo", e.target.value)} placeholder="Ex.: emagrecimento" /></label>
+          <label><span className="evo-label">Sexo biológico</span><select className="evo-input" value={form.sexo} onChange={(e) => set("sexo", e.target.value)} data-testid="novo-sexo"><option value="">Vem do formulário (ou escolha)</option><option value="F">Feminino</option><option value="M">Masculino</option></select></label>
+          <div className="md:col-span-2">
+            <span className="evo-label">Objetivos <span className="normal-case tracking-normal text-gray-500 font-normal">· normalmente vêm do formulário; marque aqui só em consulta sem formulário (★ = principal)</span></span>
+            <SeletorObjetivos valor={form.objetivos} principal={form.objetivo} onChange={(lista, princ) => setForm((f) => ({ ...f, objetivos: lista, objetivo: princ }))} />
+          </div>
           <label><span className="evo-label">Status</span><select className="evo-input" value={form.status_funil} onChange={(e) => set("status_funil", e.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
           <label><span className="evo-label">Peso (kg)</span><input min="0" step="0.1" type="number" className="evo-input" value={form.peso} onChange={(e) => set("peso", e.target.value)} /></label>
           <label><span className="evo-label">Altura (cm)</span><input min="0" step="0.1" type="number" className="evo-input" value={form.altura} onChange={(e) => set("altura", e.target.value)} /></label>

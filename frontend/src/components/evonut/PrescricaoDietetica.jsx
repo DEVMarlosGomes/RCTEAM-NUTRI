@@ -4,6 +4,7 @@ import { Bot, ChevronLeft, ChevronRight, Copy, FileDown, FilePlus2, FolderInput,
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 import EditorRefeicoes, { BarraTotal, LARGURA_EDITOR } from "./dieta/EditorRefeicoes";
+import { termosRestritos } from "./dieta/grupos";
 import OutrasOpcoes from "./dieta/OutrasOpcoes";
 import ImportarDieta from "./dieta/ImportarDieta";
 import AlimentacaoPaciente, { usePainelAlimentacao } from "./dieta/AlimentacaoPaciente";
@@ -233,6 +234,8 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
 
   const abas = draft.id ? planos : [...planos, { id: null, titulo: draft.titulo }];
   const peso = draft.prescricao_dietetica?.peso;
+  const planasAnam = Object.values(d.anamnese_v2?.formulario || {}).reduce((a, b) => ({ ...a, ...(b || {}) }), {});
+  const restricoes = termosRestritos(planasAnam.alergias, planasAnam.nao_gosta);
   const posicao = planos.findIndex((p) => p.id === draft.id);
 
   return (
@@ -302,6 +305,7 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
                 planejamento={draft.planejamento}
                 peso={peso}
                 favoritos={config.alimentos_favoritos || []}
+                restricoes={restricoes}
                 onFavoritar={(f) => {
                   const atuais = config.alimentos_favoritos || [];
                   const tem = atuais.some((x) => x.id === f.id);

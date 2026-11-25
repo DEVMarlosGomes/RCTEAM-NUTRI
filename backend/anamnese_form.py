@@ -10,6 +10,14 @@ pergunta equivalente vai para `anamnese.formulario_outras = {bloco: {rótulo: va
 from typing import Optional
 
 SN = ["Sim", "Não"]
+FEM = {"campo": "sexo", "igual": "Feminino"}
+
+# Objetivos pré-selecionáveis (pode marcar mais de um; o principal fica com ★ em `objetivo_principal`)
+OBJETIVOS = ["Ganho de massa muscular", "Definição muscular", "Perda de gordura", "Rendimento esportivo",
+             "Manutenção de peso", "Tratamento de doenças", "Reeducação alimentar"]
+DOENCAS = ["Nenhuma", "Diabetes ou pré-diabetes", "Pressão alta", "Colesterol ou triglicerídeos altos", "Hipotireoidismo",
+           "Hipertireoidismo", "Gastrite ou refluxo", "Esteatose hepática (gordura no fígado)", "Síndrome dos ovários policísticos (SOP)",
+           "Ansiedade ou depressão", "Doença renal", "Outra"]
 
 BLOCOS = [
     {
@@ -27,7 +35,13 @@ BLOCOS = [
         "key": "objetivos_treinamento", "titulo": "Objetivos e treinamento",
         "transicao": "Prazer, {nome}! Agora, sobre o seu treino.",
         "perguntas": [
-            {"id": "objetivo", "n": 7, "titulo": "Quais objetivos você quer alcançar?", "tipo": "longo"},
+            {"id": "objetivo", "n": 7, "titulo": "Quais objetivos você quer alcançar?", "tipo": "objetivos", "obrig": True,
+             "opcoes": OBJETIVOS, "desc": "Pode marcar mais de um. Toque na ★ para escolher o principal."},
+            {"id": "objetivo_principal", "titulo": "Objetivo principal", "tipo": "interno"},
+            {"id": "peso_desejado", "n": 7.1, "titulo": "Qual peso você gostaria de alcançar? (em kg)", "tipo": "numero",
+             "desc": "Se não tiver um número em mente, pode pular."},
+            {"id": "historico_peso", "n": 7.2, "titulo": "Como foi o seu peso nos últimos anos?", "tipo": "longo",
+             "desc": "Maior e menor peso que já teve, dietas que já fez, se costuma ganhar e perder peso (efeito sanfona)."},
             {"id": "condicionamento", "n": 8, "titulo": "Como está seu condicionamento físico atual?", "tipo": "unica", "obrig": True, "opcoes": [
                 "Sem experiência (sedentário, sem nenhuma experiência com treinamento)",
                 "Inativo (já treinou, mas está sem treinar atualmente)",
@@ -39,6 +53,8 @@ BLOCOS = [
             {"id": "horario_treino", "n": 10, "titulo": "Em qual horário você treina e quanto tempo tem por sessão?", "tipo": "texto"},
             {"id": "local_treino", "n": 11, "titulo": "Onde você vai treinar?", "tipo": "unica", "obrig": True,
              "opcoes": ["Academia completa", "Academia de condomínio", "Outro"]},
+            {"id": "local_treino_outro", "n": 11.1, "titulo": "Onde você vai treinar?", "tipo": "texto", "obrig": True,
+             "desc": "Ex.: em casa, ao ar livre, estúdio, crossfit…", "se": {"campo": "local_treino", "igual": "Outro"}},
             {"id": "foco_corporal", "n": 12, "titulo": "Tem alguma parte do corpo que você gostaria de trabalhar mais?", "tipo": "multipla",
              "exclusivo": "Sem preferência",
              "opcoes": ["Peito", "Costas", "Ombros", "Braços", "Abdômen", "Coxas", "Glúteos", "Panturrilhas", "Sem preferência"]},
@@ -52,11 +68,18 @@ BLOCOS = [
     {
         "key": "saude", "titulo": "Saúde", "transicao": "Boa! Agora, um pouco sobre a sua saúde.",
         "perguntas": [
-            {"id": "doencas", "n": 14, "titulo": "Você tem alguma doença ou queixa de saúde? Se sim, qual?", "tipo": "texto"},
+            {"id": "doencas", "n": 14, "titulo": "Você tem alguma doença ou condição de saúde?", "tipo": "multipla", "obrig": True,
+             "exclusivo": "Nenhuma", "opcoes": DOENCAS},
+            {"id": "doencas_outras", "n": 14.1, "titulo": "Qual outra doença ou queixa de saúde?", "tipo": "texto",
+             "se": {"campo": "doencas", "contem": "Outra"}},
             {"id": "lesoes", "n": 15, "titulo": "Você tem lesão, dor, cirurgia ou restrição médica que limite os exercícios? Se sim, descreva e diga quais movimentos causam dor.", "tipo": "longo"},
             {"id": "gestante_lactante", "n": 16, "titulo": "Você está gestante ou amamentando?", "tipo": "unica", "obrig": True,
-             "opcoes": ["Sim", "Não", "Não se aplica"], "se": {"campo": "sexo", "diferente": "Masculino"}},
-            {"id": "medicacao", "n": 17, "titulo": "Você usa medicação contínua ou suplementos? Se sim, quais?", "tipo": "texto"},
+             "opcoes": ["Sim", "Não", "Não se aplica"], "se": FEM},
+            {"id": "ciclo_menstrual", "n": 16.1, "titulo": "Como está o seu ciclo menstrual?", "tipo": "unica", "se": FEM,
+             "opcoes": ["Regular (todo mês, mais ou menos no mesmo período)", "Irregular", "Não menstruo (menopausa, DIU hormonal, uso contínuo…)"]},
+            {"id": "anticoncepcional", "n": 16.2, "titulo": "Usa anticoncepcional ou reposição hormonal? Se sim, qual?", "tipo": "texto", "se": FEM},
+            {"id": "medicacao", "n": 17, "titulo": "Você usa alguma medicação contínua? Se sim, qual e a dose?", "tipo": "texto"},
+            {"id": "suplementos", "n": 17.1, "titulo": "Você usa suplementos? Se sim, quais?", "tipo": "texto"},
             {"id": "esteroides", "n": 18, "titulo": "Você usa ou já usou esteroides anabolizantes? Se sim, quais e por quanto tempo?", "tipo": "texto"},
             {"id": "exames_recentes", "n": 19, "titulo": "Você fez exames de sangue nos últimos 6 meses?", "tipo": "unica", "obrig": True,
              "opcoes": SN, "desc": "Se sim, anexe os resultados no campo abaixo."},
@@ -68,7 +91,9 @@ BLOCOS = [
                 "Às vezes durante a semana e também no fim de semana", "Praticamente todos os dias"]},
             {"id": "libido", "n": 23, "titulo": "Como você classificaria seu desejo sexual (libido)?", "tipo": "unica", "obrig": True, "opcoes": [
                 "Baixo na maior parte do tempo", "Varia ao longo do tempo (por exemplo, de acordo com o ciclo menstrual)",
-                "Excelente na maior parte do tempo", "Prefiro não responder"]},
+                "Excelente na maior parte do tempo", "Prefiro não responder"],
+             # a opção do ciclo menstrual só aparece para mulher
+             "opcoes_se": {"Varia ao longo do tempo (por exemplo, de acordo com o ciclo menstrual)": FEM}},
         ],
     },
     {
@@ -95,18 +120,54 @@ BLOCOS = [
                 "Menos de 1 L (menos de 5 copos de 200 ml)", "Entre 1 L e 2 L (entre 5 e 10 copos de 200 ml)",
                 "Entre 2 L e 3 L (entre 10 e 15 copos de 200 ml)", "Mais de 3 L (mais de 15 copos de 200 ml)"]},
             {"id": "alergias", "n": 31, "titulo": "Você tem alergia ou intolerância alimentar? Se sim, a quê?", "tipo": "texto"},
-            {"id": "frutas_preferidas", "n": 32, "titulo": "Quais alimentos você não gosta e quais são suas frutas preferidas?", "tipo": "longo"},
+            {"id": "nao_gosta", "n": 32, "titulo": "Quais alimentos você não gosta ou não come de jeito nenhum?", "tipo": "longo"},
+            {"id": "frutas_preferidas", "n": 32.1, "titulo": "Quais são as suas frutas preferidas?", "tipo": "texto"},
             {"id": "intestino", "n": 33, "titulo": "Como está o funcionamento do seu intestino?", "tipo": "unica", "obrig": True, "opcoes": [
                 "Bem, com evacuações regulares todos os dias",
                 "Mais ou menos: normal na maior parte do tempo, mas às vezes tenho constipação ou diarreia",
                 "Ruim: costumo ter constipação", "Ruim: costumo ter diarreia", "Ruim: alterno entre constipação e diarreia"]},
-            {"id": "rotina_alimentar", "n": 34, "titulo": "Descreva brevemente sua rotina alimentar.", "tipo": "longo", "rows": 8,
-             "desc": "Se souber as quantidades, melhor. Se não, sem problemas. Exemplo:\n7:00, café da manhã: 2 fatias de pão + 1 ovo + 1 fruta\n10:00, lanche da manhã: 1 iogurte + 1 fruta + whey protein\n12:00, almoço: arroz + feijão + carne + salada de legumes\n16:00, lanche da tarde: 2 fatias de pão + 1 ovo + 1 fruta\n19:00, jantar: arroz + feijão + carne + salada de legumes"},
+            {"id": "horario_fome", "n": 33.1, "titulo": "Em que horário do dia você sente mais fome?", "tipo": "texto"},
+            {"id": "beliscos", "n": 33.2, "titulo": "Costuma beliscar entre as refeições? O quê e em que momento?", "tipo": "texto"},
+            {"id": "quem_prepara", "n": 33.3, "titulo": "Quem prepara a sua comida?", "tipo": "unica",
+             "opcoes": ["Eu mesmo(a)", "Alguém da família", "Funcionária ou cozinheira", "Compro comida pronta ou marmita", "Como fora na maior parte das vezes"]},
+            {"id": "marmita", "n": 33.4, "titulo": "Você consegue levar marmita para o trabalho?", "tipo": "unica",
+             "opcoes": ["Sim", "Não", "Não preciso (como em casa)"]},
+            {"id": "rotina_alimentar", "n": 34, "titulo": "Como é a sua rotina alimentar em um dia comum?", "tipo": "rotina",
+             "desc": "Uma linha por refeição: horário, refeição e o que você come. Se souber as quantidades, melhor (ex.: 2 fatias de pão + 1 ovo + 1 fruta)."},
             {"id": "plano_anterior", "n": 35, "titulo": "Você seguiu algum planejamento alimentar nos últimos 6 meses?", "tipo": "unica", "obrig": True, "opcoes": SN},
             {"id": "plano_anterior_arquivo", "n": 36, "titulo": "Anexe seu plano alimentar (opcional)", "tipo": "arquivo", "destino": "plano_anterior",
              "se": {"campo": "plano_anterior", "igual": "Sim"}},
             {"id": "plano_anterior_experiencia", "n": 37, "titulo": "Como foi seguir esse plano? O que funcionou e o que não funcionou?", "tipo": "longo",
              "se": {"campo": "plano_anterior", "igual": "Sim"}},
+        ],
+    },
+    {
+        "key": "fotos", "titulo": "Fotos de avaliação", "transicao": "Por último, as fotos (seguindo o protocolo).",
+        "perguntas": [
+            {"id": "fotos_avaliacao", "n": 38, "titulo": "Envie as 3 fotos de avaliação: frente, lado e costas.", "tipo": "fotos",
+             "desc": "Fundo neutro, boa luz, roupa de banho ou top e short. Se não puder agora, pode enviar depois pelo atendimento."},
+        ],
+    },
+]
+
+# Questionário de retorno (antes da reavaliação)
+RETORNO_BLOCOS = [
+    {
+        "key": "retorno", "titulo": "Retorno", "transicao": "Que bom te ver de novo! Como foram estas semanas?",
+        "perguntas": [
+            {"id": "ret_peso", "n": 1, "titulo": "Qual é o seu peso hoje? (em kg, em jejum)", "tipo": "numero", "obrig": True},
+            {"id": "ret_adesao", "n": 2, "titulo": "De 0 a 10, quanto você conseguiu seguir o plano alimentar?", "tipo": "escala", "obrig": True, "min": 0, "max": 10},
+            {"id": "ret_treino", "n": 3, "titulo": "De 0 a 10, quanto você conseguiu seguir o treino?", "tipo": "escala", "obrig": True, "min": 0, "max": 10},
+            {"id": "ret_dificuldades", "n": 4, "titulo": "O que foi mais difícil de seguir?", "tipo": "longo"},
+            {"id": "ret_fome", "n": 5, "titulo": "Como está a sua fome?", "tipo": "unica", "obrig": True,
+             "opcoes": ["Tranquila, sem fome fora de hora", "Fome em alguns horários", "Muita fome na maior parte do dia", "Pouca fome, sobra comida"]},
+            {"id": "ret_intestino", "n": 6, "titulo": "Como está o intestino?", "tipo": "unica",
+             "opcoes": ["Bem, regular", "Preso", "Solto", "Alternando"]},
+            {"id": "ret_sono", "n": 7, "titulo": "Como está o sono e a disposição?", "tipo": "unica",
+             "opcoes": ["Bem", "Mais ou menos", "Ruim"]},
+            {"id": "ret_mudancas", "n": 8, "titulo": "Mudou algo na saúde, medicação, suplementos ou rotina?", "tipo": "longo"},
+            {"id": "ret_gostaria", "n": 9, "titulo": "O que você gostaria de mudar ou trocar no plano?", "tipo": "longo"},
+            {"id": "ret_fotos", "n": 10, "titulo": "Envie as fotos de hoje: frente, lado e costas.", "tipo": "fotos"},
         ],
     },
 ]
@@ -115,11 +176,13 @@ UPLOAD_TIPOS = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".
 UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 
 PERGUNTAS = {p["id"]: {**p, "bloco": b["key"]} for b in BLOCOS for p in b["perguntas"]}
+PERGUNTAS_RETORNO = {p["id"]: {**p, "bloco": b["key"]} for b in RETORNO_BLOCOS for p in b["perguntas"]}
 BLOCO_TITULO = {b["key"]: b["titulo"] for b in BLOCOS}
 
 
-def estrutura_publica() -> dict:
-    return {"blocos": BLOCOS, "upload": {"tipos": list(UPLOAD_TIPOS), "max_mb": UPLOAD_MAX_BYTES // (1024 * 1024)}}
+def estrutura_publica(tipo: str = "inicial") -> dict:
+    return {"tipo": tipo, "blocos": RETORNO_BLOCOS if tipo == "retorno" else BLOCOS,
+            "upload": {"tipos": list(UPLOAD_TIPOS), "max_mb": UPLOAD_MAX_BYTES // (1024 * 1024)}}
 
 
 def _vazio(v) -> bool:
@@ -135,6 +198,8 @@ def visivel(pergunta: dict, respostas: dict) -> bool:
         return valor == cond["igual"]
     if "diferente" in cond:
         return valor != cond["diferente"]
+    if "contem" in cond:
+        return isinstance(valor, list) and cond["contem"] in valor
     return True
 
 
@@ -152,9 +217,31 @@ def agrupar(respostas: dict) -> dict:
     return out
 
 
-def obrigatorias_faltando(respostas: dict) -> list:
-    return [p["id"] for b in BLOCOS for p in b["perguntas"]
+def obrigatorias_faltando(respostas: dict, blocos: Optional[list] = None) -> list:
+    return [p["id"] for b in (blocos or BLOCOS) for p in b["perguntas"]
             if p.get("obrig") and visivel(p, respostas) and _vazio(respostas.get(p["id"]))]
+
+
+def objetivos_da_resposta(valor) -> list:
+    """Objetivos marcados (lista); texto antigo vira os objetivos que ele menciona (ou o próprio texto)."""
+    if isinstance(valor, list):
+        return [str(x) for x in valor if not _vazio(x)]
+    if _vazio(valor):
+        return []
+    t = str(valor).lower()
+    chaves = {"Ganho de massa muscular": ("hipertrof", "massa", "ganh"), "Definição muscular": ("defini",),
+              "Perda de gordura": ("emagre", "perd", "gordura", "secar"), "Rendimento esportivo": ("rendimento", "performance", "esport"),
+              "Manutenção de peso": ("manut", "manter"), "Tratamento de doenças": ("doen", "tratamento", "saúde"),
+              "Reeducação alimentar": ("reeduca", "alimentação saud")}
+    achados = [o for o, ks in chaves.items() if any(k in t for k in ks)]
+    return achados or [str(valor)]
+
+
+def rotina_texto(valor) -> str:
+    if isinstance(valor, list):
+        return "\n".join(f"{(r or {}).get('horario', '')} · {(r or {}).get('refeicao', '')}: {(r or {}).get('alimentos', '')}".strip(" ·:")
+                         for r in valor if isinstance(r, dict) and any((r or {}).values()))
+    return _texto(valor)
 
 
 # ── Migração do formato antigo (7 seções + respostas soltas da pré-consulta antiga) ──
@@ -209,7 +296,7 @@ _OBS_BLOCO = {
     "obs_mulheres": "saude",
 }
 # chaves da pré-consulta antiga com outro nome
-_RESPOSTAS_RENOMEADAS = {"altura": "estatura", "peso": "peso_atual", "suplementacao": "medicacao",
+_RESPOSTAS_RENOMEADAS = {"altura": "estatura", "peso": "peso_atual", "suplementacao": "suplementos",
                          "lesao": "lesoes", "cirurgia": "lesoes"}
 _IGNORAR = {"idade", "fotos", "id", "paciente_id", "nutricionista_id", "created_at", "criado_em", "atualizado_em",
             "respostas", "formulario", "formulario_outras", "formulario_versao", "respostas_historico"}
@@ -225,6 +312,8 @@ def _normalizar_valor(pid: str, v):
     p = PERGUNTAS[pid]
     if pid == "condicionamento" and isinstance(v, str) and v in _COND_ANTIGO:
         return p["opcoes"][_COND_ANTIGO[v]]
+    if p["tipo"] == "objetivos":
+        return objetivos_da_resposta(v)
     if p["tipo"] == "multipla" and isinstance(v, str):
         return [v]  # texto livre antigo: guardado como está, numa lista
     if p["tipo"] == "arquivo":
@@ -297,10 +386,17 @@ def legiveis(anam: Optional[dict], incluir_dados_pessoais: bool = False) -> dict
         itens = {}
         for p in b["perguntas"]:
             v = planas.get(p["id"])
-            if _vazio(v):
+            if _vazio(v) or p["tipo"] == "interno":
                 continue
             if p["tipo"] == "arquivo":
                 v = ", ".join(a.get("nome", "arquivo") for a in v if isinstance(a, dict))
+            elif p["tipo"] == "fotos":
+                v = f"{len(v) if isinstance(v, list) else 0} foto(s) enviada(s)"
+            elif p["tipo"] == "rotina":
+                v = rotina_texto(v)
+            elif p["tipo"] == "objetivos":
+                principal = planas.get("objetivo_principal")
+                v = ", ".join(f"{o} ★" if o == principal else o for o in objetivos_da_resposta(v))
             itens[p["titulo"]] = _texto(v)
         for rotulo, v in (outras.get(b["key"]) or {}).items():
             if not _vazio(v):
@@ -329,15 +425,16 @@ def com_campos_antigos(anam: Optional[dict]) -> dict:
 
 
 # perguntas que interessam ao Dr. House (exames) e ao contexto clínico
-PERGUNTAS_CLINICAS = ("condicionamento", "desempenho_treino", "doencas", "lesoes", "gestante_lactante", "medicacao",
-                      "esteroides", "exames_recentes", "fumo", "alcool", "libido", "sono", "disposicao", "agua",
-                      "alergias", "intestino", "rotina_alimentar")
+PERGUNTAS_CLINICAS = ("condicionamento", "desempenho_treino", "doencas", "doencas_outras", "lesoes", "gestante_lactante",
+                      "ciclo_menstrual", "anticoncepcional", "medicacao", "suplementos", "esteroides", "exames_recentes",
+                      "fumo", "alcool", "libido", "sono", "disposicao", "agua", "alergias", "intestino", "rotina_alimentar")
 
 
 def contexto_clinico(anam: Optional[dict]) -> dict:
     anam = montar_documento(anam)
     planas = respostas_planas(anam["formulario"])
-    out = {PERGUNTAS[k]["titulo"]: _texto(planas[k]) for k in PERGUNTAS_CLINICAS if not _vazio(planas.get(k))}
+    out = {PERGUNTAS[k]["titulo"]: (rotina_texto(planas[k]) if k == "rotina_alimentar" else _texto(planas[k]))
+           for k in PERGUNTAS_CLINICAS if not _vazio(planas.get(k))}
     for rotulo, v in (anam["formulario_outras"].get("saude") or {}).items():
         if not _vazio(v):
             out[f"Saúde · {rotulo}"] = _texto(v)

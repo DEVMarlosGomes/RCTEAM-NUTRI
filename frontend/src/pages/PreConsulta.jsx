@@ -1,18 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Check, CheckCircle2, FileText, Loader2, Upload, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Camera, Check, CheckCircle2, FileText, Loader2, MessageCircle, Plus, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 import Brand from "@/components/evonut/Brand";
-import ProtocoloFotos, { POSES, REGRAS } from "@/components/evonut/ProtocoloFotos";
-import { carregarEstrutura, idadeAnos, perguntasVisiveis, vazio } from "@/lib/anamnese";
+import { POSES, REGRAS } from "@/components/evonut/ProtocoloFotos";
+import SeletorObjetivos, { OBJETIVOS } from "@/components/evonut/SeletorObjetivos";
+import { carregarEstrutura, idadeAnos, opcoesVisiveis, perguntasVisiveis, vazio } from "@/lib/anamnese";
+
+const WHATSAPP_PADRAO = "5511983692815";
 
 /**
  * Pré-consulta pública (link enviado pelo WhatsApp): boas-vindas -> tela inicial -> uma pergunta por tela
  * (5 blocos, 37 perguntas, condicionais) -> "Tudo certo". As perguntas vêm do backend (anamnese_form.py).
  * Rascunho salvo a cada resposta (no aparelho e no servidor): o cliente pode fechar e voltar pelo mesmo link.
  */
-const STORAGE_KEY = (token) => `rc_preconsulta_${token}`;
+const STORAGE_KEY = (token) => `rc_preconsulta_${token}_${window.__rcTipoForm || "inicial"}`;
 
 function lerLocal(token) {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY(token)) || "null"); } catch { return null; }
@@ -34,19 +37,29 @@ export default function PreConsulta() {
   const [retomar, setRetomar] = useState(false);
   const [erro, setErro] = useState("");
   const [enviando, setEnviando] = useState(false);
+  const [info, setInfo] = useState(null);
+  const [consentimento, setConsentimento] = useState(false);
   const timerAvanco = useRef(null);
   const timerRascunho = useRef(null);
 
   useEffect(() => {
     if (!token) return;
     let ativo = true;
-    Promise.all([
-      carregarEstrutura(),
-      api.get(`/public/lead/${token}`).then((r) => r.data),
-      api.get(`/public/lead/${token}/rascunho`).then((r) => r.data).catch(() => ({})),
-    ]).then(([est, lead, servidor]) => {
+    api.get(`/public/lead/${token}/formulario`).then((r) => r.data).catch(() => ({ tipo: "inicial", estado: "aberto" })).then((form) => {
+      window.__rcTipoForm = form.tipo || "inicial";
+      return Promise.all([
+        carregarEstrutura(form.tipo || "inicial"),
+        api.get(`/public/lead/${token}`).then((r) => r.data),
+        api.get(`/public/lead/${token}/rascunho`).then((r) => r.data).catch(() => ({})),
+        form,
+      ]);
+    }).then(([est, lead, servidor, form]) => {
       if (!ativo) return;
       setEstrutura(est);
+      setInfo(form);
+      // já respondido: só a tela final (reenviar só pelo nutricionista)
+      if (form.estado === "respondido") { setRespostas({ nome: lead.nome || form.nome || "" }); setFase("fim"); return; }
+      if (form.tipo === "retorno") setFase("intro");
       const local = lerLocal(token);
       const maisNovo = [local, servidor].filter((x) => x?.respostas)
         .sort((a, b) => String(b.atualizado_em || "").localeCompare(String(a.atualizado_em || "")))[0];
@@ -60,7 +73,7 @@ export default function PreConsulta() {
         if (lead.email) pre.email = lead.email;
         if (lead.peso) pre.peso_atual = String(lead.peso);
         if (lead.altura) pre.estatura = String(lead.altura);
-        if (lead.objetivo) pre.objetivo = lead.objetivo;
+        if (OBJETIVOS.includes(lead.objetivo)) { pre.objetivo = [lead.objetivo]; pre.objetivo_principal = lead.objetivo; }
         setRespostas(pre);
       }
     }).catch(() => {
@@ -132,9 +145,10 @@ export default function PreConsulta() {
     }
     setEnviando(true);
     try {
-      const visiveis = new Set(lista.map((p) => p.id));
+      const visiveis = new Set([...lista.map((p) => p.id), "objetivo_principal"]);
       const payload = Object.fromEntries(Object.entries(respostas).filter(([k, v]) => visiveis.has(k) && !vazio(v)));
-      await api.post("/public/anamnesis", { token, respostas: payload });
+      if (info?.tipo === "retorno") await api.post("/public/retorno", { token, respostas: payload });
+      else await api.post("/public/anamnesis", { token, respostas: payload, consentimento_lgpd: consentimento });
       clearTimeout(timerRascunho.current);
       apagarLocal(token);
       setFase("fim");
@@ -168,18 +182,27 @@ export default function PreConsulta() {
     return (
       <Moldura>
         <div className="max-w-xl mt-6 space-y-5 animate-fade-up">
-          <h1 className="rc-h2">Formulário pré-consulta</h1>
+          <h1 className="rc-h2">{info?.tipo === "retorno" ? "Questionário de retorno" : "Formulário pré-consulta"}</h1>
           <p className="text-[15px] text-gray-300 leading-relaxed">
-            Suas respostas são a base do seu plano alimentar e do seu treino. É uma pergunta por vez e leva cerca de
-            10 minutos. Responda com sinceridade, pensando na sua rotina real. As informações serão usadas apenas na sua consultoria.
+            {info?.tipo === "retorno"
+              ? "Antes da sua reavaliação, conta como foram estas semanas. São 10 perguntas rápidas."
+              : "Suas respostas são a base do seu plano alimentar e do seu treino. É uma pergunta por vez e leva cerca de 10 minutos. Responda com sinceridade, pensando na sua rotina real."}
           </p>
+          <label className="flex items-start gap-3 rounded-xl bg-white/[0.03] p-4 ring-1 ring-white/[0.08] cursor-pointer" data-testid="lgpd">
+            <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[#0081FD]" checked={consentimento} onChange={(e) => setConsentimento(e.target.checked)} />
+            <span className="text-[13.5px] text-gray-300 leading-relaxed">
+              Autorizo o uso dos meus dados pessoais e de saúde (respostas, exames e fotos) pelo Rogério Costa e equipe somente para a minha
+              consultoria, conforme a Lei Geral de Proteção de Dados (LGPD). Meus dados não serão compartilhados com terceiros e posso pedir a
+              exclusão a qualquer momento.
+            </span>
+          </label>
           <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button type="button" className="rc-btn-primary h-12 px-7" data-testid="preconsulta-comecar"
+            <button type="button" className="rc-btn-primary h-12 px-7" data-testid="preconsulta-comecar" disabled={!consentimento}
               onClick={() => { setFase("perguntas"); if (!retomar || !cur) setCur(lista[0]?.id); }}>
               {retomar ? "Continuar de onde parei" : "Começar"} <ArrowRight className="w-4 h-4" />
             </button>
             {retomar && (
-              <button type="button" className="rc-btn-secondary h-12" onClick={() => { setFase("perguntas"); setCur(lista[0]?.id); }}>
+              <button type="button" className="rc-btn-secondary h-12" disabled={!consentimento} onClick={() => { setFase("perguntas"); setCur(lista[0]?.id); }}>
                 Revisar desde o início
               </button>
             )}
@@ -193,7 +216,7 @@ export default function PreConsulta() {
   }
 
   if (fase === "fim") {
-    return <Final token={token} nome={nome} onAtendimento={() => navigate(`/chat/${token}`)} />;
+    return <Final nome={nome} info={info} retorno={info?.tipo === "retorno"} />;
   }
 
   // ── uma pergunta por tela ──
@@ -234,8 +257,8 @@ export default function PreConsulta() {
           </h1>
           {pergunta.desc && <p className="text-[14px] text-gray-400 whitespace-pre-line leading-relaxed">{pergunta.desc}</p>}
 
-          <Entrada pergunta={pergunta} valor={valor} token={token}
-            onChange={(v, avancar) => responder(pergunta.id, v, avancar)}
+          <Entrada pergunta={pergunta} valor={valor} token={token} respostas={respostas} tipoForm={info?.tipo}
+            onChange={(v, avancar, extra) => (extra ? (() => { const novas = { ...respostas, [pergunta.id]: v, ...extra }; setRespostas(novas); salvarRascunho(novas, pergunta.id); })() : responder(pergunta.id, v, avancar))}
             onEnter={() => (ultima ? enviar() : irPara(1))} />
 
           {idade !== null && <p className="text-rc-blue font-semibold">Idade: {idade} {idade === 1 ? "ano" : "anos"}</p>}
@@ -277,12 +300,18 @@ const opcaoClasse = (on) =>
   `w-full min-h-[52px] px-4 py-3 rounded-xl border text-left text-[15px] transition-colors duration-150 ${
     on ? "bg-rc-blue/15 border-rc-blue text-white" : "bg-white/[0.03] border-white/[0.1] text-gray-200 hover:border-rc-blue/50"}`;
 
-function Entrada({ pergunta, valor, token, onChange, onEnter }) {
+function Entrada({ pergunta, valor, token, respostas, tipoForm, onChange, onEnter }) {
   const { tipo } = pergunta;
+  if (tipo === "objetivos") {
+    const lista = Array.isArray(valor) ? valor : [];
+    return <SeletorObjetivos grande valor={lista} principal={respostas.objetivo_principal} onChange={(l, princ) => onChange(l, false, { objetivo_principal: princ })} />;
+  }
+  if (tipo === "rotina") return <EntradaRotina valor={valor} onChange={onChange} />;
+  if (tipo === "fotos") return <EntradaFotos valor={valor} token={token} tipoForm={tipoForm} onChange={onChange} />;
   if (tipo === "unica") {
     return (
       <div className="space-y-2.5" role="radiogroup" aria-label={pergunta.titulo}>
-        {pergunta.opcoes.map((o) => (
+        {opcoesVisiveis(pergunta, respostas).map((o) => (
           <button key={o} type="button" role="radio" aria-checked={valor === o} onClick={() => onChange(o, true)} className={opcaoClasse(valor === o)}>
             {o}
           </button>
@@ -302,7 +331,7 @@ function Entrada({ pergunta, valor, token, onChange, onEnter }) {
     return (
       <div className="space-y-2.5">
         <p className="text-[12px] text-gray-500">Pode marcar mais de uma.</p>
-        {pergunta.opcoes.map((o) => (
+        {opcoesVisiveis(pergunta, respostas).map((o) => (
           <button key={o} type="button" aria-pressed={atual.includes(o)} onClick={() => alternar(o)} className={`${opcaoClasse(atual.includes(o))} flex items-center gap-3`}>
             <span className={`w-5 h-5 shrink-0 rounded-md border flex items-center justify-center ${atual.includes(o) ? "bg-rc-blue border-rc-blue" : "border-white/25"}`}>
               {atual.includes(o) && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
@@ -337,6 +366,67 @@ function Entrada({ pergunta, valor, token, onChange, onEnter }) {
       inputMode={tipo === "numero" ? "decimal" : undefined}
       value={valor || ""} onChange={(e) => onChange(e.target.value)}
       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onEnter(); } }} />
+  );
+}
+
+const ROTINA_PADRAO = [
+  { horario: "07:00", refeicao: "Café da manhã", alimentos: "" },
+  { horario: "10:00", refeicao: "Lanche da manhã", alimentos: "" },
+  { horario: "12:30", refeicao: "Almoço", alimentos: "" },
+  { horario: "16:00", refeicao: "Lanche da tarde", alimentos: "" },
+  { horario: "20:00", refeicao: "Jantar", alimentos: "" },
+];
+
+/** Rotina alimentar guiada: horário, refeição e o que come (vira o rascunho do Recordatório). */
+function EntradaRotina({ valor, onChange }) {
+  const linhas = Array.isArray(valor) && valor.length ? valor : ROTINA_PADRAO;
+  const set = (i, k, v) => onChange(linhas.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  return (
+    <div className="space-y-3" data-testid="rotina-guiada">
+      {linhas.map((r, i) => (
+        <div key={i} className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/[0.08] space-y-2">
+          <div className="flex gap-2">
+            <input className="rc-input h-11 w-24 tabular" value={r.horario} onChange={(e) => set(i, "horario", e.target.value)} placeholder="07:00" aria-label={`Horário da refeição ${i + 1}`} inputMode="numeric" />
+            <input className="rc-input h-11 flex-1" value={r.refeicao} onChange={(e) => set(i, "refeicao", e.target.value)} placeholder="Refeição" aria-label={`Nome da refeição ${i + 1}`} />
+            <button type="button" onClick={() => onChange(linhas.filter((_, j) => j !== i))} className="px-2 text-gray-500 hover:text-white" aria-label={`Remover refeição ${i + 1}`}><X className="h-4 w-4" /></button>
+          </div>
+          <textarea className="rc-input min-h-[60px] leading-relaxed" rows={2} value={r.alimentos} onChange={(e) => set(i, "alimentos", e.target.value)}
+            placeholder="O que você come (ex.: 2 fatias de pão + 1 ovo + café)" aria-label={`O que come na refeição ${i + 1}`} />
+        </div>
+      ))}
+      <button type="button" onClick={() => onChange([...linhas, { horario: "", refeicao: "", alimentos: "" }])} className="rc-btn-secondary h-11"><Plus className="h-4 w-4" /> Adicionar refeição</button>
+    </div>
+  );
+}
+
+/** 3 fotos de avaliação (frente, lado, costas), reduzidas antes de enviar. */
+function EntradaFotos({ valor, token, tipoForm, onChange }) {
+  const enviadas = Array.isArray(valor) ? valor : [];
+  const [enviando, setEnviando] = useState("");
+  const [previas, setPrevias] = useState({});
+  const enviar = async (pose, file) => {
+    if (!file) return;
+    setEnviando(pose);
+    try {
+      const dataUrl = await fotoReduzida(file);
+      const { data } = await api.post(`/public/lead/${token}/foto`, { pose, data_url: dataUrl, tipo: tipoForm === "retorno" ? "retorno" : "inicial" });
+      setPrevias((s) => ({ ...s, [pose]: dataUrl }));
+      onChange([...enviadas.filter((f) => f.pose !== pose), { pose, id: data.id }]);
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "Não foi possível enviar a foto."); } finally { setEnviando(""); }
+  };
+  return (
+    <div className="grid grid-cols-3 gap-3" data-testid="fotos-formulario">
+      {[["frente", "Frente"], ["lado", "Lado"], ["costas", "Costas"]].map(([pose, rotulo]) => {
+        const ok = enviadas.some((f) => f.pose === pose);
+        return (
+          <label key={pose} className={`relative flex aspect-[3/4] cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 ${ok ? "border-rc-lime" : "border-dashed border-white/[0.14] hover:border-rc-blue/50"} bg-white/[0.02] text-gray-300`}>
+            <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" aria-label={`Foto de ${rotulo.toLowerCase()}`} onChange={(e) => { enviar(pose, e.target.files?.[0]); e.target.value = ""; }} />
+            {previas[pose] ? <img src={previas[pose]} alt={rotulo} className="absolute inset-0 h-full w-full object-cover" /> : enviando === pose ? <Loader2 className="h-5 w-5 animate-spin text-rc-blue" /> : ok ? <Check className="h-6 w-6 text-rc-lime" /> : <Camera className="h-6 w-6 text-rc-blue" />}
+            <span className="relative rounded bg-black/50 px-2 text-[12px] font-semibold">{rotulo}{ok ? " ✓" : ""}</span>
+          </label>
+        );
+      })}
+    </div>
   );
 }
 
@@ -506,74 +596,35 @@ async function fotoReduzida(file, maxSize = 1280, quality = 0.78) {
   });
 }
 
-function Final({ token, nome, onAtendimento }) {
-  const [fotos, setFotos] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [enviadas, setEnviadas] = useState(false);
-  const adicionar = async (files) => {
-    const lista = Array.from(files || []).filter((f) => f.type.startsWith("image/")).slice(0, 4 - fotos.length);
-    if (!lista.length) return;
-    setBusy(true);
-    try {
-      const novas = [];
-      for (const f of lista) novas.push({ name: f.name, data_url: await fotoReduzida(f) });
-      setFotos((atual) => [...atual, ...novas].slice(0, 4));
-    } catch { toast.error("Não foi possível ler a imagem"); }
-    setBusy(false);
-  };
-  const enviarFotos = async () => {
-    setBusy(true);
-    try {
-      await api.post(`/public/lead/${token}/photos`, { fotos: fotos.map((f) => ({ ...f, size: f.data_url.length })) });
-      setEnviadas(true);
-      toast.success("Fotos enviadas.");
-    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
-    setBusy(false);
-  };
+function Final({ nome, info, retorno }) {
+  const consulta = info?.consulta?.data_hora ? new Date(info.consulta.data_hora) : null;
+  const fone = info?.whatsapp || WHATSAPP_PADRAO;
+  const zap = `https://wa.me/${fone.length <= 11 ? `55${fone}` : fone}?text=${encodeURIComponent(`Oi, Rogério! Aqui é ${nome || "o(a) paciente"}. Acabei de enviar o ${retorno ? "questionário de retorno" : "formulário"}.`)}`;
   return (
     <Moldura>
-      <div className="mt-8 space-y-8 animate-fade-up">
+      <div className="mt-10 max-w-xl space-y-6 animate-fade-up" data-testid="preconsulta-final">
+        <CheckCircle2 className="w-12 h-12 text-rc-lime" />
         <div className="space-y-3">
-          <CheckCircle2 className="w-9 h-9 text-rc-lime" />
-          <h1 className="rc-h2">{nome ? `Tudo certo, ${nome}!` : "Tudo certo!"}</h1>
-          <p className="text-gray-300 leading-relaxed">Suas respostas foram enviadas ao Rogério. Elas são a base do seu plano alimentar e do seu treino.</p>
+          <h1 className="rc-h2">{nome ? `Obrigado, ${nome}!` : "Obrigado!"} Recebemos suas informações.</h1>
+          <p className="text-[16px] text-gray-300 leading-relaxed">
+            Agora vou analisar tudo com calma para montar um plano feito pra você. Qualquer dúvida, é só chamar no WhatsApp.
+          </p>
+          <p className="text-[15px] font-semibold text-white">Te vejo na consulta — Rogerio Costa</p>
         </div>
-
-        <section className="rc-card p-5 sm:p-6 space-y-5">
-          <div>
-            <span className="inline-block rounded-full bg-rc-blue/15 text-rc-blue px-3 py-1 text-[12px] font-semibold uppercase tracking-[0.14em]">Segundo passo</span>
-            <h2 className="rc-h3 mt-3">Protocolo de fotos (opcional)</h2>
-          </div>
-          <ProtocoloFotos />
-          {!enviadas ? (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {fotos.map((f, i) => (
-                  <div key={i} className="relative rounded-xl overflow-hidden aspect-[3/4] bg-white/[0.03]">
-                    <img src={f.data_url} alt={f.name} className="w-full h-full object-cover" />
-                    <button type="button" aria-label="Remover foto" onClick={() => setFotos(fotos.filter((_, j) => j !== i))}
-                      className="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center"><X className="w-3.5 h-3.5" /></button>
-                  </div>
-                ))}
-                {fotos.length < 4 && (
-                  <label className="relative cursor-pointer rounded-xl border-2 border-dashed border-white/[0.14] hover:border-rc-blue/50 aspect-[3/4] flex flex-col items-center justify-center text-gray-400">
-                    <input type="file" accept="image/*" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => adicionar(e.target.files)} />
-                    {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Upload className="w-5 h-5" /><span className="text-[11px] mt-1.5">Adicionar</span></>}
-                  </label>
-                )}
+        {consulta && !Number.isNaN(consulta.getTime()) && (
+          <div className="flex items-center gap-3 rounded-xl bg-rc-blue/10 px-4 py-3 ring-1 ring-rc-blue/30" data-testid="final-consulta">
+            <CalendarDays className="h-5 w-5 text-rc-blue" />
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-gray-400">Sua consulta</div>
+              <div className="text-[15px] font-semibold text-white">
+                {consulta.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })} às {consulta.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
               </div>
-              {fotos.length > 0 && (
-                <button type="button" onClick={enviarFotos} disabled={busy} className="rc-btn-primary">Enviar fotos</button>
-              )}
             </div>
-          ) : (
-            <p className="text-rc-lime text-sm font-medium">Fotos recebidas. Obrigado!</p>
-          )}
-        </section>
-
-        <button type="button" onClick={onAtendimento} className="rc-btn-secondary">
-          Ir para o atendimento <ArrowRight className="w-4 h-4" />
-        </button>
+          </div>
+        )}
+        <a href={zap} target="_blank" rel="noopener noreferrer" className="rc-btn-primary h-12 px-6 inline-flex" data-testid="final-whatsapp">
+          <MessageCircle className="w-4 h-4" /> Falar no WhatsApp
+        </a>
       </div>
     </Moldura>
   );

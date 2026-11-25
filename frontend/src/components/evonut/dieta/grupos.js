@@ -1,6 +1,6 @@
 import { createContext, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/evo-api";
-import { ehGramas, num, rankMedida } from "./calculos";
+import { ehGramas, normalizar, num, rankMedida } from "./calculos";
 
 /**
  * Grupos de substituição (itens 9 a 12 dos ajustes): cada grupo troca por um critério (kcal ou macro principal),
@@ -161,4 +161,30 @@ export function sugerirPorcoes(grupos, atuais, meta) {
   const saida = { ...atuais };
   usaveis.forEach((g, j) => { saida[g.id] = Math.round(x[j] * 2) / 2; });
   return saida;
+}
+
+const PALAVRAS_VAZIAS = new Set(["nao", "nada", "nenhum", "nenhuma", "tenho", "gosto", "como", "muito", "pouco", "alergia", "intolerancia",
+  "alimento", "alimentos", "comida", "come", "todos", "todo", "tipo", "tipos", "algum", "alguns", "quase", "tambem", "porque", "sabor"]);
+
+const GENERICAS = new Set(["carne", "carnes", "vermelha", "branca", "derivados", "frita", "fritas", "cozido", "cozida", "crua", "verde", "integral"]);
+
+/** Termos das alergias e aversões do paciente (formulário) para tirar das trocas: "leite, camarão e jiló" -> [leite, camarao, jilo]. */
+export function termosRestritos(...textos) {
+  const termos = new Set();
+  textos.filter(Boolean).forEach((t) => {
+    normalizar(Array.isArray(t) ? t.join(", ") : t).split(/[,;/\n]|\s+e\s+|\s+ou\s+/).forEach((parte) => {
+      const p = parte.replace(/[^a-z\s]/g, " ").trim();
+      if (!p) return;
+      // "carne de porco" -> porco (palavras genéricas como carne ficam de fora para não tirar o grupo todo)
+      p.split(/\s+/).filter((w) => w.length >= 4 && !PALAVRAS_VAZIAS.has(w) && !GENERICAS.has(w)).forEach((w) => termos.add(w));
+    });
+  });
+  return [...termos];
+}
+
+/** Grupos sem as opções que batem com alergias/aversões (a referência continua, só não entra como troca). */
+export function gruposSemRestricoes(grupos, termos) {
+  if (!termos?.length) return grupos;
+  const bate = (nome) => { const n = normalizar(nome); return termos.some((t) => n.includes(t) || n.includes(t.replace(/s$/, ""))); };
+  return (grupos || []).map((g) => ({ ...g, opcoes: (g.opcoes || []).filter((o) => !bate(o.nome)), _removidas: (g.opcoes || []).filter((o) => bate(o.nome)).map((o) => o.nome) }));
 }

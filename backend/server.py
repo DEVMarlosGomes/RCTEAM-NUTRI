@@ -217,6 +217,7 @@ class PatientCreateIn(BaseModel):
     data_nascimento: Optional[str] = None
     sexo: Optional[str] = None
     objetivo: Optional[str] = None
+    objetivos: Optional[List[str]] = None
     peso: Optional[float] = None
     altura: Optional[float] = None
     status_funil: str = "LEAD_INICIADO"
@@ -239,10 +240,14 @@ class PatientUpdateIn(BaseModel):
     meta_energetica: Optional[dict] = None
     # Modelo de avaliação do paciente (Antropometria + Gasto): "rc" (planilha atual) ou "donatto"
     modelo_avaliacao: Optional[Literal["rc", "donatto"]] = None
+    # objetivos marcados (o principal fica em `objetivo`)
+    objetivos: Optional[List[str]] = None
+    peso_desejado: Optional[float] = None
 
 class AnamnesisIn(BaseModel):
     token: str
     respostas: dict
+    consentimento_lgpd: Optional[bool] = None
 
 class ChatIn(BaseModel):
     token: str
@@ -1310,8 +1315,99 @@ def _numero(v) -> Optional[float]:
 
 
 @api.get("/public/preconsulta/estrutura")
-async def preconsulta_estrutura():
-    return af.estrutura_publica()
+async def preconsulta_estrutura(tipo: str = "inicial"):
+    return af.estrutura_publica("retorno" if tipo == "retorno" else "inicial")
+
+
+def _estado_formulario(p: dict) -> dict:
+    """Situação do formulário do paciente: aberto (pode responder) ou respondido (travado até o nutricionista
+    clicar em Reenviar / Enviar retorno). Pacientes antigos que já enviaram contam como respondido."""
+    f = dict(p.get("formulario") or {})
+    if not f:
+        f = {"tipo": "inicial", "estado": "respondido" if p.get("preconsulta_enviada_em") else "aberto",
+             "respondido_em": p.get("preconsulta_enviada_em")}
+    f.setdefault("tipo", "inicial")
+    return f
+
+
+@api.get("/public/lead/{token}/formulario")
+async def formulario_publico(token: str):
+    """O que a página do formulário precisa saber: qual formulário, se já foi respondido, a consulta marcada
+    e o WhatsApp do nutricionista (tela final)."""
+    p = await _lead_por_token(token)
+    f = _estado_formulario(p)
+    agora = iso(now_utc())
+    consulta = await db.consultations.find_one(
+        {"paciente_id": p["id"], "data_hora": {"$gte": agora[:16]}, "status": {"$nin": ["CANCELADA", "CANCELADO"]}},
+        {"_id": 0, "data_hora": 1, "tipo": 1}, sort=[("data_hora", 1)])
+    nutri = await db.users.find_one({"id": p.get("nutricionista_id")}, {"_id": 0, "telefone": 1, "telefone_clinica": 1, "name": 1}) or {}
+    fone = re.sub(r"\D", "", str(nutri.get("telefone_clinica") or nutri.get("telefone") or ""))
+    return {"tipo": f.get("tipo"), "estado": f.get("estado"), "respondido_em": f.get("respondido_em"),
+            "nome": p.get("nome"), "consulta": consulta, "whatsapp": fone or None}
+
+
+class EnviarFormularioIn(BaseModel):
+    tipo: Literal["inicial", "retorno"] = "inicial"
+
+
+@api.post("/patients/{pid}/formulario/enviar")
+async def enviar_formulario(pid: str, payload: EnviarFormularioIn, user=Depends(require_nutritionist)):
+    """Reenviar o formulário pré-consulta ou enviar o questionário de retorno: destrava o link do paciente."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    token = p.get("lead_token") or secrets.token_urlsafe(16)
+    f = {"tipo": payload.tipo, "estado": "aberto", "enviado_em": iso(now_utc())}
+    await db.patients.update_one({"id": pid}, {"$set": {"formulario": f, "lead_token": token},
+                                               "$unset": {"preconsulta_rascunho": ""}})
+    return {"ok": True, "token": token, "formulario": f}
+
+
+class FotoPublicaIn(BaseModel):
+    pose: Literal["frente", "lado", "costas"]
+    data_url: str
+    tipo: Literal["inicial", "retorno"] = "inicial"
+
+
+@api.post("/public/lead/{token}/foto")
+async def foto_formulario(token: str, payload: FotoPublicaIn):
+    """Foto de avaliação enviada pelo formulário (frente, lado, costas). Fica com as fotos das avaliações."""
+    p = await _lead_por_token(token)
+    if not payload.data_url.startswith("data:image/") or len(payload.data_url) > 4_500_000:
+        raise HTTPException(400, "Envie uma imagem de até 3 MB")
+    grupo = "preconsulta" if payload.tipo == "inicial" else f"retorno-{iso(now_utc())[:10]}"
+    doc = {"id": str(uuid.uuid4()), "paciente_id": p["id"], "avaliacao_id": grupo, "pose": payload.pose,
+           "data_url": payload.data_url, "enviado_em": iso(now_utc()), "origem": "formulario"}
+    await db.avaliacao_fotos.delete_many({"paciente_id": p["id"], "avaliacao_id": grupo, "pose": payload.pose})
+    await db.avaliacao_fotos.insert_one(dict(doc))
+    return {"id": doc["id"], "pose": payload.pose}
+
+
+async def _recordatorio_da_rotina(p: dict, rotina) -> None:
+    """Rotina alimentar guiada do formulário -> rascunho de recordatório (texto livre, sem cálculo)."""
+    if not isinstance(rotina, list):
+        return
+    refeicoes = []
+    for i, r in enumerate(rotina[:8], 1):
+        if not isinstance(r, dict) or not (r.get("refeicao") or r.get("alimentos")):
+            continue
+        itens = [x.strip() for x in re.split(r"\s*\+\s*|,\s*|\n", str(r.get("alimentos") or "")) if x.strip()][:12]
+        refeicoes.append({"numero": i, "nome": str(r.get("refeicao") or f"Refeição {i}")[:80], "horario": str(r.get("horario") or "")[:10],
+                          "itens": [{"n": k + 1, "alimento_id": None, "alimento_nome": t[:120], "medida_nome": "Gramas", "quantidade": 0, "quantidade_g": 0}
+                                    for k, t in enumerate(itens)], "observacao": ""})
+    if not refeicoes:
+        return
+    if await db.recordatorios.find_one({"paciente_id": p["id"], "origem": "formulario"}):
+        return
+    try:
+        payload = RecordatorioIn(data=iso(now_utc())[:10], refeicoes=refeicoes, observacoes="Rotina informada no formulário pré-consulta.")
+        rec = await _build_recordatorio_model(payload, p["id"], p.get("nutricionista_id"))
+        from recordatorio_calc import finalizar_recordatorio
+        doc = finalizar_recordatorio(rec).model_dump()
+        doc.update({"id": str(uuid.uuid4()), "origem": "formulario", "created_at": iso(now_utc())})
+        await db.recordatorios.insert_one(doc)
+    except Exception as e:  # o formulário não pode falhar por causa do recordatório
+        logging.getLogger(__name__).warning("recordatorio da rotina: %s", e)
 
 
 async def _lead_por_token(token: str) -> dict:
@@ -1324,15 +1420,19 @@ async def _lead_por_token(token: str) -> dict:
 @api.post("/public/anamnesis")
 async def submit_anamnesis(payload: AnamnesisIn):
     p = await _lead_por_token(payload.token)
+    if _estado_formulario(p).get("estado") == "respondido":
+        raise HTTPException(409, "Este formulário já foi enviado. Se precisar mudar algo, fale com o Rogério.")
     r = {k: _limpar_resposta(v) for k, v in (payload.respostas or {}).items() if k in af.PERGUNTAS}
     faltando = af.obrigatorias_faltando(r)
     if faltando:
         raise HTTPException(400, "Responda as perguntas obrigatórias: " + ", ".join(str(af.PERGUNTAS[k]["n"]) for k in faltando))
     agora = iso(now_utc())
     doc = await _salvar_formulario(p["id"], p.get("nutricionista_id"), r,
-                                   extra={"respostas": r, "enviado_em": agora, "origem": "pre_consulta"})
+                                   extra={"respostas": r, "enviado_em": agora, "origem": "pre_consulta",
+                                          **({"consentimento_lgpd_em": agora} if payload.consentimento_lgpd else {})})
     # o Bloco 1 também atualiza o cadastro do paciente
-    upd = {"status_funil": "ANAMNESE_COMPLETA", "preconsulta_enviada_em": agora}
+    upd = {"status_funil": "ANAMNESE_COMPLETA", "preconsulta_enviada_em": agora,
+           "formulario": {"tipo": "inicial", "estado": "respondido", "respondido_em": agora}}
     if r.get("nome"):
         upd["nome"] = str(r["nome"]).strip()
     if r.get("email"):
@@ -1346,14 +1446,45 @@ async def submit_anamnesis(payload: AnamnesisIn):
         upd["peso"] = peso
     if altura:
         upd["altura"] = int(round(altura))
-    if r.get("objetivo"):
-        upd["objetivo"] = str(r["objetivo"])[:300]
+    objetivos = af.objetivos_da_resposta(r.get("objetivo"))
+    if objetivos:
+        principal = r.get("objetivo_principal") if r.get("objetivo_principal") in objetivos else objetivos[0]
+        upd["objetivos"] = objetivos
+        upd["objetivo"] = str(principal)[:300]
+    if str(r.get("condicionamento") or "").startswith("Atleta"):
+        upd["atleta"] = True
+    if _numero(r.get("peso_desejado")):
+        upd["peso_desejado"] = _numero(r.get("peso_desejado"))
     await db.patients.update_one({"id": p["id"]}, {"$set": upd, "$unset": {"preconsulta_rascunho": ""}})
+    await _recordatorio_da_rotina(p, r.get("rotina_alimentar"))
     return {"ok": True, "anamnesis_id": (doc or {}).get("id")}
 
 
 class RascunhoIn(BaseModel):
     respostas: dict
+
+
+@api.post("/public/retorno")
+async def submit_retorno(payload: AnamnesisIn):
+    """Questionário de retorno (antes da reavaliação): fica na anamnese, em `retornos`, com a data."""
+    p = await _lead_por_token(payload.token)
+    f = _estado_formulario(p)
+    if f.get("tipo") != "retorno" or f.get("estado") != "aberto":
+        raise HTTPException(409, "Este questionário já foi enviado ou não está liberado.")
+    r = {k: _limpar_resposta(v) for k, v in (payload.respostas or {}).items() if k in af.PERGUNTAS_RETORNO}
+    faltando = af.obrigatorias_faltando(r, af.RETORNO_BLOCOS)
+    if faltando:
+        raise HTTPException(400, "Responda as perguntas obrigatórias: " + ", ".join(str(af.PERGUNTAS_RETORNO[k]["n"]) for k in faltando))
+    agora = iso(now_utc())
+    entrada = {"id": str(uuid.uuid4()), "respondido_em": agora, "respostas": r}
+    if await db.anamneses.find_one({"paciente_id": p["id"]}):
+        await db.anamneses.update_one({"paciente_id": p["id"]}, {"$push": {"retornos": entrada}, "$set": {"atualizado_em": agora}})
+    else:
+        await db.anamneses.insert_one({"id": str(uuid.uuid4()), "paciente_id": p["id"], "nutricionista_id": p.get("nutricionista_id"),
+                                       "criado_em": agora, "retornos": [entrada], "formulario_versao": 2, "formulario": {}, "formulario_outras": {}})
+    await db.patients.update_one({"id": p["id"]}, {"$set": {"formulario": {"tipo": "retorno", "estado": "respondido", "respondido_em": agora}},
+                                                   "$unset": {"preconsulta_rascunho": ""}})
+    return {"ok": True}
 
 
 @api.get("/public/lead/{token}/rascunho")
@@ -1366,7 +1497,7 @@ async def get_rascunho(token: str):
 async def salvar_rascunho(token: str, payload: RascunhoIn):
     """Rascunho salvo a cada resposta: o cliente pode fechar e voltar pelo mesmo link."""
     p = await _lead_por_token(token)
-    r = {k: _limpar_resposta(v) for k, v in (payload.respostas or {}).items() if k in af.PERGUNTAS}
+    r = {k: _limpar_resposta(v) for k, v in (payload.respostas or {}).items() if k in af.PERGUNTAS or k in af.PERGUNTAS_RETORNO}
     if len(json.dumps(r, ensure_ascii=False)) > 150_000:
         raise HTTPException(413, "Rascunho grande demais")
     await db.patients.update_one({"id": p["id"]}, {"$set": {"preconsulta_rascunho": {"respostas": r, "atualizado_em": iso(now_utc())}}})
