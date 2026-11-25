@@ -4445,7 +4445,9 @@ async def get_alimento_medidas(aid: str, user=Depends(require_nutritionist)):
     doc = await db.alimentos.find_one({"id": aid}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Alimento não encontrado")
-    return {"alimento_id": aid, "alimento_nome": doc.get("nome"), "medidas": _medidas_do_alimento(doc)}
+    grupos = await _grupos_do_nutri(user["id"])
+    return {"alimento_id": aid, "alimento_nome": doc.get("nome"), "medidas": _medidas_do_alimento(doc),
+            "grupo_substituicao": _grupo_do_alimento(doc, grupos)}
 
 @api.get("/alimentos/{aid}/equivalentes")
 async def get_alimento_equivalentes(aid: str, user=Depends(require_nutritionist)):
@@ -4704,6 +4706,138 @@ async def get_equivalentes_calculados(
     if not doc:
         raise HTTPException(404, "Alimento nao encontrado")
     return await _compute_equivalentes(doc, max(1.0, float(quantidade_g)), q.strip(), max(1, min(limit, 40)))
+
+# ---------- Grupos de substituição (itens 9 a 12 dos ajustes do Rogério) ----------
+# Cada grupo troca por um critério (kcal ou o macro principal), tem porção de referência, 4 a 6 opções padrão
+# com medida caseira e tolerância (±10%). Padrões A CONFIRMAR com o Rogério; o nutricionista edita em
+# Configurações da dieta › Grupos de substituição.
+GRUPOS_SUBSTITUICAO_PADRAO = [
+    {"id": "paes_tuberculos", "nome": "Pães e tubérculos", "criterio": "cho", "tipos": ["carbo"],
+     "referencia": {"alimento_id": "402", "quantidade_g": 100},
+     "opcoes": ["392", "709", "3679", "4762", "6280", "3828"]},
+    {"id": "frutas", "nome": "Frutas", "criterio": "cho", "tipos": ["fruta", "suco"],
+     "referencia": {"alimento_id": "585", "quantidade_g": 80},
+     "opcoes": ["3671", "3800", "4267", "3390", "6445", "4059"]},
+    {"id": "proteinas", "nome": "Proteínas animais", "criterio": "ptn", "tipos": ["proteina"],
+     "referencia": {"alimento_id": "2913", "quantidade_g": 100},
+     "opcoes": ["1701", "1694", "6588", "5720", "4555"]},
+    {"id": "laticinios", "nome": "Laticínios", "criterio": "ptn", "tipos": ["laticinio"],
+     "referencia": {"alimento_id": "3524", "quantidade_g": 200},
+     "opcoes": ["3259", "5396", "5450", "5479", "6575"]},
+    {"id": "leguminosas", "nome": "Leguminosas", "criterio": "cho", "tipos": ["leguminosa"],
+     "referencia": {"alimento_id": "2661", "quantidade_g": 100},
+     "opcoes": ["2682", "3551", "3076", "2667", "2511"]},
+    {"id": "gorduras", "nome": "Gorduras e oleaginosas", "criterio": "lip", "tipos": ["gordura", "oleaginosa"],
+     "referencia": {"alimento_id": "505", "quantidade_g": 10},
+     "opcoes": ["6", "1837", "4387", "302", "6576", "3901"]},
+    {"id": "vegetais", "nome": "Vegetais", "criterio": "kcal", "tipos": ["vegetal"],
+     "referencia": {"alimento_id": "1198", "quantidade_g": 100},
+     "opcoes": ["68", "1884", "2088", "2250", "6468", "828"]},
+]
+_CRITERIOS_GRUPO = ("kcal", "cho", "ptn", "lip")
+
+
+def _grupos_padrao() -> list[dict]:
+    return [{"id": g["id"], "nome": g["nome"], "criterio": g["criterio"], "tolerancia_pct": 10, "tipos": list(g["tipos"]),
+             "referencia": dict(g["referencia"]), "opcoes": [{"alimento_id": a} for a in g["opcoes"]]}
+            for g in GRUPOS_SUBSTITUICAO_PADRAO]
+
+
+async def _grupos_do_nutri(user_id: str) -> list[dict]:
+    doc = await db.grupos_substituicao.find_one({"nutricionista_id": user_id}, {"_id": 0})
+    return (doc or {}).get("grupos") or _grupos_padrao()
+
+
+async def _enriquecer_grupos(grupos: list[dict]) -> list[dict]:
+    """Junta nome, macros por 100 g e medidas caseiras de cada alimento (referência e opções)."""
+    ids = {str(g.get("referencia", {}).get("alimento_id")) for g in grupos} | {str(o.get("alimento_id")) for g in grupos for o in g.get("opcoes", [])}
+    docs = {d["id"]: d async for d in db.alimentos.find({"id": {"$in": [i for i in ids if i]}}, {"_id": 0})}
+
+    def info(aid):
+        d = docs.get(str(aid))
+        if not d:
+            return None
+        return {"alimento_id": d["id"], "nome": d.get("nome"), "macros_100g": _macros_100g(d), "medidas": _medidas_do_alimento(d)}
+
+    saida = []
+    for g in grupos:
+        ref = g.get("referencia") or {}
+        ref_info = info(ref.get("alimento_id"))
+        opcoes = [o2 for o2 in ({**o, **(info(o.get("alimento_id")) or {})} for o in g.get("opcoes", [])) if o2.get("nome")]
+        saida.append({**g, "referencia": {**ref, **(ref_info or {})} if ref_info else None, "opcoes": opcoes})
+    return saida
+
+
+def _grupo_do_alimento(doc: dict, grupos: list[dict]) -> Optional[str]:
+    aid = str(doc.get("id"))
+    for g in grupos:
+        if aid == str((g.get("referencia") or {}).get("alimento_id")) or any(aid == str(o.get("alimento_id")) for o in g.get("opcoes", [])):
+            return g["id"]
+    m = _macros_100g(doc)
+    kind = _equiv_kind(doc, m)
+    if not kind:
+        papel = _equiv_papel(m)
+        kind = {"ptn": "proteina", "cho": "carbo", "lip": "gordura"}.get(papel)
+    for g in grupos:
+        if kind and kind in (g.get("tipos") or []):
+            return g["id"]
+    return None
+
+
+class GrupoOpcaoIn(BaseModel):
+    alimento_id: str
+    medida_nome: Optional[str] = None
+
+
+class GrupoReferenciaIn(BaseModel):
+    alimento_id: str
+    quantidade_g: float = Field(gt=0, le=2000)
+    medida_nome: Optional[str] = None
+
+
+class GrupoSubstituicaoIn(BaseModel):
+    id: Optional[str] = None
+    nome: str = Field(min_length=1, max_length=80)
+    criterio: str = "kcal"
+    tolerancia_pct: float = Field(default=10, ge=1, le=50)
+    tipos: List[str] = []
+    referencia: GrupoReferenciaIn
+    opcoes: List[GrupoOpcaoIn] = []
+
+
+class GruposSubstituicaoIn(BaseModel):
+    grupos: List[GrupoSubstituicaoIn]
+
+
+@api.get("/dieta/grupos-substituicao")
+async def get_grupos_substituicao(user=Depends(require_nutritionist)):
+    return await _enriquecer_grupos(await _grupos_do_nutri(user["id"]))
+
+
+@api.put("/dieta/grupos-substituicao")
+async def put_grupos_substituicao(payload: GruposSubstituicaoIn, user=Depends(require_nutritionist)):
+    grupos = []
+    for g in payload.grupos[:20]:
+        if g.criterio not in _CRITERIOS_GRUPO:
+            raise HTTPException(400, f"Critério inválido no grupo {g.nome}")
+        gid = re.sub(r"[^a-z0-9_]+", "_", _normalize_food_lookup(g.id or g.nome)).strip("_")[:40] or str(uuid.uuid4())[:8]
+        vistos, opcoes = set(), []
+        for o in g.opcoes[:12]:
+            if o.alimento_id not in vistos and o.alimento_id != g.referencia.alimento_id:
+                vistos.add(o.alimento_id)
+                opcoes.append({"alimento_id": o.alimento_id, **({"medida_nome": o.medida_nome} if o.medida_nome else {})})
+        grupos.append({"id": gid, "nome": g.nome.strip(), "criterio": g.criterio, "tolerancia_pct": g.tolerancia_pct,
+                       "tipos": [t for t in g.tipos if t][:6], "referencia": g.referencia.model_dump(exclude_none=True), "opcoes": opcoes})
+    await db.grupos_substituicao.update_one({"nutricionista_id": user["id"]},
+                                            {"$set": {"grupos": grupos, "atualizado_em": iso(now_utc())}}, upsert=True)
+    return await _enriquecer_grupos(grupos)
+
+
+@api.post("/dieta/grupos-substituicao/restaurar")
+async def restaurar_grupos_substituicao(user=Depends(require_nutritionist)):
+    await db.grupos_substituicao.delete_one({"nutricionista_id": user["id"]})
+    return await _enriquecer_grupos(_grupos_padrao())
+
 
 class AlimentoCalcIn(BaseModel):
     alimento_id: str

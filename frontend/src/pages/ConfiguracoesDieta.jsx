@@ -8,6 +8,7 @@ import useDietaConfig from "@/components/evonut/dieta/useDietaConfig";
 import { BlocoAlimentos, LARGURA_MIN_EDITOR } from "@/components/evonut/dieta/EditorDieta";
 import { blocoDoSalvo, itensParaSalvar, nf0, totaisBloco } from "@/components/evonut/dieta/calculos";
 import { SEM_CATEGORIA, agruparPorCategoria } from "@/components/evonut/dieta/ModelosDietaModal";
+import GruposSubstituicaoConfig from "@/components/evonut/dieta/GruposSubstituicaoConfig";
 
 const SECOES = [
   ["geral", "Configurações da dieta"],
@@ -19,6 +20,7 @@ const SECOES = [
   ["modelos_refeicao", "Modelos de refeição"],
   ["modelos_dieta", "Modelos de dieta"],
   ["listas", "Listas de substituição"],
+  ["grupos", "Grupos de substituição"],
 ];
 
 const TABELAS = [["TACO", "TACO"], ["IBGE", "IBGE"], ["TBCA", "TBCA"], ["Tucunduva", "Tucunduva"], ["Meus", "Meus alimentos"]];
@@ -368,6 +370,7 @@ export default function ConfiguracoesDieta() {
               ajuda="Refeições prontas para carregar na dieta pelo ícone de livro da refeição. Também dá para criar pela estrela de uma refeição já montada." />
           )}
           {secao === "modelos_dieta" && <ModelosDieta config={config} salvar={salvar} />}
+          {secao === "grupos" && <GruposSubstituicaoConfig config={config} salvarConfig={salvar} />}
           {secao === "listas" && (
             <ItensSalvos rota="/dieta/listas-substituicao" rotuloNovo="Nova lista" config={config}
               ajuda="Grupos de substituição (Carnes e ovos, Frutas…) para adicionar na aba Lista de substituição de qualquer dieta." />

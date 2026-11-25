@@ -69,6 +69,7 @@ CONFIG_PADRAO: dict = {
     # categorias dos modelos de dieta (editáveis em Configurações da dieta)
     "categorias_modelos": ["Perda de gordura", "Ganho de massa muscular"],
     "alimentos_favoritos": [],
+    "equivalentes_automaticos": True,
 }
 _LISTAS_CONFIG = ("objetivos", "titulos", "nomes_refeicao", "observacoes_refeicao", "observacoes_alimento", "categorias_modelos")
 
@@ -105,6 +106,7 @@ class DietaConfigIn(BaseModel):
     observacoes_alimento: Optional[List[str]] = None
     # favoritos da busca de alimentos (aparecem primeiro na Prescrição): {id, nome, macros_100g, ...}
     alimentos_favoritos: Optional[List[dict]] = None
+    equivalentes_automaticos: Optional[bool] = None
 
 
 class ItemModeloIn(BaseModel):

@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown, ArrowLeftRight, ArrowUp, ArrowUpDown, BookOpen, ChevronDown, ClipboardPaste, Copy, CopyPlus, GripVertical,
-  Loader2, MessageSquareText, MoreHorizontal, PieChart, Plus, Star, Trash2, X,
+  Layers, Loader2, MessageSquareText, MoreHorizontal, PieChart, Plus, Star, Trash2, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/evo-api";
@@ -9,6 +9,10 @@ import EquivalentesModal from "./EquivalentesModal";
 import Combobox from "./Combobox";
 import Flutuante from "./Flutuante";
 import PainelTotais from "./PainelTotais";
+import PorcoesDialogo from "./PorcoesDialogo";
+import {
+  GruposContext, ROTULO_CRITERIO, grupoDoItem, opcoesDoGrupo, porcaoEquivalente, substitutosDoGrupo, useGruposSubstituicao, valorCriterio,
+} from "./grupos";
 import { metasDoPlanejamento } from "./plano";
 import {
   copiarRefeicao, ehGramas, escalarSubstitutos, gramasDaMedida, itemDoSalvo, macrosDoItem, medidaPadrao, nf, nf0,
@@ -21,7 +25,7 @@ import {
  * favoritos/recentes na busca, teclado (alimento → Enter → quantidade → Enter = nova linha), arrastar alimentos
  * entre refeições, duplicar refeição. Cores: CHO lima, PTN azul, LIP laranja.
  */
-const COLS = "grid grid-cols-[40px_minmax(180px,1fr)_minmax(220px,270px)_54px_50px_50px_50px_96px] gap-2 items-center";
+const COLS = "grid grid-cols-[40px_minmax(180px,1fr)_minmax(220px,270px)_54px_50px_50px_50px_128px] gap-2 items-center";
 export const LARGURA_EDITOR = "min-w-[880px]";
 const r1 = (v) => Math.round(num(v) * 10) / 10;
 const COR = { cho: "text-macro-cho", ptn: "text-macro-ptn", lip: "text-macro-lip" };
@@ -32,13 +36,29 @@ const focar = (id, selecionar = true) => requestAnimationFrame(() => {
   if (el) { el.focus(); if (selecionar && el.select) el.select(); }
 });
 
-export async function carregarMedidas(alimentoId) {
+/** Medidas caseiras e grupo de substituição do alimento (uma chamada só). */
+export async function carregarAlimentoInfo(alimentoId) {
   try {
     const { data } = await api.get(`/alimentos/${alimentoId}/medidas`);
-    return data.medidas || [];
+    return { medidas: data.medidas || [], grupo: data.grupo_substituicao || null };
   } catch {
-    return [{ nome: "Gramas", gramas: 1 }];
+    return { medidas: [{ nome: "Gramas", gramas: 1 }], grupo: null };
   }
+}
+export async function carregarMedidas(alimentoId) {
+  return (await carregarAlimentoInfo(alimentoId)).medidas;
+}
+
+/** Troca do item por outra opção do grupo na porção equivalente (⇄): o "OU" passa a ser calculado para o novo. */
+export function trocarPorOpcao(item, grupo, opcao) {
+  const alvo = valorCriterio(item._m100, item.quantidade_g, grupo.criterio);
+  const p = porcaoEquivalente(grupo, opcao, alvo);
+  if (!p) return null;
+  const novo = {
+    ...item, alimento_id: opcao.alimento_id, nome: opcao.nome, alimento_nome: opcao.nome, _m100: opcao.macros_100g,
+    _medidas: opcao.medidas || [], _grupo: grupo.id, medida_nome: p.medida_nome, quantidade: p.quantidade, quantidade_g: p.quantidade_g,
+  };
+  return { ...novo, substitutos: substitutosDoGrupo(grupo, novo) };
 }
 
 const snapshot = (f) => ({ id: f.id, nome: f.nome, macros_100g: f.macros_100g, energia_kcal_100g: f.energia_kcal_100g ?? f.macros_100g?.kcal, grupo_display: f.grupo_display, fonte: f.fonte });
@@ -174,8 +194,10 @@ function Popover({ ancoraRef, aberto, onClose, largura = 320, children }) {
   useEffect(() => {
     if (!aberto) return undefined;
     const fora = (e) => { if (!ancoraRef.current?.contains(e.target) && !listaRef.current?.contains(e.target)) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("mousedown", fora);
-    return () => document.removeEventListener("mousedown", fora);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", fora); document.removeEventListener("keydown", esc); };
   }, [aberto, ancoraRef, onClose]);
   return <Flutuante ancora={ancoraRef} aberto={aberto} largura={largura} listaRef={listaRef} className="p-3">{children}</Flutuante>;
 }
@@ -301,6 +323,11 @@ function abreviar(medida, qtd) {
 
 function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, onChange, onInserir, onRemover, onMover, onEquivalentes, onArrastar, modoRecordatorio }) {
   const m = macrosDoItem(item);
+  const grupos = useContext(GruposContext);
+  const grupo = grupoDoItem(grupos, item);
+  const tolerancia = num(grupo?.tolerancia_pct || 10);
+  const [trocaAberta, setTrocaAberta] = useState(false);
+  const trocaRef = useRef(null);
   const medidas = useMemo(() => {
     const lista = item._medidas?.length ? item._medidas : [{ nome: "Gramas", gramas: 1 }];
     if (!item.medida_nome || lista.some((x) => x.nome === item.medida_nome)) return lista;
@@ -335,12 +362,35 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
     if (ultima) onInserir(); else focar(`${bk}-${i + 1}-nome`);
   };
   const escolherAlimento = async (food) => {
-    const medidasFood = await carregarMedidas(food.id);
-    const base = { alimento_id: food.id, nome: food.nome, alimento_nome: food.nome, _m100: food.macros_100g, _medidas: medidasFood, substitutos: [] };
+    const { medidas: medidasFood, grupo: grupoId } = await carregarAlimentoInfo(food.id);
+    const base = { alimento_id: food.id, nome: food.nome, alimento_nome: food.nome, _m100: food.macros_100g, _medidas: medidasFood, _grupo: grupoId, substitutos: [] };
     const md = config.forma_calculo === "gramas" ? null : medidaPadrao(medidasFood);
-    if (md) { onChange({ ...base, medida_nome: md.nome, quantidade: 1, quantidade_g: r1(md.gramas) }); focar(`${bk}-${i}-qtd`); }
-    else { onChange({ ...base, medida_nome: "Gramas", quantidade: "", quantidade_g: "" }); focar(`${bk}-${i}-g`); }
+    const novo = md ? { ...base, medida_nome: md.nome, quantidade: 1, quantidade_g: r1(md.gramas) } : { ...base, medida_nome: "Gramas", quantidade: "", quantidade_g: "" };
+    // item 10: "OU" já preenchidos com as opções do grupo na porção equivalente
+    if (!modoRecordatorio && config.equivalentes_automaticos !== false && md) {
+      novo.substitutos = substitutosDoGrupo(grupoDoItem(grupos, novo, grupoId), novo);
+    }
+    onChange(novo);
+    focar(`${bk}-${i}-${md ? "qtd" : "g"}`);
   };
+  const setGramasComSubs = (v) => {
+    // sem medida caseira, os "OU" automáticos nascem quando os gramas são informados
+    if (!modoRecordatorio && config.equivalentes_automaticos !== false && !(item.substitutos || []).length && grupo && num(v) > 0) {
+      const patch = { quantidade_g: v, ...(ehGramas(item.medida_nome) ? { quantidade: v } : {}) };
+      onChange({ ...patch, substitutos: substitutosDoGrupo(grupo, { ...item, ...patch }) });
+      return;
+    }
+    setGramas(v);
+  };
+  const trocar = (opcao) => {
+    const novo = trocarPorOpcao(item, grupo, opcao);
+    setTrocaAberta(false);
+    if (!novo) return;
+    onChange(novo);
+    toast.success(`${item.nome} → ${novo.nome} ${textoQuantidade(novo)}`);
+  };
+  const alvoTroca = grupo && trocaAberta ? valorCriterio(item._m100, item.quantidade_g, grupo.criterio) : 0;
+  const foraTol = (sub) => sub.desvio_pct != null && Math.abs(num(sub.desvio_pct)) > tolerancia;
   const vazio = !item.alimento_id && !(item.nome || "").trim();
   const nSubs = (item.substitutos || []).length;
 
@@ -383,7 +433,7 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
         <div className="relative">
           <input id={`${bk}-${i}-g`} inputMode="decimal" aria-label="Gramas" disabled={!temCalculo}
             className="w-[62px] h-8 rounded-md bg-black/20 pl-1.5 pr-5 text-right tabular outline-none focus:ring-1 focus:ring-rc-blue"
-            value={item.quantidade_g ?? ""} onFocus={(e) => e.target.select()} onChange={(e) => setGramas(e.target.value)} onKeyDown={enter} />
+            value={item.quantidade_g ?? ""} onFocus={(e) => e.target.select()} onChange={(e) => setGramasComSubs(e.target.value)} onKeyDown={enter} />
           <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10.5px] text-gray-500">g</span>
         </div>
       </div>
@@ -395,7 +445,8 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
         {nSubs > 0 && (
           <span ref={subsRef}>
             <button type="button" onClick={() => setSubsAberto((v) => !v)} data-testid={`${bk}-${i}-subs`}
-              className="h-6 px-2 rounded-full bg-rc-lime/[0.12] text-[11.5px] font-semibold text-rc-lime whitespace-nowrap">{nSubs} subst.</button>
+              title={item.substitutos.some(foraTol) ? `Alguma troca passa de ±${tolerancia}% do critério do grupo` : undefined}
+              className={`h-6 px-2 rounded-full text-[11.5px] font-semibold whitespace-nowrap ${item.substitutos.some(foraTol) ? "bg-rc-amber/[0.15] text-rc-amber" : "bg-rc-lime/[0.12] text-rc-lime"}`}>{nSubs} subst.</button>
             <Popover ancoraRef={subsRef} aberto={subsAberto} onClose={() => setSubsAberto(false)} largura={360}>
               <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500 mb-2">Substituições de {item.nome}</div>
               <ul className="space-y-1">
@@ -404,11 +455,41 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
                     <span className="text-rc-lime font-bold text-[11px]">OU</span>
                     <span className="flex-1 min-w-0 truncate text-gray-100">{s.nome}</span>
                     <span className="tabular text-gray-400 shrink-0">{textoQuantidade(s)}</span>
+                    {s.desvio_pct != null && Math.abs(num(s.desvio_pct)) >= 0.5 && (
+                      <span className={`shrink-0 tabular text-[11px] font-semibold px-1.5 rounded ${foraTol(s) ? "bg-rc-amber/15 text-rc-amber" : "text-gray-500"}`} title={foraTol(s) ? `Fora da tolerância de ±${tolerancia}%` : "Dentro da tolerância"}>
+                        {num(s.desvio_pct) > 0 ? "+" : ""}{nf.format(s.desvio_pct)}%
+                      </span>
+                    )}
                     <button type="button" aria-label={`Remover ${s.nome}`} onClick={() => onChange({ substitutos: item.substitutos.filter((_, x) => x !== k) })} className="text-gray-500 hover:text-white"><X className="h-3.5 w-3.5" /></button>
                   </li>
                 ))}
               </ul>
               {onEquivalentes && <button type="button" onClick={() => { setSubsAberto(false); onEquivalentes(); }} className="mt-3 text-[12.5px] text-rc-blue hover:underline">Adicionar equivalentes…</button>}
+            </Popover>
+          </span>
+        )}
+        {!modoRecordatorio && grupo && temCalculo && (
+          <span ref={trocaRef}>
+            <button type="button" onClick={() => setTrocaAberta((v) => !v)} aria-label={`Trocar ${item.nome} por outro do grupo ${grupo.nome}`} title={`Trocar por outro de ${grupo.nome} (mantém a meta)`}
+              data-testid={`${bk}-${i}-trocar`} className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-white/[0.08] text-gray-400 hover:text-white">
+              <ArrowLeftRight className="h-3.5 w-3.5" />
+            </button>
+            <Popover ancoraRef={trocaRef} aberto={trocaAberta} onClose={() => setTrocaAberta(false)} largura={380}>
+              <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500 mb-2">Trocar por · {grupo.nome} <span className="normal-case tracking-normal">(mesmos {nf.format(alvoTroca)} {ROTULO_CRITERIO[grupo.criterio]})</span></div>
+              <ul className="space-y-0.5">
+                {opcoesDoGrupo(grupo).filter((o) => String(o.alimento_id) !== String(item.alimento_id)).map((o) => {
+                  const p = porcaoEquivalente(grupo, o, alvoTroca);
+                  return p && (
+                    <li key={o.alimento_id}>
+                      <button type="button" onClick={() => trocar(o)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-[13px] hover:bg-white/[0.06]">
+                        <span className="flex-1 min-w-0 truncate text-gray-100">{o.nome}</span>
+                        <span className="tabular text-gray-400 shrink-0">{textoQuantidade(p)}</span>
+                        {p.fora && <span className="shrink-0 text-[11px] font-semibold text-rc-amber">{p.desvio_pct > 0 ? "+" : ""}{nf.format(p.desvio_pct)}%</span>}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </Popover>
           </span>
         )}
@@ -537,6 +618,13 @@ function Refeicao({
     onChange({ ...r, opcoes: r.opcoes.filter((_, k) => k !== o) });
   };
   const ptnKg = num(peso) ? t.ptn / num(peso) : null;
+  const [porcoesAberto, setPorcoesAberto] = useState(false);
+  const aplicarPorcoes = (itens) => {
+    const atuais = (r.alimentos || []).filter((a) => a.alimento_id || (a.nome || "").trim());
+    onChange({ ...r, alimentos: [...atuais, ...itens] });
+    setPorcoesAberto(false);
+    toast.success(`${itens.length} ${itens.length === 1 ? "alimento adicionado" : "alimentos adicionados"} por porções.`);
+  };
 
   return (
     <section className={`rounded-xl border ${solta ? "border-rc-blue bg-rc-blue/[0.04]" : "border-transparent"}`} data-testid={`refeicao-${i}`}
@@ -566,6 +654,7 @@ function Refeicao({
             {sit && <span className={`text-[12.5px] font-semibold ${sit.txt}`} data-testid={`${bk}-situacao`}>{sit.texto}</span>}
             <span className="text-[12px] tabular text-macro-ptn" title="Proteína da refeição">PTN {nf0.format(t.ptn)} g{ptnKg != null ? ` · ${nf.format(ptnKg)} g/kg` : ""}</span>
             <Menu rotulo="Ações da refeição" testId={`${bk}-acoes`} itens={[
+              !modoRecordatorio && { rotulo: "Montar por porções", icone: Layers, acao: () => setPorcoesAberto(true) },
               { rotulo: "Adicionar opção (OU)", icone: Plus, acao: addOpcao },
               { rotulo: obs ? "Esconder observação" : "Observação da refeição", icone: MessageSquareText, acao: () => setObs((v) => !v) },
               { rotulo: "Carregar modelo de refeição", icone: BookOpen, acao: () => setModeloAberto(true) },
@@ -587,6 +676,7 @@ function Refeicao({
           </div>
         )}
       </header>
+      {porcoesAberto && <PorcoesDialogo refeicaoNome={r.nome} meta={meta} onAplicar={aplicarPorcoes} onClose={() => setPorcoesAberto(false)} />}
       {modeloAberto && (
         <div className="px-2 pt-3 flex items-center gap-2 max-w-[560px]">
           <Combobox value={buscaModelo} onChange={setBuscaModelo} opcoes={modelos || []} rotulo={(m) => m.nome} valorDe={(m) => m.nome} onSelect={aplicarModelo} autoFocus className="flex-1"
@@ -708,6 +798,7 @@ export default function EditorRefeicoes({
   refeicoes, onChange, config, modelos, planejamento, peso, favoritos, onFavoritar, onSalvarModelo, onEstatistica, modoRecordatorio = false,
 }) {
   const [equiv, setEquiv] = useState(null);
+  const { grupos } = useGruposSubstituicao();
   const setRef = (i, nova) => onChange(refeicoes.map((r, k) => (k === i ? nova : r)));
   const blocoDe = ({ r, o }) => (o == null ? refeicoes[r] : refeicoes[r].opcoes[o]);
   const comBloco = (lista, { r, o }, fn) => lista.map((ref, k) => {
@@ -794,6 +885,7 @@ export default function EditorRefeicoes({
   };
 
   return (
+    <GruposContext.Provider value={grupos}>
     <div className="space-y-2" data-testid="editor-refeicoes">
       {equiv && (
         <EquivalentesModal item={equiv.item} refeicaoNome={refeicoes[equiv.r]?.nome || "Refeição"} onAddSubstitutos={aplicarEquivalentes} onTrocar={trocar} onClose={() => setEquiv(null)} />
@@ -812,5 +904,6 @@ export default function EditorRefeicoes({
       ))}
       <button type="button" onClick={() => inserirRefeicao(refeicoes.length - 1)} className="rc-btn-secondary h-9 mt-2"><Plus className="h-4 w-4" /> Adicionar refeição</button>
     </div>
+    </GruposContext.Provider>
   );
 }
