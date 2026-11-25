@@ -70,6 +70,7 @@ CONFIG_PADRAO: dict = {
     "categorias_modelos": ["Perda de gordura", "Ganho de massa muscular"],
     "alimentos_favoritos": [],
     "equivalentes_automaticos": True,
+    "modelo_avaliacao_padrao": "rc",
 }
 _LISTAS_CONFIG = ("objetivos", "titulos", "nomes_refeicao", "observacoes_refeicao", "observacoes_alimento", "categorias_modelos")
 
@@ -85,6 +86,7 @@ _ENUMS_CONFIG = {
     "layout_calculos": {"medida", "gramas", "medida_gramas"},
     "layout_linhas": {"iguais", "alternadas"},
     "layout_lista_substituicao": {"nome_obs", "obs", "lista"},
+    "modelo_avaliacao_padrao": {"rc", "donatto"},
 }
 
 
@@ -107,6 +109,7 @@ class DietaConfigIn(BaseModel):
     # favoritos da busca de alimentos (aparecem primeiro na Prescrição): {id, nome, macros_100g, ...}
     alimentos_favoritos: Optional[List[dict]] = None
     equivalentes_automaticos: Optional[bool] = None
+    modelo_avaliacao_padrao: Optional[str] = None
 
 
 class ItemModeloIn(BaseModel):

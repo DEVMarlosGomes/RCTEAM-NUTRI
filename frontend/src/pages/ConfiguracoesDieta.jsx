@@ -58,6 +58,7 @@ function Geral({ config, salvar }) {
         incluir_observacoes: form.incluir_observacoes,
         layout_lista_substituicao: form.layout_lista_substituicao,
         incluir_macros_pdf: form.incluir_macros_pdf,
+        modelo_avaliacao_padrao: form.modelo_avaliacao_padrao || "rc",
         refeicoes_padrao: refs.filter((r) => (r.nome || "").trim()),
       });
       toast.success("Configurações salvas.");
@@ -86,6 +87,8 @@ function Geral({ config, salvar }) {
           })}
         </div>
       </div>
+      <Selecao rotulo="Modelo de avaliação padrão (Antropometria e Gasto Energético)" valor={form.modelo_avaliacao_padrao || "rc"} onChange={(v) => set("modelo_avaliacao_padrao", v)}
+        opcoes={[["rc", "RC: planilha atual (um protocolo de dobras, equação de TMB e calculadora do GET)"], ["donatto", "Donatto: todos os protocolos, % de gordura alvo, IOM e massa muscular"]]} />
       <Selecao rotulo="Forma de cálculo da dieta" valor={form.forma_calculo} onChange={(v) => set("forma_calculo", v)}
         opcoes={[["medida", "Medida caseira (escolhe a medida e digita a quantidade)"], ["gramas", "Gramas (digita direto o peso)"]]} />
       <Selecao rotulo="Layout de impressão dos cálculos da dieta" valor={form.layout_calculos} onChange={(v) => set("layout_calculos", v)}

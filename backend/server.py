@@ -22,7 +22,7 @@ import unicodedata
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta, date
 from functools import lru_cache
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, status, UploadFile, File, Query
@@ -237,6 +237,8 @@ class PatientUpdateIn(BaseModel):
     data_primeira_consulta: Optional[str] = None
     observacoes: Optional[str] = Field(default=None, max_length=20000)
     meta_energetica: Optional[dict] = None
+    # Modelo de avaliação do paciente (Antropometria + Gasto): "rc" (planilha atual) ou "donatto"
+    modelo_avaliacao: Optional[Literal["rc", "donatto"]] = None
 
 class AnamnesisIn(BaseModel):
     token: str
@@ -3714,6 +3716,10 @@ class EvaluationV2In(BaseModel):
     fi_manual: Optional[float] = None
     objetivo: str = "manutencao"
     mlg_kg: Optional[float] = None
+    # modelo usado nesta avaliação (etiqueta; trocar o modelo do paciente não recalcula as antigas)
+    modelo_avaliacao: Optional[Literal["rc", "donatto"]] = None
+    # Donatto: protocolo escolhido, % de gordura alvo etc. (calculado na tela, guardado como foi visto)
+    donatto: Optional[dict] = None
 
 # ── Clinical calculation endpoints ──────────────────────────────
 
@@ -3724,6 +3730,19 @@ async def preview_tmb(payload: TmbPreviewIn, user=Depends(get_current_user)):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"tmb": val, "protocolo": payload.protocolo, "descricao": PROTOCOLOS_TMB_DESCRICAO.get(payload.protocolo, payload.protocolo)}
+
+@api.post("/calculos/tmb-todas")
+async def preview_tmb_todas(payload: TmbPreviewIn, user=Depends(get_current_user)):
+    """Todas as equações de TMB lado a lado (Gasto Energético numa tela só). As que pedem MLG voltam sem valor
+    quando a massa magra não foi informada."""
+    saida = []
+    for cod, nome in PROTOCOLOS_TMB_DESCRICAO.items():
+        try:
+            val = _tmb_all(cod, payload.peso, payload.altura_cm, payload.idade, payload.sexo_num, payload.mlg_kg)
+            saida.append({"protocolo": cod, "nome": nome, "tmb": val, "requer_mlg": cod in ("cunningham", "tinsley_mlg")})
+        except (ValueError, KeyError, TypeError):
+            saida.append({"protocolo": cod, "nome": nome, "tmb": None, "requer_mlg": True})
+    return saida
 
 @api.post("/calculos/get")
 async def preview_get(payload: GetPreviewIn, user=Depends(get_current_user)):

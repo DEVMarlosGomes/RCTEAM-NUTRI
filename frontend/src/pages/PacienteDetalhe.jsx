@@ -59,7 +59,11 @@ export default function PacienteDetalhe() {
     const hoje = new Date();
     return hoje.getFullYear() - nasc.getFullYear() - (hoje < new Date(hoje.getFullYear(), nasc.getMonth(), nasc.getDate()) ? 1 : 0);
   })();
-  const imc = p.peso && p.altura ? (p.peso / ((p.altura / 100) ** 2)) : null;
+  // um só peso na ficha: o da avaliação mais recente (o cadastro só quando não há avaliação)
+  const ultimaAval = [...(d.evaluations || [])].sort((x, y) => String(x.data_avaliacao || x.created_at || "").localeCompare(String(y.data_avaliacao || y.created_at || ""))).pop();
+  const pesoAtual = ultimaAval?.peso ?? p.peso;
+  const alturaAtual = ultimaAval?.altura ?? p.altura;
+  const imc = pesoAtual && alturaAtual ? (pesoAtual / ((alturaAtual / 100) ** 2)) : null;
   const iniciais = (p.nome || "P").trim().split(/\s+/).filter(Boolean);
 
   return (
@@ -81,8 +85,8 @@ export default function PacienteDetalhe() {
             </div>
           </div>
           <dl className="grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-5 mt-6 pt-5 border-t border-white/[0.05]">
-            <Pill l="Peso" v={p.peso} u="kg" />
-            <Pill l="Altura" v={p.altura} u="cm" />
+            <Pill l="Peso" v={pesoAtual} u="kg" />
+            <Pill l="Altura" v={alturaAtual} u="cm" />
             <Pill l="IMC" v={imc ? Math.round(imc * 10) / 10 : null} />
             <Pill l="Idade" v={idade} u="anos" />
             <Pill l="Objetivo" v={p.objetivo} text />
