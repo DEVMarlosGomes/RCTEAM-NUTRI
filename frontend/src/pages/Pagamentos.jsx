@@ -4,6 +4,7 @@ import { Pencil, Plus, Search, Trash2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import PageHeader from "@/components/evonut/PageHeader";
+import ReservasPendentes from "@/components/evonut/ReservasPendentes";
 import { api, formatApiError } from "@/lib/evo-api";
 import {
   CobrarButton, FORMA_LABEL, PagamentoModal, PlanoModal, PlanoStatusBadge, dataBR, moeda,
@@ -90,6 +91,8 @@ export default function Pagamentos() {
         <Kpi label="Recebido no mês" value={resumo ? moeda(resumo.recebido_mes) : undefined} hint="Pagamentos registrados" tone="text-rc-lime" />
         <Kpi label="A receber no mês" value={resumo ? moeda(resumo.a_receber_mes) : undefined} hint={`${c.em_dia ?? 0} ${c.em_dia === 1 ? "aluno" : "alunos"} em dia`} />
       </section>
+
+      <ReservasPendentes />
 
       <section className="rc-card mt-5">
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5 pb-4">

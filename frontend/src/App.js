@@ -73,6 +73,7 @@ function App() {
             <Route path="/pre-consulta" element={<PreConsulta />} />
             <Route path="/pre-consulta/:token" element={<PreConsulta />} />
             <Route path="/chat/:token" element={<Chat />} />
+            <Route path="/agendar" element={<Agendar />} />
             <Route path="/agendar/:token" element={<Agendar />} />
             <Route path="/sucesso/:token" element={<Sucesso />} />
 

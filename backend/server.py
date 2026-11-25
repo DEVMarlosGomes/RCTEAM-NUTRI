@@ -1761,6 +1761,228 @@ async def dashboard(user=Depends(get_current_user)):
         "novos_7d": novos, "em_acompanhamento": em_acomp, "funil": funil,
     }
 
+# ── Agendamento + pagamento: só agenda se pagar (ajuste fn2 do Rogério) ─────
+# Horário fica RESERVADO 15 min; o meio de pagamento avisa o app pelo webhook (ou o nutricionista confirma o
+# comprovante do Pix) e aí a consulta vira agendada, o paciente "Agendada" e o pagamento é registrado.
+RESERVA_MINUTOS = 15
+_HORAS_AGENDA = [8, 9, 10, 11, 14, 15, 16, 17, 18]
+
+
+async def _nutri_padrao() -> Optional[dict]:
+    nid = os.environ.get("NUTRICIONISTA_PADRAO_ID")
+    filtro = {"id": nid} if nid else {"role": "nutritionist"}
+    return await db.users.find_one(filtro, {"_id": 0, "password_hash": 0}, sort=[("created_at", 1)])
+
+
+def _reserva_ativa(r: dict, agora: datetime) -> bool:
+    if r.get("status") in ("confirmada", "confirmando", "paga"):
+        return True
+    if r.get("status") == "comprovante_enviado":
+        return True  # aguardando o nutricionista conferir
+    try:
+        return r.get("status") == "aguardando_pagamento" and datetime.fromisoformat(r["expira_em"]) > agora
+    except (KeyError, ValueError):
+        return False
+
+
+async def _horarios_livres(nid: str, dias: int = 14) -> list:
+    agora = now_utc()
+    ocupados = []  # (inicio, fim) em horário local, com folga de deslocamento para presenciais
+    async for c in db.consultations.find({"nutricionista_id": nid, "status": {"$nin": ["CANCELADA", "CANCELADO"]}}, {"_id": 0, "data_hora": 1, "tipo": 1, "modalidade": 1}):
+        try:
+            ini = datetime.fromisoformat(str(c["data_hora"]).replace("Z", "+00:00"))
+            ini = (ini if ini.tzinfo else ini.replace(tzinfo=TZ_BR)).astimezone(TZ_BR)
+        except (KeyError, ValueError):
+            continue
+        folga = 30 if "presencial" in f"{c.get('tipo', '')} {c.get('modalidade', '')}".lower() else 0
+        ocupados.append((ini - timedelta(minutes=folga), ini + timedelta(minutes=60 + folga)))
+    async for r in db.reservas.find({"nutricionista_id": nid}, {"_id": 0}):
+        if _reserva_ativa(r, agora):
+            ini = datetime.fromisoformat(r["data_hora"]).astimezone(TZ_BR)
+            folga = 30 if r.get("modalidade") == "presencial" else 0
+            ocupados.append((ini - timedelta(minutes=folga), ini + timedelta(minutes=60 + folga)))
+    hoje = agora.astimezone(TZ_BR).date()
+    out = []
+    for d in range(1, dias + 1):
+        dia = hoje + timedelta(days=d)
+        if dia.weekday() == 6:
+            continue
+        for h in _HORAS_AGENDA:
+            ini = datetime(dia.year, dia.month, dia.day, h, 0, tzinfo=TZ_BR)
+            fim = ini + timedelta(minutes=60)
+            livre = not any(a < fim and ini < b for a, b in ocupados)
+            out.append({"datetime": ini.isoformat(), "data": dia.isoformat(), "hora": f"{h:02d}:00", "livre": livre})
+    return out
+
+
+@api.get("/public/agenda/horarios")
+async def horarios_publicos():
+    nutri = await _nutri_padrao()
+    if not nutri:
+        raise HTTPException(404, "Agenda indisponível")
+    return await _horarios_livres(nutri["id"])
+
+
+class ReservaIn(BaseModel):
+    nome: str = Field(min_length=2, max_length=120)
+    telefone: str = Field(min_length=8, max_length=30)
+    email: Optional[EmailStr] = None
+    data_hora: str
+    modalidade: Literal["online", "presencial"] = "online"
+    plano: Optional[str] = Field(default=None, max_length=80)
+    token: Optional[str] = None  # lead que já existe (link do WhatsApp)
+
+
+def _reserva_publica(r: dict) -> dict:
+    agora = now_utc()
+    status = r.get("status")
+    if status == "aguardando_pagamento" and datetime.fromisoformat(r["expira_em"]) <= agora:
+        status = "expirada"
+    return {"id": r["id"], "status": status, "data_hora": r["data_hora"], "modalidade": r.get("modalidade"),
+            "expira_em": r.get("expira_em"), "segundos": max(0, int((datetime.fromisoformat(r["expira_em"]) - agora).total_seconds())),
+            "valor": r.get("valor"), "pix_chave": r.get("pix_chave"), "pix_nome": r.get("pix_nome"),
+            "token": r.get("lead_token") if status == "confirmada" else None, "checkout_url": r.get("checkout_url")}
+
+
+@api.post("/public/reservas", status_code=201)
+async def criar_reserva(payload: ReservaIn):
+    nutri = await _nutri_padrao()
+    if not nutri:
+        raise HTTPException(404, "Agenda indisponível")
+    livres = {s["datetime"] for s in await _horarios_livres(nutri["id"]) if s["livre"]}
+    if payload.data_hora not in livres:
+        raise HTTPException(409, "Esse horário acabou de ser reservado. Escolha outro.")
+    # paciente: pelo token do link, pelo telefone ou novo lead
+    p = await db.patients.find_one({"lead_token": payload.token}) if payload.token else None
+    if not p:
+        tel = re.sub(r"\D", "", payload.telefone)[-8:]
+        async for x in db.patients.find({"nutricionista_id": nutri["id"]}, {"_id": 0}):
+            if re.sub(r"\D", "", str(x.get("telefone") or ""))[-8:] == tel:
+                p = x
+                break
+    agora = now_utc()
+    if not p:
+        p = {"id": str(uuid.uuid4()), "nutricionista_id": nutri["id"], "lead_token": secrets.token_urlsafe(16), "nome": payload.nome.strip(),
+             "telefone": payload.telefone, "email": str(payload.email).lower() if payload.email else None, "status_funil": "LEAD_INICIADO",
+             "origem": "site", "created_at": iso(agora), "updated_at": iso(agora)}
+        await db.patients.insert_one(dict(p))
+    cfg = await db.dieta_config.find_one({"nutricionista_id": nutri["id"]}, {"_id": 0}) or {}
+    reserva = {"id": str(uuid.uuid4()), "nutricionista_id": nutri["id"], "paciente_id": p["id"], "lead_token": p.get("lead_token"),
+               "data_hora": payload.data_hora, "modalidade": payload.modalidade, "plano": payload.plano,
+               "status": "aguardando_pagamento", "criado_em": iso(agora), "expira_em": iso(agora + timedelta(minutes=RESERVA_MINUTOS)),
+               "valor": cfg.get("valor_consulta") or (float(os.environ["CONSULTA_VALOR"]) if os.environ.get("CONSULTA_VALOR") else None), "pix_chave": cfg.get("pix_chave") or "46.786.744/0001-84",
+               "pix_nome": cfg.get("pix_nome") or "Rogério Costa Treinamento",
+               "provedor": os.environ.get("PAGAMENTO_PROVEDOR") or "manual"}
+    await db.reservas.insert_one(dict(reserva))
+    return _reserva_publica(reserva)
+
+
+@api.get("/public/reservas/{rid}")
+async def ver_reserva(rid: str):
+    r = await db.reservas.find_one({"id": rid}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Reserva não encontrada")
+    return _reserva_publica(r)
+
+
+@api.post("/public/reservas/{rid}/comprovante")
+async def comprovante_reserva(rid: str, file: UploadFile = File(...)):
+    r = await db.reservas.find_one({"id": rid}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Reserva não encontrada")
+    if _reserva_publica(r)["status"] == "expirada":
+        raise HTTPException(409, "A reserva expirou. Escolha o horário de novo.")
+    ct = file.content_type or ""
+    if not (ct.startswith("image/") or ct == "application/pdf"):
+        raise HTTPException(400, "Envie uma imagem ou PDF")
+    conteudo = await file.read()
+    if len(conteudo) > 10 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo maior que 10MB")
+    await db.reservas.update_one({"id": rid}, {"$set": {"status": "comprovante_enviado", "comprovante": {
+        "file_name": file.filename, "data_url": f"data:{ct};base64,{_base64.b64encode(conteudo).decode()}", "enviado_em": iso(now_utc())}}})
+    return {"ok": True}
+
+
+async def _confirmar_reserva(r: dict, valor: Optional[float] = None, forma: str = "pix", origem: str = "manual") -> dict:
+    """Pagamento aprovado: consulta agendada (paga), paciente 'Agendada', pagamento registrado, confirmação + formulário."""
+    if r.get("status") == "confirmada":
+        return r
+    # trava: dois avisos ao mesmo tempo (webhook repetido) não criam duas consultas
+    trava = await db.reservas.update_one({"id": r["id"], "status": {"$nin": ["confirmada", "confirmando"]}}, {"$set": {"status": "confirmando"}})
+    if not trava.modified_count:
+        return {**r, "status": "confirmada"}
+    agora = now_utc()
+    cid = str(uuid.uuid4())
+    await db.consultations.insert_one({"id": cid, "paciente_id": r["paciente_id"], "nutricionista_id": r["nutricionista_id"],
+                                       "data_hora": r["data_hora"], "tipo": "Inicial", "modalidade": r.get("modalidade"),
+                                       "status": "AGENDADA", "paga": True, "reserva_id": r["id"], "observacoes": "", "created_at": iso(agora)})
+    await db.pagamentos.insert_one({"id": str(uuid.uuid4()), "paciente_id": r["paciente_id"], "nutricionista_id": r["nutricionista_id"],
+                                    "valor": round(float(valor if valor is not None else (r.get("valor") or 0)), 2), "data_pagamento": agora.astimezone(TZ_BR).date().isoformat(),
+                                    "forma": forma, "observacao": f"Reserva da consulta ({origem})", "plano": r.get("plano"), "created_at": iso(agora)})
+    p = await db.patients.find_one({"id": r["paciente_id"]}, {"_id": 0}) or {}
+    token = p.get("lead_token") or secrets.token_urlsafe(16)
+    await db.patients.update_one({"id": r["paciente_id"]}, {"$set": {
+        "status_funil": "CONSULTA_AGENDADA", "lead_token": token,
+        "formulario": p.get("formulario") if (p.get("formulario") or {}).get("estado") == "respondido" else {"tipo": "inicial", "estado": "aberto", "enviado_em": iso(agora)}}})
+    await db.reservas.update_one({"id": r["id"]}, {"$set": {"status": "confirmada", "confirmada_em": iso(agora), "consulta_id": cid, "confirmada_por": origem}})
+    quando = datetime.fromisoformat(r["data_hora"]).astimezone(TZ_BR).strftime("%d/%m às %H:%M")
+    base = (os.environ.get("FRONTEND_URL") or "").split(",")[0].strip().rstrip("/")
+    msg = (f"✅ Pagamento confirmado! Sua consulta está marcada para {quando} ({r.get('modalidade') or 'online'}).\n"
+           f"Agora preencha o formulário pré-consulta: {base}/pre-consulta/{token}")
+    await db.patient_messages.insert_one({"id": str(uuid.uuid4()), "session_id": f"patient-pending-{r['paciente_id']}", "patient_id": r["paciente_id"],
+                                          "role": "assistant", "kind": "confirmacao_agenda", "content": msg, "created_at": iso(agora)})
+    return {**r, "status": "confirmada", "consulta_id": cid, "mensagem": msg}
+
+
+class WebhookPagamentoIn(BaseModel):
+    reserva_id: str
+    status: str
+    valor: Optional[float] = None
+    forma: Optional[str] = None
+
+
+@api.post("/pagamentos/webhook/{provedor}")
+async def webhook_pagamento(provedor: str, payload: WebhookPagamentoIn, request: Request):
+    """Aviso do meio de pagamento (Mercado Pago, Asaas…): pagamento aprovado confirma a reserva sozinho.
+    Protegido por segredo compartilhado (cabeçalho X-Webhook-Secret = PAGAMENTO_WEBHOOK_SECRET).
+    Quando o provedor for escolhido, o formato dele é traduzido para este (reserva_id + status)."""
+    segredo = os.environ.get("PAGAMENTO_WEBHOOK_SECRET")
+    if not segredo or request.headers.get("X-Webhook-Secret") != segredo:
+        raise HTTPException(401, "Webhook não autorizado")
+    r = await db.reservas.find_one({"id": payload.reserva_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Reserva não encontrada")
+    if payload.status.lower() not in ("aprovado", "approved", "paid", "pago", "confirmed"):
+        await db.reservas.update_one({"id": r["id"]}, {"$set": {"ultimo_aviso_pagamento": payload.status}})
+        return {"ok": True, "status": r.get("status")}
+    res = await _confirmar_reserva(r, payload.valor, payload.forma or "cartao_credito", origem=provedor)
+    return {"ok": True, "status": res["status"]}
+
+
+@api.get("/reservas")
+async def listar_reservas(user=Depends(require_nutritionist)):
+    rows = await db.reservas.find({"nutricionista_id": user["id"]}, {"_id": 0, "comprovante.data_url": 0}).sort("criado_em", -1).to_list(100)
+    pacs = {p["id"]: p.get("nome") for p in await db.patients.find({"id": {"$in": [r["paciente_id"] for r in rows]}}, {"_id": 0, "id": 1, "nome": 1}).to_list(None)}
+    return [{**_reserva_publica(r), "nome": pacs.get(r["paciente_id"]), "paciente_id": r["paciente_id"], "tem_comprovante": bool(r.get("comprovante"))} for r in rows]
+
+
+@api.get("/reservas/{rid}/comprovante")
+async def ver_comprovante_reserva(rid: str, user=Depends(require_nutritionist)):
+    r = await db.reservas.find_one({"id": rid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not r or not r.get("comprovante"):
+        raise HTTPException(404, "Sem comprovante")
+    return {"file_name": r["comprovante"].get("file_name"), "data_url": r["comprovante"].get("data_url")}
+
+
+@api.post("/reservas/{rid}/confirmar")
+async def confirmar_reserva_manual(rid: str, user=Depends(require_nutritionist)):
+    r = await db.reservas.find_one({"id": rid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Reserva não encontrada")
+    res = await _confirmar_reserva(r, origem="manual")
+    return {"ok": True, "status": res["status"], "consulta_id": res.get("consulta_id")}
+
+
 # ── Painel "o que fazer hoje" (ajuste pain1 do Rogério) ─────────────────────
 _PASSO_DA_ETAPA = {
     "ANAMNESE_COMPLETA": "agendar a consulta", "CONSULTA_AGENDADA": "conferir o formulário antes da consulta",
@@ -1795,7 +2017,8 @@ async def painel(user=Depends(require_nutritionist)):
     hoje = agora_br.date()
     pacs = await db.patients.find({"nutricionista_id": nid}, {"_id": 0, "fotos": 0, "comprovante": 0, "lead_token": 0}).to_list(None)
     por_id = {p["id"]: p for p in pacs}
-    consultas = await db.consultations.find({"nutricionista_id": nid, "status": {"$nin": ["CANCELADA", "CANCELADO"]}}, {"_id": 0}).to_list(None)
+    # só consultas pagas (ajuste fn2): reserva sem pagamento não vira consulta; paga=False fica de fora
+    consultas = await db.consultations.find({"nutricionista_id": nid, "status": {"$nin": ["CANCELADA", "CANCELADO"]}, "paga": {"$ne": False}}, {"_id": 0}).to_list(None)
 
     # hoje: linha do tempo do dia (horário local)
     def local(dh):
