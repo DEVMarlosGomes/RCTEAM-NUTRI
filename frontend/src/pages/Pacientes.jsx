@@ -160,6 +160,7 @@ export default function Pacientes() {
     }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (new URLSearchParams(window.location.search).get("novo")) setModal("new"); }, []);
 
   const remove = async (patient) => {
     const confirmed = window.confirm(`Excluir ${patient.nome}? Esta ação também remove consultas, avaliações, planos, exames e a conta vinculada.`);

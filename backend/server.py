@@ -1761,6 +1761,173 @@ async def dashboard(user=Depends(get_current_user)):
         "novos_7d": novos, "em_acompanhamento": em_acomp, "funil": funil,
     }
 
+# ── Painel "o que fazer hoje" (ajuste pain1 do Rogério) ─────────────────────
+_PASSO_DA_ETAPA = {
+    "ANAMNESE_COMPLETA": "agendar a consulta", "CONSULTA_AGENDADA": "conferir o formulário antes da consulta",
+    "CONSULTA_REALIZADA": "montar e entregar o plano", "PLANO_ENTREGUE": "acompanhar a adaptação",
+    "EM_ACOMPANHAMENTO": "agendar o retorno antes do plano vencer", "LEAD_INICIADO": "enviar o formulário",
+}
+_JORNADA = [("lead", "Lead", ["LEAD_INICIADO"]), ("formulario", "Formulário", ["ANAMNESE_COMPLETA"]),
+            ("agendada", "Agendada", ["CONSULTA_AGENDADA"]), ("consulta", "Consulta feita", ["CONSULTA_REALIZADA"]),
+            ("plano", "Plano entregue", ["PLANO_ENTREGUE"]), ("acompanhamento", "Acompanhamento", ["EM_ACOMPANHAMENTO"])]
+
+
+class ResolverPendenciaIn(BaseModel):
+    tipo: str = Field(min_length=2, max_length=40)
+
+
+@api.post("/patients/{pid}/pendencias/resolver")
+async def resolver_pendencia(pid: str, payload: ResolverPendenciaIn, user=Depends(require_nutritionist)):
+    """Tira a pendência do Painel (ex.: formulário revisado). Ela volta se acontecer algo novo do mesmo tipo."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    await db.patients.update_one({"id": pid}, {"$set": {f"pendencias_resolvidas.{payload.tipo}": iso(now_utc())}})
+    return {"ok": True}
+
+
+@api.get("/painel")
+async def painel(user=Depends(require_nutritionist)):
+    from financeiro import situacao_plano
+    nid = user["id"]
+    agora = now_utc()
+    agora_br = agora.astimezone(TZ_BR)
+    hoje = agora_br.date()
+    pacs = await db.patients.find({"nutricionista_id": nid}, {"_id": 0, "fotos": 0, "comprovante": 0, "lead_token": 0}).to_list(None)
+    por_id = {p["id"]: p for p in pacs}
+    consultas = await db.consultations.find({"nutricionista_id": nid, "status": {"$nin": ["CANCELADA", "CANCELADO"]}}, {"_id": 0}).to_list(None)
+
+    # hoje: linha do tempo do dia (horário local)
+    def local(dh):
+        try:
+            d = datetime.fromisoformat(str(dh).replace("Z", "+00:00"))
+            return (d if d.tzinfo else d.replace(tzinfo=TZ_BR)).astimezone(TZ_BR)
+        except ValueError:
+            return None
+    hoje_lista, futuras, passadas = [], [], []
+    for c in consultas:
+        d = local(c.get("data_hora"))
+        if not d:
+            continue
+        item = {"id": c.get("id"), "paciente_id": c.get("paciente_id"), "nome": (por_id.get(c.get("paciente_id")) or {}).get("nome") or c.get("paciente_nome"),
+                "hora": d.strftime("%H:%M"), "data": d.date().isoformat(), "tipo": c.get("tipo"), "status": c.get("status"), "_dt": d}
+        if d.date() == hoje:
+            hoje_lista.append(item)
+        if d > agora_br:
+            futuras.append(item)
+        else:
+            passadas.append(item)
+    hoje_lista.sort(key=lambda x: x["hora"])
+    futuras.sort(key=lambda x: x["_dt"])
+    proxima = next((f for f in futuras if f["data"] != hoje.isoformat()), None)
+
+    # pendências automáticas (cada uma com a ação)
+    pend = []
+    resolvidas = lambda p, tipo: str(((p.get("pendencias_resolvidas") or {}).get(tipo)) or "")
+
+    def add(p, tipo, texto, acao, quando=""):
+        if quando and resolvidas(p, tipo) >= str(quando):
+            return
+        if not quando and resolvidas(p, tipo):
+            return
+        pend.append({"tipo": tipo, "texto": texto, "acao": acao, "paciente_id": p["id"], "nome": p.get("nome"), "telefone": p.get("telefone"), "quando": quando})
+
+    ultima_resp = {}
+    async for m in db.patient_messages.aggregate([{"$match": {"role": "user", "patient_id": {"$in": list(por_id)}}},
+                                                  {"$group": {"_id": "$patient_id", "u": {"$max": "$created_at"}}}]):
+        ultima_resp[m["_id"]] = m["u"]
+    ult_lembrete = {}
+    async for n in db.patient_nudges.find({"nutricionista_id": nid, "last_fired_at": {"$ne": None}}, {"_id": 0, "patient_id": 1, "last_fired_at": 1}):
+        if str(n["last_fired_at"]) > str(ult_lembrete.get(n["patient_id"], "")):
+            ult_lembrete[n["patient_id"]] = n["last_fired_at"]
+    house = {}
+    async for a in db.drhouse_exam_analyses.find({"nutricionista_id": nid}, {"_id": 0, "paciente_id": 1, "created_at": 1}):
+        if str(a["created_at"]) > str(house.get(a["paciente_id"], "")):
+            house[a["paciente_id"]] = a["created_at"]
+    plano_em = {}
+    async for pl in db.planos_manuais.find({"paciente_id": {"$in": list(por_id)}}, {"_id": 0, "paciente_id": 1, "atualizado_em": 1, "criado_em": 1}):
+        t = str(pl.get("atualizado_em") or pl.get("criado_em") or "")
+        if t > plano_em.get(pl["paciente_id"], ""):
+            plano_em[pl["paciente_id"]] = t
+    ult_consulta = {}
+    for c in passadas:
+        t = c["_dt"].isoformat()
+        if t > ult_consulta.get(c["paciente_id"], ""):
+            ult_consulta[c["paciente_id"]] = t
+
+    for p in pacs:
+        st = p.get("status_funil")
+        if st in ("PERDIDO", "INATIVO"):
+            continue
+        f = p.get("formulario") or {}
+        if f.get("estado") == "respondido" and f.get("respondido_em"):
+            add(p, "formulario", f"{'Retorno' if f.get('tipo') == 'retorno' else 'Formulário'} respondido para revisar", "revisar", f["respondido_em"])
+        uc = ult_consulta.get(p["id"])
+        if uc and plano_em.get(p["id"], "") < uc and st not in ("LEAD_INICIADO",):
+            add(p, "sem_plano", "Consulta feita sem plano entregue", "prescricao", uc)
+        if house.get(p["id"]):
+            add(p, "exame", "Exame analisado pelo Dr. House", "exames", house[p["id"]])
+        ul = ult_lembrete.get(p["id"])
+        if ul and not (ultima_resp.get(p["id"]) and str(ultima_resp[p["id"]]) > str(ul)):
+            dias = (agora - datetime.fromisoformat(str(ul))).days
+            if dias >= 3:
+                add(p, "sem_resposta", f"Sem responder os lembretes há {dias} dias", "whatsapp", ul)
+        sit = situacao_plano(p.get("assinatura"), 7, hoje)
+        if sit["status"] == "vencendo":
+            add(p, "plano_vencendo", f"Plano vence em {sit['dias']} dias", "renovar", (p.get("assinatura") or {}).get("vencimento"))
+        elif sit["status"] == "vencido":
+            add(p, "pagamento_atrasado", f"Pagamento atrasado há {-sit['dias']} dias", "cobrar", (p.get("assinatura") or {}).get("vencimento"))
+        if st == "LEAD_INICIADO" and not (p.get("formulario") or {}).get("enviado_em"):
+            criado = str(p.get("created_at") or "")
+            try:
+                dias = (agora - datetime.fromisoformat(criado.replace("Z", "+00:00"))).days
+            except ValueError:
+                dias = 0
+            if dias >= 2:
+                add(p, "lead_parado", f"Lead sem resposta há {dias} dias", "proposta", criado)
+    pend.sort(key=lambda x: str(x.get("quando") or ""), reverse=True)
+
+    # jornada e mês
+    jornada = [{"key": k, "rotulo": r, "total": sum(1 for p in pacs if p.get("status_funil") in sts),
+                "pacientes": [{"id": p["id"], "nome": p.get("nome")} for p in pacs if p.get("status_funil") in sts][:30]} for k, r, sts in _JORNADA]
+    ini_mes = hoje.replace(day=1).isoformat()
+    pagos = await db.pagamentos.find({"nutricionista_id": nid, "data_pagamento": {"$gte": ini_mes}}, {"_id": 0, "valor": 1, "vencimento_anterior": 1}).to_list(None)
+    a_receber = 0.0
+    for p in pacs:
+        a = p.get("assinatura") or {}
+        v = str(a.get("vencimento") or "")[:10]
+        if a.get("ativo") is not False and v and v[:7] == hoje.isoformat()[:7] and v >= hoje.isoformat():
+            a_receber += float(a.get("valor") or 0)
+    leads_mes = [p for p in pacs if str(p.get("created_at") or "") >= ini_mes]
+    fecharam = [p for p in leads_mes if p.get("status_funil") not in ("LEAD_INICIADO", "PERDIDO")]
+    mes = {
+        "consultas": sum(1 for c in passadas + futuras if c["data"] >= ini_mes and c["data"][:7] == hoje.isoformat()[:7]),
+        "novos_pacientes": len(fecharam),
+        "renovacoes": sum(1 for g in pagos if g.get("vencimento_anterior")),
+        "recebido": round(sum(float(g.get("valor") or 0) for g in pagos), 2),
+        "a_receber": round(a_receber, 2),
+        "leads": len(leads_mes), "convertidos": len(fecharam),
+    }
+    # próximos passos: últimos atendidos, etapa e o que falta
+    vistos, passos = set(), []
+    for c in sorted(passadas, key=lambda x: x["_dt"], reverse=True):
+        if c["paciente_id"] in vistos or c["paciente_id"] not in por_id:
+            continue
+        vistos.add(c["paciente_id"])
+        p = por_id[c["paciente_id"]]
+        passos.append({"paciente_id": p["id"], "nome": p.get("nome"), "ultima": c["_dt"].strftime("%d/%m/%Y"),
+                       "etapa": p.get("status_funil"), "falta": _PASSO_DA_ETAPA.get(p.get("status_funil"), "—")})
+        if len(passos) >= 6:
+            break
+    for lst in (hoje_lista,):
+        for x in lst:
+            x.pop("_dt", None)
+    if proxima:
+        proxima = {k: v for k, v in proxima.items() if k != "_dt"}
+    return {"hoje": hoje_lista, "proxima": proxima, "pendencias": pend[:40], "jornada": jornada,
+            "perdidos": sum(1 for p in pacs if p.get("status_funil") == "PERDIDO"), "mes": mes, "proximos_passos": passos}
+
+
 @api.get("/patients")
 async def list_patients(user=Depends(get_current_user)):
     rows = await db.patients.find(

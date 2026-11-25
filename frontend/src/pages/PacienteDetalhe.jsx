@@ -39,7 +39,8 @@ const TABS = [
 export default function PacienteDetalhe() {
   const { id } = useParams();
   const [d, setD] = useState(null);
-  const [tab, setTab] = useState("anamnese");
+  // ?aba=plano / exames / anamnese… (atalhos do Painel)
+  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get("aba") || "anamnese");
   const reload = () => api.get(`/patients/${id}`).then((r) => setD(r.data));
   useEffect(() => {
     api.get(`/patients/${id}`).then((r) => setD(r.data));
