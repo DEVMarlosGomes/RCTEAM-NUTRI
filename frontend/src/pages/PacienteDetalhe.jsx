@@ -13,13 +13,13 @@ import Antropometria from "@/components/evonut/Antropometria";
 import GastoEnergetico from "@/components/evonut/GastoEnergetico";
 import PrescricaoDietetica from "@/components/evonut/PrescricaoDietetica";
 import AnalisesDieteticas from "@/components/evonut/AnalisesDieteticas";
-import MarkdownView from "@/components/evonut/MarkdownView";
 import AnamneseBlocos from "@/components/evonut/AnamneseBlocos";
 import PrevisaoMacros from "@/components/evonut/PrevisaoMacros";
 import RecordatorioDia from "@/components/evonut/RecordatorioDia";
 import { abrirAnexo } from "@/lib/anamnese";
 import SeletorObjetivos from "@/components/evonut/SeletorObjetivos";
 import FormularioStatus from "@/components/evonut/FormularioStatus";
+import DrHouseResultado from "@/components/evonut/DrHouseResultado";
 
 // Abas em dois grupos (ajustes do Rogério): Avaliação | Plano — nada fica escondido.
 const GRUPOS_TABS = [
@@ -2681,19 +2681,8 @@ function ExamesManuais({ d }) {
             {lotes.length > 0 && (
               <>
                 {houseAnalysis?.content && (
-                  <div className="evo-card p-5 border-cyan-300/20">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <div>
-                        <div className="text-[10px] uppercase tracking-widest text-cyan-300 font-semibold">Dr. House</div>
-                        <h3 className="evo-h3 mt-1">Analise laboratorial integrada</h3>
-                      </div>
-                      <div className="text-[11px] text-gray-500">{new Date(houseAnalysis.created_at).toLocaleString("pt-BR")}</div>
-                    </div>
-                    {houseAnalysis.pergunta && (
-                      <div className="text-xs text-gray-400 mb-2">Pergunta: {houseAnalysis.pergunta}</div>
-                    )}
-                    <MarkdownView content={houseAnalysis.content} />
-                  </div>
+                  <DrHouseResultado key={houseAnalysis.id} pid={pid} sexo={d.patient.sexo} analise={houseAnalysis}
+                    lotes={[...lotes].sort((a, b) => String(a.data_coleta).localeCompare(String(b.data_coleta)))} longitudinal={longitudinal} />
                 )}
 
                 <div className="grid sm:grid-cols-4 gap-3">

@@ -6119,6 +6119,68 @@ async def ai_drhouse_manual_exam_analysis(
         timeout=180.0,
     )
 
+_DRHOUSE_JSON_FORMATO = """Responda SOMENTE com um JSON válido (sem markdown, sem texto fora do JSON) neste formato:
+{
+  "resumo": "2 a 3 frases cruzando exame e anamnese",
+  "pistas": [{"texto": "achado curto", "fonte": "exame|anamnese|recordatorio"}],
+  "hipoteses": [{"texto": "hipótese", "certeza": 0-100, "status": "provavel|investigar|descartado", "porque": "1 frase"}],
+  "perguntar": ["pergunta para confirmar com o paciente na consulta"],
+  "prioridades": [{"codigo": "código do marcador", "nome": "nome", "interpretacao": "1 a 2 frases",
+                   "acao": {"tipo": "conduta|medico", "texto": "linha de ação"}}],
+  "condutas": ["conduta nutricional objetiva (alimentos, hábitos, horários)"],
+  "repetir_em_dias": 90,
+  "laudo_paciente": "texto para o paciente em linguagem simples, sem termos técnicos, 1 a 3 parágrafos"
+}
+Regras: no máximo 6 pistas, 4 hipóteses, 5 perguntas, 6 prioridades e 8 condutas. Prioridades = marcadores alterados
+que pedem ação agora. Ação "medico" quando o achado precisa de avaliação/encaminhamento médico. NÃO sugira dose de
+suplemento nem de medicamento (pode citar alimentos e hábitos). Não invente valores que não estão nos exames."""
+
+
+async def ai_drhouse_estruturado(patient: dict, lotes: list[dict], longitudinal: dict, anam: Optional[dict] = None,
+                                 evaluation: Optional[dict] = None, recordatorio: Optional[dict] = None) -> Optional[dict]:
+    """Versão estruturada da análise (3 colunas, prioridades, condutas e laudo) para a tela de Exames."""
+    await ensure_agents_seeded()
+    system_prompt = await build_agent_system_prompt("drhouse")
+    prompt = (
+        "Analise os exames para a tela do nutricionista.\n\n"
+        f"CONTEXTO DO PACIENTE:\n{json.dumps(_drhouse_patient_context(patient, anam, evaluation), ensure_ascii=False, default=str)}\n\n"
+        f"RECORDATÓRIO MAIS RECENTE (totais do dia):\n{json.dumps((recordatorio or {}).get('totais_dia') or {}, ensure_ascii=False, default=str)[:2000]}\n\n"
+        f"EXAMES:\n{json.dumps(_drhouse_lotes_payload(lotes), ensure_ascii=False, default=str)[:30000]}\n\n"
+        f"EVOLUÇÃO:\n{json.dumps(longitudinal.get('marcadores') or [], ensure_ascii=False, default=str)[:12000]}\n\n"
+        + _DRHOUSE_JSON_FORMATO
+    )
+    texto = await _ai_chat(f"drhouse-json-{patient.get('id')}-{uuid.uuid4().hex[:8]}", system_prompt, prompt,
+                           max_tokens=6000, temperature=0.2, timeout=180.0)
+    return _json_da_resposta(texto)
+
+
+def _json_da_resposta(texto: str) -> Optional[dict]:
+    if not texto:
+        return None
+    t = texto.strip()
+    t = re.sub(r"^```(?:json)?|```$", "", t, flags=re.M).strip()
+    ini, fim = t.find("{"), t.rfind("}")
+    if ini < 0 or fim <= ini:
+        return None
+    try:
+        dado = json.loads(t[ini:fim + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(dado, dict):
+        return None
+    # nada de dose de suplemento/medicamento no que vai para a tela
+    dose = re.compile(r"\b\d+[\d.,]*\s?(mg|mcg|µg|ui|iu|g/dia|mg/dia)\b", re.I)
+    def limpa(v):
+        if isinstance(v, str):
+            return dose.sub("[dose a definir com o médico]", v)
+        if isinstance(v, list):
+            return [limpa(x) for x in v]
+        if isinstance(v, dict):
+            return {k: limpa(x) for k, x in v.items()}
+        return v
+    return limpa(dado)
+
+
 class ExameManualItem(BaseModel):
     codigo: str
     nome: str
@@ -6229,8 +6291,17 @@ async def create_drhouse_exames_analysis(pid: str, payload: DrHouseExamAnalysisI
     try:
         anam = await _anamnese_principal(pid)
         evaluation = await db.evaluations.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
-        content = await ai_drhouse_manual_exam_analysis(
-            p, lotes, longitudinal, payload.pergunta, anam=anam, evaluation=evaluation,
+        recordatorio = await db.recordatorios.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("data", -1)])
+
+        async def _estruturado():
+            try:
+                return await ai_drhouse_estruturado(p, lotes, longitudinal, anam=anam, evaluation=evaluation, recordatorio=recordatorio)
+            except Exception:  # a análise em texto continua valendo
+                logging.exception("Dr. House estruturado falhou")
+                return None
+        content, estruturado = await asyncio.gather(
+            ai_drhouse_manual_exam_analysis(p, lotes, longitudinal, payload.pergunta, anam=anam, evaluation=evaluation),
+            _estruturado(),
         )
     except Exception as exc:
         logging.exception("Dr. House manual exam analysis failed")
@@ -6243,11 +6314,72 @@ async def create_drhouse_exames_analysis(pid: str, payload: DrHouseExamAnalysisI
         "lote_id": payload.lote_id,
         "pergunta": payload.pergunta,
         "content": content,
+        "estruturado": estruturado,
         "resumo_longitudinal": longitudinal.get("resumo"),
         "created_at": iso(now_utc()),
     }
     await db.drhouse_exam_analyses.insert_one(doc)
     return {k: v for k, v in doc.items() if k != "_id"}
+
+class AplicarCondutaIn(BaseModel):
+    condutas: List[str] = []
+    repetir_em_dias: Optional[int] = None
+
+
+@api.post("/patients/{pid}/exames-manuais/aplicar-conduta")
+async def aplicar_conduta_exames(pid: str, payload: AplicarCondutaIn, user=Depends(require_nutritionist)):
+    """Manda as condutas marcadas para as Observações da dieta mais recente (não mexe nos alimentos)."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    itens = [str(c).strip()[:600] for c in payload.condutas if str(c).strip()][:20]
+    if not itens and not payload.repetir_em_dias:
+        raise HTTPException(400, "Marque ao menos uma conduta")
+    plano = await db.planos_manuais.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("atualizado_em", -1), ("criado_em", -1)])
+    if not plano:
+        raise HTTPException(400, "Crie a dieta do paciente na Prescrição antes de aplicar a conduta")
+    texto = "\n".join(f"• {c}" for c in itens)
+    if payload.repetir_em_dias:
+        texto += f"\n• Repetir os exames em {int(payload.repetir_em_dias)} dias."
+    recs = list(plano.get("recomendacoes") or [])
+    recs = [r for r in recs if (r or {}).get("titulo") != "Conduta pelos exames"]
+    recs.append({"titulo": "Conduta pelos exames", "texto": texto.strip()})
+    await db.planos_manuais.update_one({"id": plano["id"]}, {"$set": {"recomendacoes": recs, "atualizado_em": iso(now_utc())}})
+    return {"ok": True, "plano_id": plano["id"], "titulo": plano.get("titulo")}
+
+
+class LaudoIn(BaseModel):
+    texto: str = Field(min_length=10, max_length=8000)
+
+
+@api.post("/patients/{pid}/exames-manuais/laudo-pdf")
+async def laudo_exames_pdf(pid: str, payload: LaudoIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    nutri = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0}) or {}
+    paragrafos = "".join(f"<p style='font-size:11pt;line-height:1.6;margin:0 0 10px'>{_pdf_escape(par)}</p>" for par in payload.texto.split("\n") if par.strip())
+    html = _pdf_html_base("Seus exames, explicados", p, nutri, f'<div class="sec">{paragrafos}</div>')
+    pdf_bytes = HTML(string=html).write_pdf()
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename=laudo_exames_{p.get('nome', 'p').replace(' ', '_')}.pdf"})
+
+
+@api.post("/patients/{pid}/exames-manuais/laudo-enviar")
+async def laudo_exames_enviar(pid: str, payload: LaudoIn, user=Depends(require_nutritionist)):
+    """Envia o laudo revisado para o app do aluno (aparece no atendimento)."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Paciente não encontrado")
+    pu = await db.users.find_one({"role": "patient", "patient_id": pid}, {"_id": 0})
+    session_id = f"patient-{pu['id']}" if pu else f"patient-pending-{pid}"
+    msg = {"id": str(uuid.uuid4()), "session_id": session_id, "user_id": (pu or {}).get("id"), "patient_id": pid,
+           "role": "assistant", "content": "📋 Seus exames, explicados\n\n" + payload.texto.strip(), "kind": "laudo_exames",
+           "created_at": iso(now_utc())}
+    await db.patient_messages.insert_one(dict(msg))
+    await db.patients.update_one({"id": pid}, {"$push": {"laudos_exames": {"texto": payload.texto.strip(), "enviado_em": msg["created_at"]}}})
+    return {"ok": True}
+
 
 @api.get("/patients/{pid}/exames-manuais/drhouse-analysis")
 async def list_drhouse_exames_analysis(pid: str, user=Depends(require_nutritionist)):
