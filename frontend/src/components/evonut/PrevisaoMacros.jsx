@@ -31,7 +31,7 @@ function distribuirIgual(nomes) {
   return nomes.map((nome, i) => ({ nome, pct: i === n - 1 ? r1(100 - base * (n - 1)) : base }));
 }
 
-function Pizza({ partes, tamanho = 150 }) {
+export function Pizza({ partes, tamanho = 150 }) {
   const total = partes.reduce((a, p) => a + Math.max(0, p.valor), 0);
   if (!total) return <div style={{ width: tamanho, height: tamanho }} className="rounded-full bg-white/[0.04]" />;
   const r = tamanho / 2;

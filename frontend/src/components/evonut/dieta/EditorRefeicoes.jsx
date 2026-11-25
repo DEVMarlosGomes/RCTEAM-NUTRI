@@ -32,7 +32,7 @@ const focar = (id, selecionar = true) => requestAnimationFrame(() => {
   if (el) { el.focus(); if (selecionar && el.select) el.select(); }
 });
 
-async function carregarMedidas(alimentoId) {
+export async function carregarMedidas(alimentoId) {
   try {
     const { data } = await api.get(`/alimentos/${alimentoId}/medidas`);
     return data.medidas || [];
