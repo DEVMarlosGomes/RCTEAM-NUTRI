@@ -58,9 +58,23 @@ const pluralPalavra = (p) => {
 };
 
 /** "Colher de Sopa" -> "colher de sopa" ou "colheres de sopa", como o NutriDiet mostra. */
+/** ml de 1 unidade da medida: "ml" = 1; "Copo médio (240 ml)" = 240; sólidos = null. */
+export function mlDaMedida(nome) {
+  const t = String(nome || "").trim().toLowerCase();
+  if (t === "ml") return 1;
+  const m = /\((\d+(?:[.,]\d+)?)\s*ml\)/.exec(t);
+  return m ? num(m[1]) : null;
+}
+
+/** Líquido: tem a medida "ml" no cadastro (ou já usa uma medida em ml). */
+export const ehLiquido = (item) => Boolean(item?._liquido || (item?._medidas || []).some((m) => String(m.nome).toLowerCase() === "ml") || mlDaMedida(item?.medida_nome) != null);
+
+/** Densidade g/ml do item (a medida "ml" guarda os gramas de 1 ml). */
+export const densidadeDo = (item) => num(item?._densidade) || num((item?._medidas || []).find((m) => String(m.nome).toLowerCase() === "ml")?.gramas) || 1;
+
 export function textoMedida(medida, qtd = 1) {
-  const base = String(medida || "").trim().toLowerCase().replace(/^file\b/, "filé");
-  if (!base || num(qtd) <= 1) return base;
+  const base = String(medida || "").trim().toLowerCase().replace(/^file\b/, "filé").replace(/\s*\(\d+(?:[.,]\d+)?\s*ml\)\s*$/, "");
+  if (!base || base === "ml" || num(qtd) <= 1) return base;
   const palavras = base.split(/\s+/);
   palavras[0] = pluralPalavra(palavras[0]);
   for (let i = 1; i < palavras.length; i += 1) {
@@ -163,6 +177,9 @@ export function escalarSubstitutos(substitutos, fator) {
 /** Texto curto de quantidade: "2 fatias (50 g)". */
 export function textoQuantidade(item) {
   const g = num(item.quantidade_g);
+  const ml = mlDaMedida(item.medida_nome);
+  if (ml === 1) return `${nf.format(num(item.quantidade))} ml`;
+  if (ml) return `${nf.format(num(item.quantidade))} ${textoMedida(item.medida_nome, item.quantidade)} · ${nf.format(num(item.quantidade) * ml)} ml`;
   if (ehGramas(item.medida_nome)) return `${nf.format(g)} g`;
   return `${nf.format(num(item.quantidade))} ${textoMedida(item.medida_nome, item.quantidade)} (${nf.format(g)} g)`;
 }

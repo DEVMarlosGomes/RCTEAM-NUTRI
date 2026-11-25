@@ -1,6 +1,6 @@
 import { createContext, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/evo-api";
-import { ehGramas, normalizar, num, rankMedida } from "./calculos";
+import { ehGramas, mlDaMedida, normalizar, num, rankMedida } from "./calculos";
 
 /**
  * Grupos de substituição (itens 9 a 12 dos ajustes): cada grupo troca por um critério (kcal ou macro principal),
@@ -64,6 +64,13 @@ export function arredondarPorcao(gramas, medidas, preferida) {
     return true;
   });
   if (melhor) return melhor;
+  // líquido sem medida que feche: arredonda em ml (10 em 10)
+  const medidaMl = (medidas || []).find((m) => mlDaMedida(m.nome) === 1);
+  if (medidaMl) {
+    const dens = num(medidaMl.gramas) || 1;
+    const ml = Math.max(10, Math.round(g / dens / 10) * 10);
+    return { medida_nome: "ml", quantidade: ml, quantidade_g: Math.round(ml * dens * 10) / 10 };
+  }
   const r = g >= 20 ? Math.max(5, Math.round(g / 5) * 5) : Math.max(1, Math.round(g));
   return { medida_nome: "Gramas", quantidade: r, quantidade_g: r };
 }

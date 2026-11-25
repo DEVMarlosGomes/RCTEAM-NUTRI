@@ -4454,9 +4454,52 @@ def _find_equivalente_entry(food_name: str) -> Optional[dict]:
                 best_item = item
     return best_item if best_score >= 4.5 else None
 
+# ── Líquidos em ml (ajuste ml1 do Rogério) ──────────────────────────────────
+# Tipo líquido e densidade (g/ml): o que estiver gravado no alimento vale; senão, pelo nome. Sem densidade = 1 g/ml.
+_LIQUIDOS = [
+    (r"^(leite|bebida lactea|bebida láctea)(?!.*\b(po|pó|condensado|em p|ninho)\b)", 1.03),
+    (r"^(iogurte|kefir|coalhada)", 1.03),
+    (r"^(suco|refresco|néctar|nectar)|, suco\b|\bsuco\b", 1.04),
+    (r"^(agua|água) de coco|^coco, água", 1.02),
+    (r"^(cafe|café)(?!.*\b(po|pó)\b)|^(cha|chá)\b", 1.0),
+    (r"^(azeite|oleo|óleo)\b", 0.92),
+    (r"^(caldo|sopa)\b", 1.0),
+]
+MEDIDAS_ML = [("Colher de sopa", 15), ("Copo americano", 150), ("Copo médio", 240), ("Copo grande", 300),
+              ("Caneca", 300), ("Garrafa", 200)]
+
+
+def _liquido_info(alim: dict) -> Optional[dict]:
+    """{'densidade': g/ml} quando o alimento é líquido; None para sólido."""
+    if alim.get("liquido") is False:
+        return None
+    dens = _coerce_float(alim.get("densidade"))
+    if alim.get("liquido") is True:
+        return {"densidade": dens or 1.0}
+    nome = str(alim.get("nome_original") or alim.get("nome") or "").lower().strip()
+    for rx, d in _LIQUIDOS:
+        if re.search(rx, nome):
+            return {"densidade": dens or d}
+    return None
+
+
+def _medidas_liquido(alim: dict, dens: float) -> list[dict]:
+    """Medidas em ml (gramas = ml × densidade). Azeite/óleo: colher de sopa ≈ 13 ml."""
+    oleo = bool(re.search(r"^(azeite|oleo|óleo)", str(alim.get("nome") or "").lower()))
+    out = [{"nome": "ml", "gramas": round(dens, 4), "ml": 1}]
+    for nome, ml in MEDIDAS_ML:
+        ml_r = 13 if (oleo and nome == "Colher de sopa") else ml
+        out.append({"nome": f"{nome} ({ml_r} ml)", "gramas": round(ml_r * dens, 1), "ml": ml_r})
+    return out
+
+
 def _medidas_do_alimento(alim: dict) -> list[dict]:
     """Medidas caseiras do alimento: as gravadas no documento pela sincronizacao da base (planilha EVONUT +
     IBGE); para alimentos sem isso (cadastrados pelo nutricionista), a planilha pelo nome."""
+    liq = _liquido_info(alim)
+    if liq:
+        # líquido: unidade base ml (+ gramas para planos antigos); as medidas antigas em gramas não entram
+        return _medidas_liquido(alim, liq["densidade"]) + [{"nome": "Gramas", "gramas": 1.0}]
     measures = [{"nome": "Gramas", "gramas": 1.0}]
     base_measure = alim.get("medida_caseira")
     base_grams = _coerce_float(alim.get("porcao_padrao_g") or alim.get("quantidade_referencia_g"))
@@ -4634,6 +4677,9 @@ async def search_alimentos(
         a["energia_kcal_100g"] = m100["kcal"]
         a["macros_100g"] = m100
         a["grupo_display"] = a.get("grupo") or a.get("categoria")
+        liq = _liquido_info(a)
+        a["liquido"] = bool(liq)
+        a["densidade"] = liq["densidade"] if liq else None
         items.append(a)
     return {"total": total, "page": page, "limit": limit, "items": items}
 
@@ -4650,8 +4696,25 @@ async def get_alimento_medidas(aid: str, user=Depends(require_nutritionist)):
     if not doc:
         raise HTTPException(404, "Alimento não encontrado")
     grupos = await _grupos_do_nutri(user["id"])
+    liq = _liquido_info(doc)
     return {"alimento_id": aid, "alimento_nome": doc.get("nome"), "medidas": _medidas_do_alimento(doc),
-            "grupo_substituicao": _grupo_do_alimento(doc, grupos)}
+            "grupo_substituicao": _grupo_do_alimento(doc, grupos),
+            "liquido": bool(liq), "densidade": liq["densidade"] if liq else None}
+
+
+class LiquidoIn(BaseModel):
+    liquido: bool
+    densidade: Optional[float] = Field(default=None, gt=0.3, lt=2.5)
+
+
+@api.patch("/alimentos/{aid}/liquido")
+async def definir_liquido(aid: str, payload: LiquidoIn, user=Depends(require_nutritionist)):
+    """Tipo do alimento (sólido em g / líquido em ml) e densidade em g/ml (ex.: leite desnatado 1,03)."""
+    doc = await db.alimentos.find_one({"id": aid}, {"_id": 0, "id": 1})
+    if not doc:
+        raise HTTPException(404, "Alimento não encontrado")
+    await db.alimentos.update_one({"id": aid}, {"$set": {"liquido": payload.liquido, "densidade": payload.densidade}})
+    return {"ok": True, "liquido": payload.liquido, "densidade": payload.densidade}
 
 @api.get("/alimentos/{aid}/equivalentes")
 async def get_alimento_equivalentes(aid: str, user=Depends(require_nutritionist)):

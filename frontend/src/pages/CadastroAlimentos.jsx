@@ -49,6 +49,33 @@ function FoodModal({ food, onClose, onSaved }) {
   </form></div>;
 }
 
+/** Sólido (g) ou líquido (ml) + densidade em g/ml (ex.: leite desnatado 1,03). Ajuste ml1 do Rogério. */
+function TipoLiquido({ food }) {
+  const [liquido, setLiquido] = useState(Boolean(food.liquido));
+  const [dens, setDens] = useState(food.densidade != null ? String(food.densidade).replace(".", ",") : "");
+  const salvar = async (liq, d) => {
+    const densidade = Number(String(d || "").replace(",", ".")) || null;
+    try {
+      await api.patch(`/alimentos/${food.id}/liquido`, { liquido: liq, densidade: liq ? densidade : null });
+      toast.success(liq ? `${food.nome}: líquido (ml)${densidade ? ` · ${String(densidade).replace(".", ",")} g/ml` : ""}.` : `${food.nome}: sólido (g).`);
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+  return (
+    <div className="flex items-center gap-1.5" data-testid={`tipo-${food.id}`}>
+      <div className="inline-flex rounded-lg bg-white/[0.04] p-0.5 ring-1 ring-white/[0.06]">
+        {[[false, "g"], [true, "ml"]].map(([v, l]) => (
+          <button key={l} type="button" aria-pressed={liquido === v} onClick={() => { setLiquido(v); salvar(v, dens); }}
+            className={`h-7 w-9 rounded-md text-[12px] font-semibold ${liquido === v ? "bg-rc-blue text-white" : "text-gray-400 hover:text-white"}`}>{l}</button>
+        ))}
+      </div>
+      {liquido && (
+        <input className="rc-input h-8 w-16 text-[12px] tabular" inputMode="decimal" placeholder="1,00" title="Densidade (g/ml)" aria-label={`Densidade de ${food.nome}`}
+          value={dens} onChange={(e) => setDens(e.target.value)} onBlur={() => salvar(true, dens)} />
+      )}
+    </div>
+  );
+}
+
 export default function CadastroAlimentos() {
   const [foods, setFoods] = useState([]);
   const [query, setQuery] = useState("");
@@ -174,13 +201,14 @@ export default function CadastroAlimentos() {
                     {spotlightFields.map((field) => (
                       <th key={field.key} className="px-4 py-3 font-semibold">{field.label}</th>
                     ))}
+                    <th className="px-4 py-3 font-semibold">Tipo</th>
                     <th className="px-4 py-3 font-semibold text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredFoods.length === 0 && (
                     <tr>
-                      <td colSpan={spotlightFields.length + 2} className="px-4 py-8 text-sm text-gray-500 text-center">
+                      <td colSpan={spotlightFields.length + 3} className="px-4 py-8 text-sm text-gray-500 text-center">
                         Nenhum alimento encontrado.
                       </td>
                     </tr>
@@ -204,6 +232,7 @@ export default function CadastroAlimentos() {
                           {food[field.key] ?? food.por_100g?.[field.key] ?? "-"}
                         </td>
                       ))}
+                      <td className="px-4 py-3"><TipoLiquido food={food} /></td>
                       <td className="px-4 py-3"><div className="flex justify-end gap-1">{food.fonte === "CUSTOM" ? <><button onClick={() => setModal(food)} className="rc-btn-secondary p-2" title="Editar"><Pencil className="w-4 h-4" /></button><button onClick={() => remove(food)} className="rc-btn-secondary p-2 text-red-400" title="Excluir"><Trash2 className="w-4 h-4" /></button></> : <span className="text-[10px] uppercase text-gray-600">Base protegida</span>}</div></td>
                     </tr>
                   ))}

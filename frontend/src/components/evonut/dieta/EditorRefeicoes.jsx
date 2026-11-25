@@ -16,7 +16,7 @@ import {
 } from "./grupos";
 import { metasDoPlanejamento } from "./plano";
 import {
-  copiarRefeicao, ehGramas, escalarSubstitutos, gramasDaMedida, itemDoSalvo, macrosDoItem, medidaPadrao, nf, nf0,
+  copiarRefeicao, densidadeDo, ehGramas, ehLiquido, escalarSubstitutos, mlDaMedida, gramasDaMedida, itemDoSalvo, macrosDoItem, medidaPadrao, nf, nf0,
   normalizar, novaRefeicao, novoItem, num, refeicaoCopiada, textoMedida, textoQuantidade, totaisBloco, totaisDia,
 } from "./calculos";
 
@@ -41,9 +41,9 @@ const focar = (id, selecionar = true) => requestAnimationFrame(() => {
 export async function carregarAlimentoInfo(alimentoId) {
   try {
     const { data } = await api.get(`/alimentos/${alimentoId}/medidas`);
-    return { medidas: data.medidas || [], grupo: data.grupo_substituicao || null };
+    return { medidas: data.medidas || [], grupo: data.grupo_substituicao || null, liquido: Boolean(data.liquido), densidade: data.densidade || null };
   } catch {
-    return { medidas: [{ nome: "Gramas", gramas: 1 }], grupo: null };
+    return { medidas: [{ nome: "Gramas", gramas: 1 }], grupo: null, liquido: false, densidade: null };
   }
 }
 export async function carregarMedidas(alimentoId) {
@@ -354,20 +354,37 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
   };
   const setMedida = (nome) => {
     if (ehGramas(nome)) { aplicar({ medida_nome: "Gramas", quantidade: item.quantidade_g }); focar(`${bk}-${i}-g`); return; }
+    if (mlDaMedida(nome) === 1) {
+      const ml = Math.round(num(item.quantidade_g) / dens) || 200;
+      aplicar({ medida_nome: nome, quantidade: ml, quantidade_g: r1(ml * dens) }); focar(`${bk}-${i}-g`); return;
+    }
     const md = medidas.find((x) => x.nome === nome);
     const q = num(item.quantidade) && !ehGramas(item.medida_nome) ? num(item.quantidade) : 1;
     aplicar({ medida_nome: nome, quantidade: q, quantidade_g: md?.gramas ? r1(q * num(md.gramas)) : item.quantidade_g });
   };
   const setGramas = (v) => aplicar({ quantidade_g: v, ...(ehGramas(item.medida_nome) ? { quantidade: v } : {}) });
+  // líquidos: a terceira caixa mostra ml; por baixo continua em gramas (ml × densidade) para os macros
+  const liquido = ehLiquido(item);
+  const dens = densidadeDo(item);
+  const medidaEhMl = mlDaMedida(item.medida_nome) === 1;
+  const valorMl = num(item.quantidade_g) ? Math.round(num(item.quantidade_g) / dens) : "";
+  const setMl = (v) => {
+    if (v === "") { aplicar({ quantidade_g: "", ...(medidaEhMl ? { quantidade: "" } : {}) }); return; }
+    const g = r1(num(v) * dens);
+    aplicar({ quantidade_g: g, ...(medidaEhMl ? { quantidade: v } : {}) });
+  };
   const enter = (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
     if (ultima) onInserir(); else focar(`${bk}-${i + 1}-nome`);
   };
   const escolherAlimento = async (food) => {
-    const { medidas: medidasFood, grupo: grupoId } = await carregarAlimentoInfo(food.id);
-    const base = { alimento_id: food.id, nome: food.nome, alimento_nome: food.nome, _m100: food.macros_100g, _medidas: medidasFood, _grupo: grupoId, substitutos: [] };
-    const md = config.forma_calculo === "gramas" ? null : medidaPadrao(medidasFood);
+    const { medidas: medidasFood, grupo: grupoId, liquido, densidade } = await carregarAlimentoInfo(food.id);
+    const base = { alimento_id: food.id, nome: food.nome, alimento_nome: food.nome, _m100: food.macros_100g, _medidas: medidasFood, _grupo: grupoId,
+      _liquido: liquido, _densidade: densidade, substitutos: [] };
+    // líquido: copo americano (azeite e óleo: colher de sopa)
+    const mdLiquido = liquido ? medidasFood.find((m) => (/^(azeite|óleo|oleo)/i.test(food.nome) ? /^colher de sopa/i : /^copo americano/i).test(m.nome)) : null;
+    const md = config.forma_calculo === "gramas" && !liquido ? null : mdLiquido || medidaPadrao(medidasFood);
     const novo = md ? { ...base, medida_nome: md.nome, quantidade: 1, quantidade_g: r1(md.gramas) } : { ...base, medida_nome: "Gramas", quantidade: "", quantidade_g: "" };
     // item 10: "OU" já preenchidos com as opções do grupo na porção equivalente
     if (!modoRecordatorio && config.equivalentes_automaticos !== false && md) {
@@ -422,7 +439,7 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
       </div>
       {/* quantidade + medida + gramas numa célula só: "3 unid. · 150 g" */}
       <div className={`flex items-center gap-1 text-[13px] ${temCalculo ? "" : "opacity-40"}`}>
-        {!ehGramas(item.medida_nome) && (
+        {!ehGramas(item.medida_nome) && !medidaEhMl && (
           <input id={`${bk}-${i}-qtd`} inputMode="decimal" aria-label="Quantidade da medida caseira" disabled={!temCalculo}
             className="w-11 h-8 rounded-md bg-black/20 px-1.5 text-center tabular outline-none focus:ring-1 focus:ring-rc-blue"
             value={item.quantidade ?? ""} onFocus={(e) => e.target.select()} onChange={(e) => setQtd(e.target.value)} onKeyDown={enter} />
@@ -432,7 +449,7 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
             className="w-full h-8 appearance-none rounded-md bg-transparent pl-1 pr-5 text-[13px] text-gray-300 outline-none hover:bg-white/[0.04] focus:ring-1 focus:ring-rc-blue truncate">
             {medidas.map((md) => (
               <option key={md.nome} value={md.nome}>
-                {ehGramas(md.nome) ? "gramas" : abreviar(md.nome, item.medida_nome === md.nome ? item.quantidade : 1)}{md.gramas && !ehGramas(md.nome) ? ` (${md.estimada ? "≈" : ""}${nf.format(md.gramas)} g)` : ""}
+                {ehGramas(md.nome) ? "gramas" : abreviar(md.nome, item.medida_nome === md.nome ? item.quantidade : 1)}{md.gramas && !ehGramas(md.nome) && mlDaMedida(md.nome) == null ? ` (${md.estimada ? "≈" : ""}${nf.format(md.gramas)} g)` : ""}
               </option>
             ))}
           </select>
@@ -440,10 +457,16 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
         </div>
         <span className="text-gray-600">·</span>
         <div className="relative">
-          <input id={`${bk}-${i}-g`} inputMode="decimal" aria-label="Gramas" disabled={!temCalculo}
-            className="w-[62px] h-8 rounded-md bg-black/20 pl-1.5 pr-5 text-right tabular outline-none focus:ring-1 focus:ring-rc-blue"
-            value={item.quantidade_g ?? ""} onFocus={(e) => e.target.select()} onChange={(e) => setGramasComSubs(e.target.value)} onKeyDown={enter} />
-          <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10.5px] text-gray-500">g</span>
+          {liquido ? (
+            <input id={`${bk}-${i}-g`} inputMode="decimal" aria-label="Mililitros" disabled={!temCalculo} title={`${nf.format(num(item.quantidade_g))} g (densidade ${nf.format(dens)} g/ml)`}
+              className="w-[62px] h-8 rounded-md bg-black/20 pl-1.5 pr-6 text-right tabular outline-none focus:ring-1 focus:ring-rc-blue"
+              value={valorMl} onFocus={(e) => e.target.select()} onChange={(e) => setMl(e.target.value)} onKeyDown={enter} data-testid={`${bk}-${i}-ml`} />
+          ) : (
+            <input id={`${bk}-${i}-g`} inputMode="decimal" aria-label="Gramas" disabled={!temCalculo}
+              className="w-[62px] h-8 rounded-md bg-black/20 pl-1.5 pr-5 text-right tabular outline-none focus:ring-1 focus:ring-rc-blue"
+              value={item.quantidade_g ?? ""} onFocus={(e) => e.target.select()} onChange={(e) => setGramasComSubs(e.target.value)} onKeyDown={enter} />
+          )}
+          <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10.5px] text-gray-500">{liquido ? "ml" : "g"}</span>
         </div>
       </div>
       <span className="text-right tabular text-[13.5px] font-semibold text-white">{m.kcal ? nf0.format(m.kcal) : ""}</span>

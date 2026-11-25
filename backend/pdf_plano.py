@@ -72,14 +72,29 @@ def _plural(medida: str, qtd: float) -> str:
               (r"^xícara", "xícaras"), (r"^copo", "copos"), (r"^pedaço", "pedaços"), (r"^escumadeira", "escumadeiras"),
               (r"^porção", "porções"), (r"^filé", "filés"), (r"^bife", "bifes"), (r"^pote", "potes")]
     ml = m.lower()
+    adjetivos = {"médio": "médios", "medio": "médios", "média": "médias", "grande": "grandes", "pequeno": "pequenos",
+                 "pequena": "pequenas", "americano": "americanos", "cheia": "cheias", "cheio": "cheios", "rasa": "rasas", "raso": "rasos"}
     for rx, sub in trocas:
         if re.match(rx, ml):
-            return re.sub(rx, sub, ml, count=1)
+            ml = re.sub(rx, sub, ml, count=1)
+            return " ".join(adjetivos.get(w, w) for w in ml.split(" "))
     return ml
 
 
 def quantidade(item: dict) -> str:
     medida = str(item.get("medida_nome") or "")
+    # líquidos: "200 ml" ou "2 copos médios (480 ml)"
+    try:
+        q_ml = float(item.get("quantidade") or 0)
+    except (TypeError, ValueError):
+        q_ml = 0
+    if medida.strip().lower() == "ml":
+        return f"{_num(q_ml)} ml"
+    m_ml = re.search(r"\((\d+(?:[.,]\d+)?)\s*ml\)", medida, re.I)
+    if m_ml:
+        unidade_ml = float(m_ml.group(1).replace(",", "."))
+        nome_medida = re.sub(r"\s*\(.*ml\)\s*$", "", medida, flags=re.I)
+        return f"{_num(q_ml)} {_plural(nome_medida, q_ml)} ({_num(q_ml * unidade_ml)} ml)"
     g = item.get("quantidade_g")
     try:
         g = float(g or 0)
