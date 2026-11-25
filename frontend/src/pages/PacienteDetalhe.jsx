@@ -15,6 +15,7 @@ import PrescricaoDietetica from "@/components/evonut/PrescricaoDietetica";
 import AnalisesDieteticas from "@/components/evonut/AnalisesDieteticas";
 import MarkdownView from "@/components/evonut/MarkdownView";
 import AnamneseBlocos from "@/components/evonut/AnamneseBlocos";
+import PrevisaoMacros from "@/components/evonut/PrevisaoMacros";
 import { abrirAnexo } from "@/lib/anamnese";
 
 // Ordem das abas definida pelo Rogério (print de referência).
@@ -118,8 +119,8 @@ export default function PacienteDetalhe() {
       {tab === "anamnese" && <Anamnese d={d} reload={reload} />}
       {tab === "ia" && <IATab d={d} reload={reload} />}
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
-      {tab === "gasto" && <GastoEnergetico d={d} reload={reload} />}
-      {tab === "macros" && <GastoEnergetico d={d} reload={reload} secaoInicial="macros" />}
+      {tab === "gasto" && <GastoEnergetico d={d} reload={reload} onIrMacros={() => setTab("macros")} />}
+      {tab === "macros" && <PrevisaoMacros d={d} reload={reload} onIrGasto={() => setTab("gasto")} />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
       {tab === "adequacao" && <AnalisesDieteticas d={d} />}
       {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} onAbrirAnamnese={() => { setTab("anamnese"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}

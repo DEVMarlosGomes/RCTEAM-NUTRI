@@ -20,9 +20,17 @@ export function planejamentoDaMeta(meta, peso) {
   if (!kcal) return null;
   const p = num(peso);
   const g = meta.macros_g || {};
-  const ptn = num(g.proteinas) || (p ? num(meta.ptn_gkg) * p : 0);
-  const lip = num(g.lipidios) || (p ? num(meta.lip_gkg) * p : 0);
-  const cho = num(g.carboidratos) || (p && meta.cho_modo === "gkg" ? num(meta.cho_gkg) * p : (kcal - ptn * 4 - lip * 9) / 4);
+  let ptn, cho, lip;
+  if (meta.lip_completa && p) {
+    // Previsão de Macros: P e C em g/kg, o lipídio completa a meta
+    ptn = num(meta.ptn_gkg) * p;
+    cho = num(meta.cho_gkg) * p;
+    lip = Math.max(0, (kcal - ptn * 4 - cho * 4) / 9);
+  } else {
+    ptn = num(g.proteinas) || (p ? num(meta.ptn_gkg) * p : 0);
+    lip = num(g.lipidios) || (p ? num(meta.lip_gkg) * p : 0);
+    cho = num(g.carboidratos) || (p && meta.cho_modo === "gkg" ? num(meta.cho_gkg) * p : (kcal - ptn * 4 - lip * 9) / 4);
+  }
   return {
     kcal: Math.round(kcal),
     pct_cho: Math.round((cho * 4 * 100) / kcal),
@@ -32,6 +40,8 @@ export function planejamentoDaMeta(meta, peso) {
     cho_gkg: p ? r1(cho / p) : "",
     ptn_gkg: p ? r1(ptn / p) : "",
     lip_gkg: p ? r1(lip / p) : "",
+    // distribuição calórica por refeição (Previsão de Macros): vai junto com a dieta e com o modelo de dieta
+    distribuicao: Array.isArray(meta.distribuicao) ? meta.distribuicao : [],
   };
 }
 
