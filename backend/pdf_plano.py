@@ -327,3 +327,80 @@ def html_plano(paciente: dict, plano: dict, opcoes: Optional[dict] = None, hoje:
             corpo += f'<div class="oc"><span class="ic">{_esc(letra)}</span><span class="tt">{_esc(nome_t)}</span><ul>{itens}</ul></div>'
         corpo += "</div>"
     return f'<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"/><style>{CSS}</style></head><body>{corpo}</body></html>'
+
+
+# ── Relatório "Sua evolução" (Comparativo), no mesmo visual do plano ───────
+_INDICADORES_EVOL = [
+    ("Peso", lambda e: e.get("peso"), "kg"),
+    ("% de gordura", lambda e: (e.get("composicao") or {}).get("pct_gordura"), "%"),
+    ("Massa magra", lambda e: (e.get("composicao") or {}).get("massa_magra"), "kg"),
+    ("Massa gorda", lambda e: (e.get("composicao") or {}).get("massa_gorda"), "kg"),
+    ("Cintura", lambda e: (e.get("perimetria") or {}).get("cintura"), "cm"),
+    ("Abdômen", lambda e: (e.get("perimetria") or {}).get("abdomen"), "cm"),
+    ("Quadril", lambda e: (e.get("perimetria") or {}).get("quadril"), "cm"),
+    ("Braço contraído", lambda e: (e.get("perimetria") or {}).get("braco_contraido_d"), "cm"),
+    ("Coxa", lambda e: (e.get("perimetria") or {}).get("coxa_d"), "cm"),
+]
+
+
+def _data_aval(e: dict) -> str:
+    v = str(e.get("data_avaliacao") or e.get("created_at") or "")[:10]
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", v)
+    return f"{m.group(3)}/{m.group(2)}/{m.group(1)}" if m else "—"
+
+
+def html_evolucao(paciente: dict, a: dict, b: dict, fotos: Optional[list] = None, hoje: Optional[datetime] = None) -> str:
+    hoje = hoje or datetime.now()
+    hip = bool(re.search(r"hipertrof|ganho|massa|bulking", str(paciente.get("objetivo") or ""), re.I))
+    bom_sobe = {"Peso": hip, "% de gordura": False, "Massa magra": True, "Massa gorda": False, "Cintura": False,
+                "Abdômen": False, "Quadril": None, "Braço contraído": True, "Coxa": True}
+    linhas = ""
+    destaques = []
+    for rot, fn, un in _INDICADORES_EVOL:
+        try:
+            va, vb = fn(a), fn(b)
+            va = float(va) if va not in (None, "") else None
+            vb = float(vb) if vb not in (None, "") else None
+        except (TypeError, ValueError):
+            va = vb = None
+        if va is None and vb is None:
+            continue
+        d = (vb - va) if va is not None and vb is not None else None
+        seta = "—" if d is None or abs(d) < 0.05 else ("▲" if d > 0 else "▼")
+        sentido = bom_sobe.get(rot)
+        cor = "#111"
+        if d is not None and abs(d) >= 0.05 and sentido is not None:
+            cor = "#0a8f4e" if (d > 0) == sentido else "#d64545"
+            if (d > 0) == sentido:
+                destaques.append(f"{rot}: {'+' if d > 0 else '−'}{_num(abs(d))} {un}")
+        fa = f"{_num(va)} {un}" if va is not None else "não medido"
+        fb = f"{_num(vb)} {un}" if vb is not None else "não medido"
+        fd = f"{_num(abs(d))} {un}" if d is not None else ""
+        linhas += (f"<tr><td>{_esc(rot)}</td><td class='q'>{fa}</td><td class='q'>{fb}</td>"
+                   f"<td class='q' style='color:{cor}'>{seta} {fd}</td></tr>")
+    nome = paciente.get("nome") or ""
+    logo = f"<img class=logo src={LOGO_BRANCO} />" if LOGO_BRANCO else "<b>ROGÉRIO COSTA</b>"
+    corpo = f'<div class="cab-str">SUA EVOLUÇÃO · {_esc(nome.upper())}</div>'
+    corpo += (f'<div class="topo"><table><tr><td>{logo}</td>'
+              f'<td class="pa">SUA EVOLUÇÃO<div class="data">{hoje.strftime("%d/%m/%Y")}</div></td></tr></table></div>')
+    objetivo = f" · {_esc(paciente.get('objetivo'))}" if paciente.get("objetivo") else ""
+    corpo += (f'<div class="para"><div class="rot">Relatório de</div><div class="nome">{_esc(nome)}</div>'
+              f'<div class="obj">{_data_aval(a)} → {_data_aval(b)}{objetivo}</div></div>')
+    if destaques:
+        corpo += ('<div class="resumo"><div style="font-family:Montserrat,Arial;font-weight:800;letter-spacing:1pt;font-size:9pt;color:#0081FD">CONQUISTAS</div>'
+                  + "".join(f'<div style="font-size:12pt;font-weight:700;margin-top:1.5mm">{_esc(x)}</div>' for x in destaques[:4]) + "</div>")
+    corpo += (f'<div class="ref"><div class="h"><span class="nome">Comparativo</span></div><table class="al">'
+              f'<tr><td><b>Indicador</b></td><td class="q">{_data_aval(a)}</td><td class="q">{_data_aval(b)}</td><td class="q">Diferença</td></tr>'
+              f'{linhas}</table></div>')
+    por = {(f.get("avaliacao_id"), f.get("pose")): f.get("data_url") for f in (fotos or [])}
+    if any(por.get((x["id"], pose)) for x in (a, b) for pose in ("frente", "lado", "costas")):
+        celulas = ""
+        for pose, rot in (("frente", "Frente"), ("lado", "Lado"), ("costas", "Costas")):
+            for x in (a, b):
+                url = por.get((x["id"], pose))
+                img = f'<img src="{url}" style="width:100%;border-radius:2mm"/>' if url else '<div style="height:30mm;background:#f2f2f2;border-radius:2mm"></div>'
+                celulas += (f'<td style="width:16.6%;padding:1mm;vertical-align:top;text-align:center;font-size:7.5pt;color:#666">'
+                            f"{img}{rot} · {_data_aval(x)}</td>")
+        corpo += f'<div class="ref" style="padding:3mm"><div class="nome" style="margin-bottom:2mm">FOTOS</div><table style="width:100%"><tr>{celulas}</tr></table></div>'
+    corpo += '<p style="margin-top:6mm;font-size:9.5pt;color:#444">Continue firme no plano. Qualquer dúvida, é só chamar no WhatsApp.</p>'
+    return f'<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"/><style>{CSS}</style></head><body>{corpo}</body></html>'

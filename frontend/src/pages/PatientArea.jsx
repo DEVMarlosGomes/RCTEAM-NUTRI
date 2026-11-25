@@ -48,12 +48,12 @@ export default function PatientArea() {
   const [loadingDiet, setLoadingDiet] = useState(true);
   const [baixandoPlano, setBaixandoPlano] = useState(false);
   // "Baixar plano em PDF": sempre a versão mais nova que o nutricionista liberou
-  const baixarPlano = async () => {
+  const baixarPlano = async (tipo = "plano") => {
     setBaixandoPlano(true);
     try {
-      const r = await api.get("/patient/diet/pdf", { responseType: "blob" });
+      const r = await api.get(tipo === "evolucao" ? "/patient/evolucao/pdf" : "/patient/diet/pdf", { responseType: "blob" });
       const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
-      const a = document.createElement("a"); a.href = url; a.download = "meu-plano-alimentar.pdf";
+      const a = document.createElement("a"); a.href = url; a.download = tipo === "evolucao" ? "minha-evolucao.pdf" : "meu-plano-alimentar.pdf";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => window.URL.revokeObjectURL(url), 60000);
     } catch (e) {
@@ -167,7 +167,10 @@ export default function PatientArea() {
         {tab === "diet" && (
           <div data-testid="patient-diet-panel" className="animate-fade-up">
             <div className="mb-4 flex justify-end">
-              <button type="button" onClick={baixarPlano} disabled={baixandoPlano} className="rc-btn-primary h-11" data-testid="baixar-plano-pdf">
+              <button type="button" onClick={() => baixarPlano("evolucao")} disabled={baixandoPlano} className="rc-btn-secondary h-11 mr-2" data-testid="baixar-evolucao-pdf">
+                <Download className="w-4 h-4" /> Baixar minha evolução
+              </button>
+              <button type="button" onClick={() => baixarPlano("plano")} disabled={baixandoPlano} className="rc-btn-primary h-11" data-testid="baixar-plano-pdf">
                 {baixandoPlano ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Baixar plano em PDF
               </button>
             </div>

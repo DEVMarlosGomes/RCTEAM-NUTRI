@@ -7016,6 +7016,12 @@ async def patient_diet_pdf(user=Depends(require_patient)):
     return await _dieta_router.pdf_plano_do_aluno(user.get("patient_id"))
 
 
+@api.get("/patient/evolucao/pdf")
+async def patient_evolucao_pdf(user=Depends(require_patient)):
+    """App do aluno: relatório "Sua evolução" que o nutricionista enviou (ou primeira × última avaliação)."""
+    return await _dieta_router.evolucao_do_aluno(user.get("patient_id"))
+
+
 api.include_router(_dieta_router)
 app.include_router(api)
 _frontend_urls = [

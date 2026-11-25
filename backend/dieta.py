@@ -825,6 +825,49 @@ table {{ width: 100%; border-collapse: collapse; }}
 
     router.pdf_plano_do_aluno = pdf_plano_do_aluno
 
+    async def _evolucao_bytes(pid: str, ida: Optional[str], idb: Optional[str]) -> Response:
+        paciente = await db.patients.find_one({"id": pid}, {"_id": 0})
+        if not paciente:
+            raise HTTPException(404, "Paciente não encontrado")
+        avals = await db.evaluations.find({"paciente_id": pid}, {"_id": 0}).to_list(None)
+        avals.sort(key=lambda e: str(e.get("data_avaliacao") or e.get("created_at") or ""))
+        if len(avals) < 2:
+            raise HTTPException(400, "São precisas duas avaliações para o relatório")
+        a = next((e for e in avals if e["id"] == ida), avals[0])
+        b = next((e for e in avals if e["id"] == idb), avals[-1])
+        fotos = await db.avaliacao_fotos.find({"paciente_id": pid, "avaliacao_id": {"$in": [a["id"], b["id"]]}}, {"_id": 0}).to_list(None)
+        html_str = pdf_plano.html_evolucao(paciente, a, b, fotos, hoje=datetime.now(h.TZ_BR))
+        return _pdf(html_str, f"evolucao_{(paciente.get('nome') or 'paciente').replace(' ', '_')}.pdf")
+
+    @router.get("/patients/{pid}/relatorios/evolucao")
+    async def pdf_evolucao(pid: str, a: Optional[str] = None, b: Optional[str] = None, user=Depends(require_nutritionist)):
+        await _paciente(pid, user)
+        return await _evolucao_bytes(pid, a, b)
+
+    class EvolucaoAppIn(BaseModel):
+        a: str
+        b: str
+
+    @router.post("/patients/{pid}/evolucao/enviar-app")
+    async def evolucao_enviar_app(pid: str, payload: EvolucaoAppIn, user=Depends(require_nutritionist)):
+        await _paciente(pid, user)
+        agora = h.iso(h.now_utc())
+        await db.patients.update_one({"id": pid}, {"$set": {"evolucao_app": {"a": payload.a, "b": payload.b, "enviado_em": agora}}})
+        pu = await db.users.find_one({"role": "patient", "patient_id": pid}, {"_id": 0})
+        await db.patient_messages.insert_one({
+            "id": str(uuid.uuid4()), "session_id": f"patient-{pu['id']}" if pu else f"patient-pending-{pid}",
+            "user_id": (pu or {}).get("id"), "patient_id": pid, "role": "assistant", "kind": "evolucao_pdf",
+            "content": "📈 Seu relatório “Sua evolução” está no app. Em “Minha dieta”, toque em “Baixar minha evolução”.",
+            "created_at": agora})
+        return {"ok": True}
+
+    async def evolucao_do_aluno(pid: str) -> Response:
+        p = await db.patients.find_one({"id": pid}, {"_id": 0, "evolucao_app": 1}) or {}
+        env = p.get("evolucao_app") or {}
+        return await _evolucao_bytes(pid, env.get("a"), env.get("b"))
+
+    router.evolucao_do_aluno = evolucao_do_aluno
+
     @router.get("/patients/{pid}/relatorios/dieta/{pmid}/nutrientes")
     async def pdf_nutrientes(pid: str, pmid: str, user=Depends(require_nutritionist)):
         paciente, plano, nutri = await _carregar(pid, pmid, user)

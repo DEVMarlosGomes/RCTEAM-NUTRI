@@ -7,6 +7,8 @@ import useDietaConfig from "./dieta/useDietaConfig";
 import { nf, nf0, novaRefeicao, novoItem, num, totaisDia } from "./dieta/calculos";
 import { payloadDoRecordatorio, pesoDoPaciente, planejamentoDaMeta } from "./dieta/plano";
 import { Pizza } from "./PrevisaoMacros";
+import PreferenciasGaveta, { PreferenciasContext, preferenciasDe, usePreferenciasGaveta } from "./dieta/PreferenciasGaveta";
+import { carregarEstrutura } from "@/lib/anamnese";
 
 /**
  * Recordatório 24 h com o mesmo editor da Prescrição (item 13 dos ajustes): "Consumo do dia" no topo com pizza,
@@ -107,6 +109,10 @@ export default function RecordatorioDia({ d, reload, onIrPrescricao }) {
   const [salvando, setSalvando] = useState(false);
   const [usando, setUsando] = useState(false);
   const peso = pesoDoPaciente(d);
+  const gaveta = usePreferenciasGaveta();
+  const [estruturaForm, setEstruturaForm] = useState(null);
+  useEffect(() => { carregarEstrutura().then(setEstruturaForm).catch(() => {}); }, []);
+  const preferencias = useMemo(() => preferenciasDe(d.anamnese_v2), [d.anamnese_v2]);
   const planejamento = useMemo(() => planejamentoDaMeta(d.patient.meta_energetica, peso) || {}, [d.patient.meta_energetica, peso]);
 
   const abrir = async (rec) => {
@@ -206,6 +212,8 @@ export default function RecordatorioDia({ d, reload, onIrPrescricao }) {
           </button>
         )} />
 
+      <PreferenciasContext.Provider value={preferencias}>
+      <div className={gaveta.fixada ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px] items-start" : ""}>
       <section className="rc-card p-4 sm:p-5 min-w-0">
         <div className="flex flex-wrap items-end gap-3 mb-4">
           <label className="block">
@@ -237,6 +245,10 @@ export default function RecordatorioDia({ d, reload, onIrPrescricao }) {
           <div className="mt-5 pt-4 border-t border-white/[0.06]"><button type="button" onClick={remover} className="rc-btn-secondary"><Trash2 className="w-4 h-4" /> Remover</button></div>
         )}
       </section>
+      {gaveta.fixada && <PreferenciasGaveta paciente={d.patient} anamnese={d.anamnese_v2} estrutura={estruturaForm} estado={gaveta} />}
+      </div>
+      {!gaveta.fixada && <PreferenciasGaveta paciente={d.patient} anamnese={d.anamnese_v2} estrutura={estruturaForm} estado={gaveta} />}
+      </PreferenciasContext.Provider>
     </div>
   );
 }

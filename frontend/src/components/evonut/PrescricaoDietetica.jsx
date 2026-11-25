@@ -8,7 +8,8 @@ import { termosRestritos } from "./dieta/grupos";
 import GerarPdfDialogo from "./dieta/GerarPdfDialogo";
 import OutrasOpcoes from "./dieta/OutrasOpcoes";
 import ImportarDieta from "./dieta/ImportarDieta";
-import AlimentacaoPaciente, { usePainelAlimentacao } from "./dieta/AlimentacaoPaciente";
+import PreferenciasGaveta, { PreferenciasContext, preferenciasDe, usePreferenciasGaveta } from "./dieta/PreferenciasGaveta";
+import { carregarEstrutura } from "@/lib/anamnese";
 import ModelosDietaModal, { SalvarModeloDialogo } from "./dieta/ModelosDietaModal";
 import ObservacoesDieta from "./dieta/ObservacoesDieta";
 import DonatoPanel from "./dieta/DonatoPanel";
@@ -69,7 +70,10 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
   const [importar, setImportar] = useState(false);
   const [gerarPdf, setGerarPdf] = useState(false);
   const [donato, setDonato] = useState(false);
-  const [alimentacao, setAlimentacao] = usePainelAlimentacao();
+  const gaveta = usePreferenciasGaveta();
+  const [estruturaForm, setEstruturaForm] = useState(null);
+  useEffect(() => { carregarEstrutura().then(setEstruturaForm).catch(() => {}); }, []);
+  const preferencias = useMemo(() => preferenciasDe(d.anamnese_v2), [d.anamnese_v2]);
   const [modelosDieta, setModelosDieta] = useState(false);
 
   const dRef = useRef(d);
@@ -275,7 +279,8 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
 
       <BarraTotal refeicoes={draft.refeicoes} peso={peso} planejamento={draft.planejamento} onOutrasOpcoes={() => setOutras("vitaminas")} />
 
-      <div>
+      <PreferenciasContext.Provider value={preferencias}>
+      <div className={gaveta.fixada ? "grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px] items-start" : ""}>
         <section className="rc-card p-4 sm:p-5 min-w-0">
           {/* Objetivo + titulo + acoes da dieta */}
           <div className="flex flex-wrap items-end gap-3 mb-5">
@@ -293,7 +298,7 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
               <AcaoTopo titulo="Nova dieta em branco" rotulo="Nova" onClick={novaDieta}><FilePlus2 className="w-5 h-5" /></AcaoTopo>
               <AcaoTopo titulo="Duplicar dieta" rotulo="Duplicar" onClick={() => setPrompt({ tipo: "duplicar" })}><Copy className="w-5 h-5" /></AcaoTopo>
               <AcaoTopo titulo="Salvar dieta como modelo" rotulo="Salvar modelo" onClick={() => setPrompt({ tipo: "modeloDieta" })}><Star className="w-5 h-5" /></AcaoTopo>
-              <AcaoTopo titulo="Alimentação do paciente (respostas da anamnese)" rotulo="Alimentação" onClick={() => setAlimentacao(!alimentacao)} ativo={alimentacao}><Utensils className="w-5 h-5" /></AcaoTopo>
+              <AcaoTopo titulo="Preferências do paciente (não come, gosta, rotina)" rotulo="Preferências" onClick={() => gaveta.abrir()} ativo={gaveta.aberta}><Utensils className="w-5 h-5" /></AcaoTopo>
             </div>
           </div>
 
@@ -331,7 +336,10 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
             {sujo && <span className="text-[12.5px] text-rc-amber ml-1">Alterações não salvas</span>}
           </div>
         </section>
+        {gaveta.fixada && <PreferenciasGaveta paciente={d.patient} anamnese={d.anamnese_v2} estrutura={estruturaForm} estado={gaveta} />}
       </div>
+      {!gaveta.fixada && <PreferenciasGaveta paciente={d.patient} anamnese={d.anamnese_v2} estrutura={estruturaForm} estado={gaveta} />}
+      </PreferenciasContext.Provider>
 
       {gerarPdf && <GerarPdfDialogo pid={pid} titulo={draft.titulo} garantirSalvo={garantirSalvo} onClose={() => setGerarPdf(false)} />}
       {importar && <ImportarDieta d={d} onImportado={aposImportar} onClose={() => setImportar(false)} />}
@@ -339,7 +347,7 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
         <ModelosDietaModal pid={pid} draft={draft} categorias={config.categorias_modelos || []}
           onAplicado={(id) => { setModelosDieta(false); aposImportar(id); }} onClose={() => setModelosDieta(false)} />
       )}
-      {alimentacao && <AlimentacaoPaciente pacienteId={pid} onClose={() => setAlimentacao(false)} onEditar={() => onAbrirAnamnese?.()} />}
+
       {estatistica && <EstatisticaRefeicaoModal pid={pid} bloco={estatistica.bloco} titulo={estatistica.titulo} peso={peso} onClose={() => setEstatistica(null)} />}
       {outras && (
         <OutrasOpcoes

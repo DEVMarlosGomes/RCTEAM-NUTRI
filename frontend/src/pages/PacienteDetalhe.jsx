@@ -20,22 +20,19 @@ import { abrirAnexo } from "@/lib/anamnese";
 import SeletorObjetivos from "@/components/evonut/SeletorObjetivos";
 import FormularioStatus from "@/components/evonut/FormularioStatus";
 import DrHouseResultado from "@/components/evonut/DrHouseResultado";
+import Comparativo from "@/components/evonut/Comparativo";
 
-// Abas em dois grupos (ajustes do Rogério): Avaliação | Plano — nada fica escondido.
-const GRUPOS_TABS = [
-  ["Avaliação", [
-    { k: "anamnese", l: "Anamnese", icon: FileText },
-    { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
-    { k: "exames", l: "Exames", icon: FlaskConical },
-    { k: "antropometria", l: "Antropometria", icon: Activity },
-    { k: "comparativo", l: "Comparativo", icon: Sparkles },
-  ]],
-  ["Plano", [
-    { k: "gasto", l: "Gasto energético", icon: Zap },
-    { k: "macros", l: "Macros", icon: PieChart },
-    { k: "plano", l: "Prescrição", icon: Utensils },
-    { k: "lembretes", l: "Lembretes", icon: BellRing },
-  ]],
+// Abas numa linha só, numeradas na ordem do atendimento (ajuste pac1 do Rogério).
+const TABS = [
+  { k: "anamnese", l: "Anamnese", icon: FileText },
+  { k: "exames", l: "Exames", icon: FlaskConical },
+  { k: "recordatorio", l: "Recordatório", icon: ClipboardList },
+  { k: "antropometria", l: "Antropometria", icon: Activity },
+  { k: "gasto", l: "Gasto", icon: Zap },
+  { k: "macros", l: "Macros", icon: PieChart },
+  { k: "plano", l: "Prescrição", icon: Utensils },
+  { k: "lembretes", l: "Lembretes", icon: BellRing },
+  { k: "comparativo", l: "Comparativo", icon: Sparkles },
 ];
 
 export default function PacienteDetalhe() {
@@ -105,17 +102,13 @@ export default function PacienteDetalhe() {
 
       <nav className="sticky top-14 md:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10 mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]" aria-label="Seções do paciente">
         <div role="tablist" className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {GRUPOS_TABS.map(([grupo, tabs], gi) => (
-            <React.Fragment key={grupo}>
-              <span className={`shrink-0 text-[10.5px] uppercase tracking-[0.16em] text-gray-500 pr-1 ${gi ? "pl-3 ml-2 border-l border-white/[0.08]" : ""}`}>{grupo}</span>
-              {tabs.map((t) => (
-                <button key={t.k} role="tab" aria-selected={tab === t.k} data-testid={`tab-${t.k}`} onClick={() => setTab(t.k)}
-                  className={`relative shrink-0 inline-flex items-center gap-2 h-12 px-3 text-[13.5px] transition-colors duration-150 ${tab === t.k ? "text-white font-medium" : "text-gray-400 hover:text-gray-100"}`}>
-                  <t.icon className={`w-4 h-4 ${tab === t.k ? "text-rc-lime" : ""}`} strokeWidth={1.75} /> {t.l}
-                  <span aria-hidden className={`absolute left-2 right-2 -bottom-px h-[2px] rounded-full bg-rc-lime transition-transform duration-200 ease-out origin-center ${tab === t.k ? "scale-x-100" : "scale-x-0"}`} />
-                </button>
-              ))}
-            </React.Fragment>
+          {TABS.map((t, n) => (
+            <button key={t.k} role="tab" aria-selected={tab === t.k} data-testid={`tab-${t.k}`} onClick={() => setTab(t.k)}
+              className={`relative shrink-0 inline-flex items-center gap-1.5 h-12 px-2.5 text-[13.5px] transition-colors duration-150 ${tab === t.k ? "text-white font-medium" : "text-gray-400 hover:text-gray-100"}`}>
+              <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold tabular ${tab === t.k ? "bg-rc-lime text-rc-ink" : "bg-white/[0.06] text-gray-400"}`}>{n + 1}</span>
+              {t.l}
+              <span aria-hidden className={`absolute left-2 right-2 -bottom-px h-[2px] rounded-full bg-rc-lime transition-transform duration-200 ease-out origin-center ${tab === t.k ? "scale-x-100" : "scale-x-0"}`} />
+            </button>
           ))}
         </div>
       </nav>
@@ -131,7 +124,7 @@ export default function PacienteDetalhe() {
       {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} onAbrirAnamnese={() => { setTab("anamnese"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
       {tab === "recordatorio" && <RecordatorioDia d={d} reload={reload} onIrPrescricao={() => { setTab("plano"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
       {tab === "lembretes" && <NudgeManager patientId={d.patient.id} />}
-      {tab === "comparativo" && <Comparativo id={d.patient.id} objetivo={d.patient.objetivo} />}
+      {tab === "comparativo" && <Comparativo d={d} />}
       </div>
     </NutriLayout>
   );
@@ -2176,61 +2169,6 @@ function GastoEnergeticoLegado({ d }) {
 }
 
 // ── Recordatório ─────────────────────────────────────────────────
-
-function Comparativo({ id, objetivo }) {
-  const [rows, setRows] = useState([]);
-  useEffect(() => { api.get(`/patients/${id}/comparativo`).then((r) => setRows(r.data || [])); }, [id]);
-  if (rows.length < 2) return <div className="evo-card p-8 text-gray-400 text-sm">Cadastre ao menos duas avaliações para ver o comparativo.</div>;
-  const a = rows[rows.length - 2];
-  const b = rows[rows.length - 1];
-  const hipertrofia = /hipertrof|ganho|massa|bulking/i.test(objetivo || "");
-  // seta = sentido real da mudança (subiu ▲ / desceu ▼); cor = bom (verde) ou ruim (vermelho) para o objetivo
-  const item = (va, vb, melhorSobe) => {
-    if (va == null || vb == null) return { va, vb, dir: "—" };
-    const d = +(vb - va).toFixed(2);
-    if (d === 0) return { va, vb, d, dir: "eq", bom: null };
-    return { va, vb, d, dir: d > 0 ? "up" : "down", bom: melhorSobe == null ? null : (d > 0) === melhorSobe };
-  };
-  const c = (r, k) => r.composicao?.[k];
-  const items = [
-    { l: "Peso (kg)", r: item(a.peso, b.peso, hipertrofia) },
-    { l: "IMC", r: item(c(a, "imc"), c(b, "imc"), hipertrofia ? null : false) },
-    { l: "% Gordura", r: item(c(a, "pct_gordura"), c(b, "pct_gordura"), false) },
-    { l: "Massa Magra", r: item(c(a, "massa_magra"), c(b, "massa_magra"), true) },
-    { l: "Massa Gorda", r: item(c(a, "massa_gorda"), c(b, "massa_gorda"), false) },
-    { l: "TMB", r: item(c(a, "tmb_mifflin"), c(b, "tmb_mifflin"), null) },
-  ];
-  const modelos = new Set(rows.map((r) => r.modelo_avaliacao || "rc"));
-  return (
-    <div className="evo-card p-5">
-      <h3 className="evo-h3 mb-4">Comparativo evolutivo</h3>
-      {modelos.size > 1 && (
-        <p className="mb-4 rounded-lg bg-rc-amber/10 px-3 py-2 text-[12.5px] text-rc-amber" data-testid="aviso-modelos">
-          As avaliações usaram modelos diferentes (RC e Donatto): o % de gordura pode mudar só pela forma de calcular.
-        </p>
-      )}
-      <div className="grid sm:grid-cols-2 gap-4">
-        {items.map(({ l, r }) => {
-          const Icon = r.dir === "up" ? ArrowUp : r.dir === "down" ? ArrowDown : Minus;
-          const cl = r.bom === true ? "text-[#4ADE80]" : r.bom === false ? "text-evo-coral" : "text-gray-400";
-          return (
-            <div key={l} className="p-4 rounded-lg bg-evo-bg border border-white/[0.04] flex items-center justify-between" data-testid={`comp-${l}`}>
-              <div>
-                <div className="text-xs text-gray-500 uppercase tracking-wide">{l}</div>
-                <div className="text-sm text-gray-300 mt-1">{r.va ?? "—"} → <span className="font-semibold text-white">{r.vb ?? "—"}</span></div>
-              </div>
-              <div className={`flex items-center gap-1 ${cl} font-semibold text-sm`} data-dir={r.dir}>
-                <Icon className="w-4 h-4" />
-                {typeof r.d === "number" ? `${r.d > 0 ? "+" : ""}${String(r.d).replace(".", ",")}` : "—"}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 
 function Exames({ d, reload }) {
   const [subTab, setSubTab] = useState("pdf");

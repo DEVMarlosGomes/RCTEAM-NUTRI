@@ -10,6 +10,7 @@ import Combobox from "./Combobox";
 import Flutuante from "./Flutuante";
 import PainelTotais from "./PainelTotais";
 import PorcoesDialogo from "./PorcoesDialogo";
+import { PreferenciasContext, seloPreferencia } from "./PreferenciasGaveta";
 import {
   GruposContext, ROTULO_CRITERIO, gruposSemRestricoes, grupoDoItem, opcoesDoGrupo, porcaoEquivalente, substitutosDoGrupo, useGruposSubstituicao, valorCriterio,
 } from "./grupos";
@@ -324,6 +325,8 @@ function abreviar(medida, qtd) {
 function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, onChange, onInserir, onRemover, onMover, onEquivalentes, onArrastar, modoRecordatorio }) {
   const m = macrosDoItem(item);
   const grupos = useContext(GruposContext);
+  const preferencias = useContext(PreferenciasContext);
+  const selo = item.alimento_id ? seloPreferencia(item.nome || item.alimento_nome, preferencias) : null;
   const grupo = grupoDoItem(grupos, item);
   const tolerancia = num(grupo?.tolerancia_pct || 10);
   const [trocaAberta, setTrocaAberta] = useState(false);
@@ -408,9 +411,15 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
           </button>
         )}
       </div>
-      <BuscaAlimento id={`${bk}-${i}-nome`} item={item} tabelas={(config.tabelas_alimentos || []).join(",")} favoritos={favoritos} onFavoritar={onFavoritar}
-        onTexto={(t) => onChange({ nome: t })} onEscolher={escolherAlimento}
-        onEnterLivre={() => focar(`${bk}-${i}-${temCalculo && !ehGramas(item.medida_nome) ? "qtd" : "g"}`)} />
+      <div className="flex min-w-0 items-center gap-1.5">
+        <div className="min-w-0 flex-1">
+          <BuscaAlimento id={`${bk}-${i}-nome`} item={item} tabelas={(config.tabelas_alimentos || []).join(",")} favoritos={favoritos} onFavoritar={onFavoritar}
+            onTexto={(t) => onChange({ nome: t })} onEscolher={escolherAlimento}
+            onEnterLivre={() => focar(`${bk}-${i}-${temCalculo && !ehGramas(item.medida_nome) ? "qtd" : "g"}`)} />
+        </div>
+        {selo === "evita" && <span className="shrink-0 rounded-full bg-rc-amber/15 px-2 py-0.5 text-[10.5px] font-semibold text-rc-amber" data-testid={`${bk}-${i}-selo`} title="Está em Não come / evita nas preferências">cliente não gosta</span>}
+        {selo === "gosta" && <span className="shrink-0 rounded-full bg-[#4ADE80]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#4ADE80]" data-testid={`${bk}-${i}-selo`}>preferida</span>}
+      </div>
       {/* quantidade + medida + gramas numa célula só: "3 unid. · 150 g" */}
       <div className={`flex items-center gap-1 text-[13px] ${temCalculo ? "" : "opacity-40"}`}>
         {!ehGramas(item.medida_nome) && (
