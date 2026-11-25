@@ -4992,6 +4992,7 @@ class AlimentoPlanoItem(BaseModel):
     substituivel: bool = True
     substitutos: List[dict] = []
     observacao: Optional[str] = None
+    ajustavel: bool = False  # marcado com ⇅: o botão "Ajustar à meta" recalcula os gramas dele
 
 class OpcaoRefeicaoPlano(BaseModel):
     """Opcao "OU" de uma refeicao: nao entra no total do dia."""

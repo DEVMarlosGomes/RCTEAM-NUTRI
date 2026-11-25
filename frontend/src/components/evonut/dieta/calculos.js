@@ -120,6 +120,7 @@ export const itemDoSalvo = (item) => ({
   quantidade_g: item.quantidade_g ?? "",
   observacao: item.observacao || "",
   substitutos: item.substitutos || [],
+  ajustavel: !!item.ajustavel,
   _m100: m100DoItemSalvo(item),
   _medidas: item.medidas || [],
 });
@@ -137,6 +138,7 @@ export const itemParaSalvar = (item) => ({
   quantidade: num(item.quantidade),
   quantidade_g: num(item.quantidade_g),
   observacao: item.observacao || "",
+  ajustavel: !!item.ajustavel,
   substituivel: true,
   substitutos: (item.substitutos || []).filter((s) => s.alimento_id).map((s) => ({
     alimento_id: s.alimento_id,

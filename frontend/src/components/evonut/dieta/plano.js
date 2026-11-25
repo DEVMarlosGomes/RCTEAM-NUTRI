@@ -109,8 +109,13 @@ export function draftDoPlano(plano, d) {
       nome: r.nome || "",
       horario: r.horario || "",
       observacao: r.observacao || "",
+      meta_pct: r.meta_pct ?? null,
       opcoes: (r.opcoes || []).map((op) => ({ ...blocoDoSalvo(op), observacao: op.observacao || "" })),
     }));
+  const daMeta = planejamentoDaMeta(d.patient?.meta_energetica, peso);
+  let planejamento = plano.planejamento || daMeta || {};
+  // dietas salvas antes da distribuição por refeição usam a distribuição atual da Previsão de Macros
+  if (!(planejamento.distribuicao || []).length && (daMeta?.distribuicao || []).length) planejamento = { ...planejamento, distribuicao: daMeta.distribuicao };
   const recomendacoes = (plano.recomendacoes || []).length
     ? plano.recomendacoes
     : plano.observacoes ? [{ titulo: "", texto: plano.observacoes }] : [{ titulo: "", texto: "" }];
@@ -120,7 +125,7 @@ export function draftDoPlano(plano, d) {
     objetivo: plano.objetivo || "",
     estrategia: plano.estrategia || "",
     prescricao_dietetica: { peso, ...(plano.prescricao_dietetica || {}) },
-    planejamento: plano.planejamento || planejamentoDaMeta(d.patient?.meta_energetica, peso) || {},
+    planejamento,
     refeicoes: refeicoes.length ? refeicoes : [novaRefeicao()],
     recomendacoes,
     listas_substituicao: (plano.listas_substituicao || []).map((l) => ({ ...blocoDoSalvo(l), nome: l.nome || "" })),
@@ -146,6 +151,7 @@ export function payloadDoDraft(draft) {
     refeicoes: (draft.refeicoes || []).map((r) => ({
       nome: r.nome || "",
       horario: r.horario || "",
+      meta_pct: r.meta_pct === "" || r.meta_pct == null ? null : Number(r.meta_pct),
       ...bloco(r),
       opcoes: (r.opcoes || []).map(bloco),
     })),

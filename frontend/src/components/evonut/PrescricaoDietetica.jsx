@@ -3,8 +3,7 @@ import { Link } from "react-router-dom";
 import { Bot, ChevronLeft, ChevronRight, Copy, FileDown, FilePlus2, FolderInput, Loader2, Save, LibraryBig, Settings2, Star, Trash2, Utensils } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
-import EditorDieta, { LARGURA_MIN_EDITOR } from "./dieta/EditorDieta";
-import PainelTotais from "./dieta/PainelTotais";
+import EditorRefeicoes, { BarraTotal, LARGURA_EDITOR } from "./dieta/EditorRefeicoes";
 import OutrasOpcoes from "./dieta/OutrasOpcoes";
 import ImportarDieta from "./dieta/ImportarDieta";
 import AlimentacaoPaciente, { usePainelAlimentacao } from "./dieta/AlimentacaoPaciente";
@@ -54,7 +53,7 @@ async function abrirPdf(janela, url, nomeArquivo) {
  */
 export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
   const pid = d.patient.id;
-  const { config, recarregar } = useDietaConfig();
+  const { config, recarregar, salvar: salvarConfig } = useDietaConfig();
   const [planos, setPlanos] = useState(null);
   const [draft, setDraft] = useState(null);
   const [salvoJson, setSalvoJson] = useState("");
@@ -269,7 +268,9 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
 
       {donato && <DonatoPanel d={d} onApproved={() => aposImportar(null)} />}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_210px] items-start">
+      <BarraTotal refeicoes={draft.refeicoes} peso={peso} planejamento={draft.planejamento} onOutrasOpcoes={() => setOutras("vitaminas")} />
+
+      <div>
         <section className="rc-card p-4 sm:p-5 min-w-0">
           {/* Objetivo + titulo + acoes da dieta */}
           <div className="flex flex-wrap items-end gap-3 mb-5">
@@ -292,12 +293,21 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
           </div>
 
           <div className="overflow-x-auto -mx-1 px-1 pb-1">
-            <div className={LARGURA_MIN_EDITOR}>
-              <EditorDieta
+            <div className={LARGURA_EDITOR}>
+              <EditorRefeicoes
                 refeicoes={draft.refeicoes}
                 onChange={(refeicoes) => set("refeicoes", refeicoes)}
                 config={config}
                 modelos={modelos}
+                planejamento={draft.planejamento}
+                peso={peso}
+                favoritos={config.alimentos_favoritos || []}
+                onFavoritar={(f) => {
+                  const atuais = config.alimentos_favoritos || [];
+                  const tem = atuais.some((x) => x.id === f.id);
+                  salvarConfig({ alimentos_favoritos: tem ? atuais.filter((x) => x.id !== f.id) : [f, ...atuais] })
+                    .then(() => toast.success(tem ? `${f.nome} saiu dos favoritos.` : `${f.nome} nos favoritos.`)).catch(() => toast.error("Não foi possível salvar o favorito."));
+                }}
                 onSalvarModelo={(bloco, nomeRefeicao) => setPrompt({ tipo: "modeloRefeicao", bloco, sugestao: nomeRefeicao })}
                 onEstatistica={(bloco, titulo) => setEstatistica({ bloco, titulo })}
               />
@@ -315,8 +325,6 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
             {sujo && <span className="text-[12.5px] text-rc-amber ml-1">Alterações não salvas</span>}
           </div>
         </section>
-
-        <PainelTotais refeicoes={draft.refeicoes} peso={peso} planejamento={draft.planejamento} onOutrasOpcoes={() => setOutras("vitaminas")} />
       </div>
 
       {importar && <ImportarDieta d={d} onImportado={aposImportar} onClose={() => setImportar(false)} />}

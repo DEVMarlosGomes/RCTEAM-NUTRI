@@ -44,14 +44,16 @@ const groups = [
   },
 ];
 
-function NavItem({ link, onNavigate }) {
+function NavItem({ link, onNavigate, compacto }) {
   return (
     <NavLink
       to={link.to}
       data-testid={link.testid}
       onClick={onNavigate}
+      title={compacto ? link.label : undefined}
+      aria-label={compacto ? link.label : undefined}
       className={({ isActive }) =>
-        `group relative flex items-center gap-3 h-9 pl-3 pr-2 rounded-lg text-[13.5px] transition-colors duration-150 ${
+        `group relative flex items-center gap-3 h-9 ${compacto ? "justify-center px-0" : "pl-3 pr-2"} rounded-lg text-[13.5px] transition-colors duration-150 ${
           isActive
             ? "bg-white/[0.06] text-white font-medium"
             : "text-gray-400 hover:text-gray-100 hover:bg-white/[0.035]"
@@ -65,46 +67,48 @@ function NavItem({ link, onNavigate }) {
             className={`absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full bg-rc-lime transition-opacity duration-200 ${isActive ? "opacity-100" : "opacity-0"}`}
           />
           <link.icon className={`w-[17px] h-[17px] shrink-0 ${isActive ? "text-rc-lime" : "text-gray-500 group-hover:text-gray-300"}`} strokeWidth={1.75} />
-          <span className="truncate">{link.label}</span>
+          {!compacto && <span className="truncate">{link.label}</span>}
         </>
       )}
     </NavLink>
   );
 }
 
-function SidebarContent({ user, onLogout, onNavigate }) {
+function SidebarContent({ user, onLogout, onNavigate, compacto }) {
   return (
     <div className="flex flex-col h-full">
-      <Link to="/dashboard" onClick={onNavigate} className="flex items-center gap-3 px-5 h-16 shrink-0">
+      <Link to="/dashboard" onClick={onNavigate} className={`flex items-center gap-3 h-16 shrink-0 ${compacto ? "justify-center" : "px-5"}`} title={compacto ? "Painel" : undefined}>
         <RCLogo size={30} variant="blue" />
-        <div className="leading-none">
+        {!compacto && <div className="leading-none">
           <div className="font-display font-extrabold italic uppercase text-[15px] tracking-[0.01em] text-white" style={{ fontStretch: "75%" }}>
             Rogério Costa
           </div>
           <div className="text-[9.5px] uppercase tracking-[0.14em] text-gray-500 mt-1 whitespace-nowrap">Nutrição · Performance</div>
-        </div>
+        </div>}
       </Link>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Navegação principal">
+      <nav className={`flex-1 overflow-y-auto pb-4 ${compacto ? "px-2" : "px-3"}`} aria-label="Navegação principal">
         {groups.map((g, gi) => (
-          <div key={g.label} className={gi ? "mt-5 pt-4 border-t border-white/[0.05]" : "mt-2"}>
-            <div className="px-3 mb-1.5 text-[10.5px] uppercase tracking-[0.16em] text-gray-500">{g.label}</div>
+          <div key={g.label} className={gi ? `${compacto ? "mt-3 pt-3" : "mt-5 pt-4"} border-t border-white/[0.05]` : "mt-2"}>
+            {!compacto && <div className="px-3 mb-1.5 text-[10.5px] uppercase tracking-[0.16em] text-gray-500">{g.label}</div>}
             <div className="space-y-0.5">
-              {g.links.map((l) => <NavItem key={l.to} link={l} onNavigate={onNavigate} />)}
+              {g.links.map((l) => <NavItem key={l.to} link={l} onNavigate={onNavigate} compacto={compacto} />)}
             </div>
           </div>
         ))}
       </nav>
 
-      <div className="p-3 border-t border-white/[0.05]">
-        <div className="flex items-center gap-3 p-2 rounded-xl">
+      <div className={`border-t border-white/[0.05] ${compacto ? "p-2" : "p-3"}`}>
+        <div className={`flex items-center gap-3 rounded-xl ${compacto ? "flex-col p-1" : "p-2"}`}>
           <div className="w-9 h-9 rounded-[10px] bg-rc-raised text-rc-lime flex items-center justify-center font-display font-bold text-sm shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
             {(user?.name || "U").slice(0, 1).toUpperCase()}
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-medium text-gray-100 truncate">{user?.name || "Usuário"}</div>
-            <div className="text-[11px] text-gray-500 truncate">{user?.email}</div>
-          </div>
+          {!compacto && (
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-medium text-gray-100 truncate">{user?.name || "Usuário"}</div>
+              <div className="text-[11px] text-gray-500 truncate">{user?.email}</div>
+            </div>
+          )}
           <button
             data-testid="logout-button"
             onClick={onLogout}
@@ -120,7 +124,8 @@ function SidebarContent({ user, onLogout, onNavigate }) {
   );
 }
 
-export default function NutriLayout({ children }) {
+/** compacto: menu lateral recolhido (só ícones), para telas que precisam de largura (Prescrição, Recordatório). */
+export default function NutriLayout({ children, compacto = false }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -142,8 +147,8 @@ export default function NutriLayout({ children }) {
         Pular para o conteúdo
       </a>
 
-      <aside className="w-[248px] hidden md:block shrink-0 sticky top-0 h-[100dvh] bg-rc-black/40 border-r border-white/[0.05]">
-        <SidebarContent user={user} onLogout={handleLogout} />
+      <aside className={`${compacto ? "w-[64px]" : "w-[248px]"} hidden md:block shrink-0 sticky top-0 h-[100dvh] bg-rc-black/40 border-r border-white/[0.05] transition-[width] duration-200`} data-testid="menu-lateral">
+        <SidebarContent user={user} onLogout={handleLogout} compacto={compacto} />
       </aside>
 
       {/* Drawer mobile */}
@@ -182,7 +187,7 @@ export default function NutriLayout({ children }) {
             <LogOut className="w-4 h-4" />
           </button>
         </div>
-        <div className="px-4 py-5 sm:px-6 sm:py-7 lg:px-10 lg:py-9 max-w-[1440px] mx-auto animate-fade-in">{children}</div>
+        <div className={`px-4 py-5 sm:px-6 sm:py-7 ${compacto ? "lg:px-6 max-w-[1600px]" : "lg:px-10 max-w-[1440px]"} lg:py-9 mx-auto animate-fade-in`}>{children}</div>
       </main>
     </div>
   );

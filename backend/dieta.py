@@ -68,6 +68,7 @@ CONFIG_PADRAO: dict = {
     ],
     # categorias dos modelos de dieta (editáveis em Configurações da dieta)
     "categorias_modelos": ["Perda de gordura", "Ganho de massa muscular"],
+    "alimentos_favoritos": [],
 }
 _LISTAS_CONFIG = ("objetivos", "titulos", "nomes_refeicao", "observacoes_refeicao", "observacoes_alimento", "categorias_modelos")
 
@@ -102,6 +103,8 @@ class DietaConfigIn(BaseModel):
     observacoes_refeicao: Optional[List[str]] = None
     categorias_modelos: Optional[List[str]] = None
     observacoes_alimento: Optional[List[str]] = None
+    # favoritos da busca de alimentos (aparecem primeiro na Prescrição): {id, nome, macros_100g, ...}
+    alimentos_favoritos: Optional[List[dict]] = None
 
 
 class ItemModeloIn(BaseModel):
@@ -324,6 +327,19 @@ def build_dieta_router(db, require_nutritionist, h) -> APIRouter:
                 {"nome": str(r.get("nome") or "").strip()[:80], "horario": str(r.get("horario") or "").strip()[:20]}
                 for r in upd["refeicoes_padrao"][:12] if str(r.get("nome") or "").strip()
             ]
+        if "alimentos_favoritos" in upd:
+            favs, ids = [], set()
+            for f in upd["alimentos_favoritos"][:60]:
+                fid = str(f.get("id") or "").strip()
+                if not fid or fid in ids:
+                    continue
+                ids.add(fid)
+                m = f.get("macros_100g") if isinstance(f.get("macros_100g"), dict) else {}
+                favs.append({"id": fid, "nome": str(f.get("nome") or "").strip()[:200],
+                             "grupo_display": str(f.get("grupo_display") or "")[:80], "fonte": str(f.get("fonte") or "")[:40],
+                             "energia_kcal_100g": f.get("energia_kcal_100g"),
+                             "macros_100g": {k: m.get(k) for k in ("kcal", "cho", "ptn", "lip", "fib") if k in m}})
+            upd["alimentos_favoritos"] = favs
         upd["atualizado_em"] = h.iso(h.now_utc())
         await db.dieta_config.update_one({"nutricionista_id": user["id"]}, {"$set": upd}, upsert=True)
         return await _config(user["id"])

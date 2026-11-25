@@ -17,6 +17,7 @@ export const CONFIG_VAZIA = {
   observacoes_refeicao: [],
   observacoes_alimento: [],
   categorias_modelos: [],
+  alimentos_favoritos: [],
 };
 
 let cache = null;

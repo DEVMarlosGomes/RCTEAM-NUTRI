@@ -19,7 +19,7 @@ function Linha({ rotulo, pct, valor, meta, metaTexto, corValor }) {
 }
 
 /** "Total da dieta" fixo na lateral, como no NutriDiet. */
-export default function PainelTotais({ refeicoes, peso, planejamento, onOutrasOpcoes }) {
+export default function PainelTotais({ refeicoes, peso, planejamento, onOutrasOpcoes, embutido = false }) {
   const t = totaisDia(refeicoes);
   const ind = indicadores(t, peso);
   const pl = planejamento || {};
@@ -29,7 +29,7 @@ export default function PainelTotais({ refeicoes, peso, planejamento, onOutrasOp
   ];
 
   return (
-    <aside className="rc-card p-4 xl:sticky xl:top-20" aria-label="Total da dieta">
+    <aside className={embutido ? "" : "rc-card p-4 xl:sticky xl:top-20"} aria-label="Total da dieta">
       <div className="text-[11px] uppercase tracking-[0.16em] text-gray-500 text-center">Total da dieta</div>
       <div className="mt-2 text-center">
         <span className={`rc-num text-[40px] leading-none ${corMeta(t.kcal, pl.kcal)}`}>{nf0.format(t.kcal)}</span>
@@ -56,7 +56,7 @@ export default function PainelTotais({ refeicoes, peso, planejamento, onOutrasOp
         <span className="text-[13px] tabular font-medium text-white">{nf.format(ind.kcal_nao_ptn_gn)}</span>
       </div>
       <Linha rotulo="Fibras" valor={`${nf.format(t.fib)}g`} />
-      <button type="button" onClick={onOutrasOpcoes} className="rc-btn-primary w-full mt-3 h-9 text-[12.5px]">Outras opções</button>
+      {onOutrasOpcoes && <button type="button" onClick={onOutrasOpcoes} className="rc-btn-primary w-full mt-3 h-9 text-[12.5px]">Outras opções</button>}
     </aside>
   );
 }

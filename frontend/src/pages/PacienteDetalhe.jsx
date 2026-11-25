@@ -62,7 +62,7 @@ export default function PacienteDetalhe() {
   const iniciais = (p.nome || "P").trim().split(/\s+/).filter(Boolean);
 
   return (
-    <NutriLayout>
+    <NutriLayout compacto={tab === "plano" || tab === "recordatorio"}>
       <header className="rc-card mb-5 overflow-hidden">
         <div className="p-5 sm:p-7">
           <div className="flex items-start gap-4 sm:gap-5 min-w-0">
