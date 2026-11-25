@@ -20,6 +20,7 @@ export const CONFIG_VAZIA = {
   alimentos_favoritos: [],
   equivalentes_automaticos: true,
   modelo_avaliacao_padrao: "rc",
+  modelos_macros: [],
 };
 
 let cache = null;

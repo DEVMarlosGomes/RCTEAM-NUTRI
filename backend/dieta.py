@@ -74,6 +74,7 @@ CONFIG_PADRAO: dict = {
     "equivalentes_automaticos": True,
     "modelo_avaliacao_padrao": "rc",
     "protocolo_dobras_padrao": "pollock7",
+    "modelos_macros": [],
     # perímetros que já aparecem na Nova avaliação (o resto fica em "+ outras medidas"); A CONFIRMAR
     "medidas_padrao": ["braco_contraido", "cintura", "abdomen", "quadril", "coxa", "panturrilha"],
 }
@@ -117,6 +118,7 @@ class DietaConfigIn(BaseModel):
     modelo_avaliacao_padrao: Optional[str] = None
     medidas_padrao: Optional[List[str]] = None
     protocolo_dobras_padrao: Optional[str] = None
+    modelos_macros: Optional[List[dict]] = None
 
 
 class ItemModeloIn(BaseModel):

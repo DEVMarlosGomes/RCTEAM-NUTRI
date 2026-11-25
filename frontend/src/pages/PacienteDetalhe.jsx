@@ -118,7 +118,7 @@ export default function PacienteDetalhe() {
       {tab === "ia" && <IATab d={d} reload={reload} />}
       {tab === "antropometria" && <Antropometria d={d} reload={reload} />}
       {tab === "gasto" && <GastoEnergetico d={d} reload={reload} onIrMacros={() => setTab("macros")} />}
-      {tab === "macros" && <PrevisaoMacros d={d} reload={reload} onIrGasto={() => setTab("gasto")} />}
+      {tab === "macros" && <PrevisaoMacros d={d} reload={reload} onIrGasto={() => setTab("gasto")} onIrPrescricao={() => { setTab("plano"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
       {tab === "exames" && <Exames d={d} reload={reload} />}
       {tab === "adequacao" && <AnalisesDieteticas d={d} />}
       {tab === "plano" && <PrescricaoDietetica d={d} reload={reload} onAbrirAnamnese={() => { setTab("anamnese"); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}

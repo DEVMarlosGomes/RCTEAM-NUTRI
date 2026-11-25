@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Plus, Save, Scale, X } from "lucide-react";
 import { toast } from "sonner";
+import ModelosMacros from "./ModelosMacros";
 import { api, formatApiError } from "@/lib/evo-api";
 import { pesoDoPaciente } from "./dieta/plano";
 import useDietaConfig from "./dieta/useDietaConfig";
@@ -80,11 +81,14 @@ function CampoMacro({ rotulo, cor, valor, onChange, modo, equivalencia, somenteL
   );
 }
 
-export default function PrevisaoMacros({ d, reload, onIrGasto }) {
+export default function PrevisaoMacros({ d, reload, onIrGasto, onIrPrescricao }) {
   const patient = d.patient;
   const meta = useMemo(() => patient.meta_energetica || {}, [patient.meta_energetica]);
   const { config } = useDietaConfig();
-  const kcal = num(meta.kcal_final);
+  // modelo de macros aplicado: a meta passa a ser kcal/kg do modelo × peso (salva como nova meta)
+  const [kcalModelo, setKcalModelo] = useState(null);
+  const [modeloNome, setModeloNome] = useState(meta.modelo_macros || null);
+  const kcal = kcalModelo ?? num(meta.kcal_final);
   const peso = num(pesoDoPaciente(d));
 
   // valores guardados em g/kg (compatível com metas antigas: carboidrato vinha de macros_g)
@@ -151,34 +155,52 @@ export default function PrevisaoMacros({ d, reload, onIrGasto }) {
     return { kcal: kcal != null ? kcal * f : null, ptn: ptnG != null ? ptnG * f : null, cho: choG != null ? choG * f : null, lip: lipG != null ? lipG * f : null };
   };
 
-  const salvar = async () => {
-    if (passou) { toast.error("Proteína + carboidrato passam da meta: ajuste antes de salvar."); return; }
+  const salvar = async (over = null) => {
+    // `over`: valores de um modelo recém-aplicado (o estado ainda não atualizou)
+    const k = over?.kcal ?? kcal;
+    const pg = over?.ptnGkg ?? ptnGkg;
+    const cg = over?.choGkg ?? choGkg;
+    const pG = peso ? pg * peso : null;
+    const cG = peso ? cg * peso : null;
+    const lG = k != null && pG != null && cG != null ? (k - pG * 4 - cG * 4) / 9 : null;
+    if (lG != null && lG < -0.5) { toast.error("Proteína + carboidrato passam da meta: ajuste antes de salvar."); return false; }
     setSalvando(true);
     try {
       await api.patch(`/patients/${patient.id}`, {
         meta_energetica: {
           ...meta,
+          ...(over?.kcal != null || kcalModelo != null ? { kcal_final: Math.round(k), modelo_macros: over?.nome || modeloNome } : {}),
           modo_macros: modo,
-          ptn_gkg: r1(ptnGkg * 100) / 100,
-          cho_gkg: r1(choGkg * 100) / 100,
+          ptn_gkg: r1(pg * 100) / 100,
+          cho_gkg: r1(cg * 100) / 100,
           cho_modo: "gkg",
-          lip_gkg: lipGkg != null ? Math.round(lipGkg * 100) / 100 : null,
+          lip_gkg: lG != null && peso ? Math.round((lG / peso) * 100) / 100 : null,
           lip_completa: true,
-          macros_g: { proteinas: ptnG != null ? r1(ptnG) : null, carboidratos: choG != null ? r1(choG) : null, lipidios: lipG != null ? r1(lipG) : null },
+          macros_g: { proteinas: pG != null ? r1(pG) : null, carboidratos: cG != null ? r1(cG) : null, lipidios: lG != null ? r1(Math.max(0, lG)) : null },
           distribuicao: distribuicao.map((r) => ({ nome: String(r.nome || "").trim(), pct: num(r.pct) || 0 })),
           atualizado_em: new Date().toISOString(),
         },
       });
       toast.success("Macros e distribuição salvos. A Prescrição usa essa meta por refeição.");
       reload?.();
+      return true;
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
+      return false;
     } finally {
       setSalvando(false);
     }
   };
 
-  if (kcal == null) {
+  const aplicarModelo = async (res, modelo, irPrescricao) => {
+    const l = Object.fromEntries(res.linhas.map((x) => [x.k, x]));
+    const pg = l.ptn.g / peso; const cg = l.cho.g / peso;
+    setKcalModelo(res.kcal); setPtnGkg(pg); setChoGkg(cg); setTextos({}); setModeloNome(modelo.nome);
+    toast.success(`Modelo ${modelo.nome} aplicado: ${fmt(res.kcal, 0)} kcal.`);
+    if (irPrescricao && (await salvar({ kcal: res.kcal, ptnGkg: pg, choGkg: cg, nome: modelo.nome }))) onIrPrescricao?.();
+  };
+
+  if (kcal == null && !peso) {
     return (
       <div className="evo-card p-8 text-center text-sm text-gray-400" data-testid="macros-sem-meta">
         Defina a meta calórica em Gasto Energético para prever os macros.
@@ -189,12 +211,19 @@ export default function PrevisaoMacros({ d, reload, onIrGasto }) {
 
   return (
     <div className="space-y-4" data-testid="previsao-macros">
+      <ModelosMacros peso={peso} objetivoPaciente={patient.objetivo} onAplicar={aplicarModelo} />
+      {kcal == null ? (
+        <div className="evo-card p-8 text-center text-sm text-gray-400" data-testid="macros-sem-meta">
+          Defina a meta calórica em Gasto Energético ou aplique um modelo acima.
+          {onIrGasto && <div className="mt-4"><button type="button" className="evo-btn-primary" onClick={onIrGasto}>Ir para Gasto Energético</button></div>}
+        </div>
+      ) : (<>
       <section className="evo-card p-5">
         <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
           <div>
             <h3 className="evo-h3">Previsão de macros</h3>
             <p className="mt-1 text-xs text-gray-500">
-              Meta {fmt(kcal, 0)} kcal/dia (Gasto Energético){peso ? ` · peso ${fmt(peso)} kg` : ""}. Proteína e carboidrato são digitados; o lipídio completa a meta.
+              Meta {fmt(kcal, 0)} kcal/dia ({kcalModelo != null || meta.modelo_macros ? `modelo ${modeloNome}` : "Gasto Energético"}){peso ? ` · peso ${fmt(peso)} kg` : ""}. Proteína e carboidrato são digitados; o lipídio completa a meta.
             </p>
           </div>
           <div role="group" aria-label="Unidade" className="inline-flex p-0.5 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.08]">
@@ -340,6 +369,7 @@ export default function PrevisaoMacros({ d, reload, onIrGasto }) {
           <Save className="h-4 w-4" />{salvando ? "Salvando…" : "Salvar macros e distribuição"}
         </button>
       </div>
+      </>)}
     </div>
   );
 }
