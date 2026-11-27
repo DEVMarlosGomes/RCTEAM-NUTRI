@@ -1,6 +1,6 @@
 import React from "react";
 
-export const MACRO_COLORS = { ptn: "#4DA6FF", cho: "#C3F53C", lip: "#FFB547" };
+export const MACRO_COLORS = { ptn: "#0081FD", cho: "#FFFFFF", lip: "#7FC0FF" };
 
 /**
  * Aneis concentricos de macronutrientes (proteina / carboidrato / gordura).

@@ -11,7 +11,7 @@ const AGENT_TINTS = {
   agent3: { label: "Suporte Paciente", color: "from-emerald-400/15 to-emerald-400/5" },
   donato: { label: "DONATO", color: "from-amber-400/20 to-rc-blue/10" },
   drhouse: { label: "DR. HOUSE", color: "from-red-400/20 to-cyan-400/5" },
-  vendas: { label: "Vendas · WhatsApp", color: "from-rc-lime/15 to-rc-blue/5" },
+  vendas: { label: "Vendas · WhatsApp", color: "from-rc-blue/15 to-rc-blue/5" },
 };
 
 export default function Agentes() {

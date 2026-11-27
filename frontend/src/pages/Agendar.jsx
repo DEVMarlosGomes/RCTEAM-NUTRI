@@ -257,7 +257,7 @@ export default function Agendar() {
 
         {reserva?.status === "confirmada" && (
           <div className="rc-card p-8 text-center" data-testid="confirmada">
-            <CheckCircle2 className="mx-auto h-10 w-10 text-rc-lime" />
+            <CheckCircle2 className="mx-auto h-10 w-10 text-rc-blue" />
             <h1 className="rc-h2 mt-3">Consulta confirmada</h1>
             <p className="mt-2 text-sm text-gray-300">{quandoBR(reserva.data_hora)} · {reserva.modalidade}. Você também recebe a confirmação no WhatsApp.</p>
             <p className="mt-4 text-sm text-gray-300">Agora preencha o formulário pré-consulta. Ele deixa a consulta mais rápida e certeira.</p>

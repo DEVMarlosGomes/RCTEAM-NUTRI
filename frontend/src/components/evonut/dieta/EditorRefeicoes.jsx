@@ -102,7 +102,7 @@ export function metaDaRefeicao(planejamento, peso, refeicao, indice) {
 export function situacaoMeta(total, meta) {
   if (!meta?.kcal) return null;
   const dif = total - meta.kcal;
-  if (Math.abs(dif) <= meta.kcal * 0.05) return { cor: "verde", texto: "meta atingida", barra: "bg-[#4ADE80]", txt: "text-[#4ADE80]" };
+  if (Math.abs(dif) <= meta.kcal * 0.05) return { cor: "verde", texto: "meta atingida", barra: "bg-[#3DDC84]", txt: "text-[#3DDC84]" };
   if (dif < 0) return { cor: "laranja", texto: `faltam ${nf0.format(-dif)} kcal`, barra: "bg-rc-amber", txt: "text-rc-amber" };
   return { cor: "vermelho", texto: `passou ${nf0.format(dif)} kcal`, barra: "bg-rc-coral", txt: "text-rc-coral" };
 }
@@ -435,7 +435,7 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
             onEnterLivre={() => focar(`${bk}-${i}-${temCalculo && !ehGramas(item.medida_nome) ? "qtd" : "g"}`)} />
         </div>
         {selo === "evita" && <span className="shrink-0 rounded-full bg-rc-amber/15 px-2 py-0.5 text-[10.5px] font-semibold text-rc-amber" data-testid={`${bk}-${i}-selo`} title="Está em Não come / evita nas preferências">cliente não gosta</span>}
-        {selo === "gosta" && <span className="shrink-0 rounded-full bg-[#4ADE80]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#4ADE80]" data-testid={`${bk}-${i}-selo`}>preferida</span>}
+        {selo === "gosta" && <span className="shrink-0 rounded-full bg-[#3DDC84]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#3DDC84]" data-testid={`${bk}-${i}-selo`}>preferida</span>}
       </div>
       {/* quantidade + medida + gramas numa célula só: "3 unid. · 150 g" */}
       <div className={`flex items-center gap-1 text-[13px] ${temCalculo ? "" : "opacity-40"}`}>
@@ -790,7 +790,7 @@ export function BarraTotal({ refeicoes, planejamento, peso, modoRecordatorio, on
             </div>
           )}
           {temMeta && !modoRecordatorio && (
-            <div className={`mt-1.5 text-[12.5px] tabular font-medium ${sit?.cor === "verde" ? "text-[#4ADE80]" : sit?.cor === "vermelho" ? "text-rc-coral" : "text-rc-amber"}`} data-testid="faltam-dia">
+            <div className={`mt-1.5 text-[12.5px] tabular font-medium ${sit?.cor === "verde" ? "text-[#3DDC84]" : sit?.cor === "vermelho" ? "text-rc-coral" : "text-rc-amber"}`} data-testid="faltam-dia">
               {t.kcal < dia.meta_kcal
                 ? `Faltam ${nf0.format(dia.meta_kcal - t.kcal)} kcal · P ${nf0.format(Math.max(0, falta(dia.meta_proteina_g, t.ptn) ?? 0))} g · C ${nf0.format(Math.max(0, falta(dia.meta_carboidrato_g, t.cho) ?? 0))} g · L ${nf0.format(Math.max(0, falta(dia.meta_lipidio_g, t.lip) ?? 0))} g`
                 : `Passou ${nf0.format(t.kcal - dia.meta_kcal)} kcal da meta`}

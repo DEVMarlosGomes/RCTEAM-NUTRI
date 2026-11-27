@@ -46,7 +46,7 @@ export function MensagensLembretes() {
                     </div>
                   </div>
                   {x.sem_resposta ? <span className={`rounded-full px-2.5 py-0.5 text-[11.5px] font-semibold ${dias >= 3 ? "bg-rc-amber/15 text-rc-amber" : "bg-white/[0.06] text-gray-300"}`}>sem resposta há {dias} {dias === 1 ? "dia" : "dias"}</span>
-                    : <span className="rounded-full bg-[#4ADE80]/15 px-2.5 py-0.5 text-[11.5px] font-semibold text-[#4ADE80]">respondeu</span>}
+                    : <span className="rounded-full bg-[#3DDC84]/15 px-2.5 py-0.5 text-[11.5px] font-semibold text-[#3DDC84]">respondeu</span>}
                   {link && <a href={link} target="_blank" rel="noopener noreferrer" className="rc-btn-ghost h-8 text-[12.5px]"><MessageCircle className="h-4 w-4" /> WhatsApp</a>}
                 </li>
               );
@@ -95,7 +95,7 @@ export function Formularios() {
                 <tr key={x.paciente_id} className="border-t border-white/[0.05]">
                   <td className="px-5 py-3"><Link to={`/pacientes/${x.paciente_id}`} className="font-semibold text-white hover:underline">{x.nome}</Link></td>
                   <td className="text-gray-300">{x.tipo === "retorno" ? "Retorno" : "Pré-consulta"}</td>
-                  <td>{x.estado === "respondido" ? <span className="text-[#4ADE80]">respondido</span> : <span className="text-rc-amber">aguardando</span>}</td>
+                  <td>{x.estado === "respondido" ? <span className="text-[#3DDC84]">respondido</span> : <span className="text-rc-amber">aguardando</span>}</td>
                   <td className="tabular text-gray-400">{dataHora(x.estado === "respondido" ? x.respondido_em : x.enviado_em)}</td>
                   <td className="px-5">
                     <div className="flex justify-end gap-1">

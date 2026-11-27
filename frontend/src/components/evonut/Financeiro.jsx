@@ -63,7 +63,7 @@ export function textoPrazo(aluno) {
 export function PlanoStatusBadge({ aluno }) {
   return (
     <span className={`rc-chip whitespace-nowrap ${STATUS_STYLE[aluno.status] || STATUS_STYLE.sem_plano}`}>
-      <span className="w-1.5 h-1.5 rounded-[2px] bg-current" />
+      <span className="w-1.5 h-1.5 rounded-none bg-current" />
       {textoPrazo(aluno)}
     </span>
   );
@@ -299,7 +299,7 @@ export function PagamentoModal({ aluno, onClose, onSaved }) {
       </div>
       {temPlano ? (
         <label className="rc-well flex items-start gap-3 p-3.5 mt-4 cursor-pointer">
-          <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#C3F53C]" checked={form.renovar} onChange={(e) => set("renovar", e.target.checked)} />
+          <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#3DDC84]" checked={form.renovar} onChange={(e) => set("renovar", e.target.checked)} />
           <span className="text-[13px] text-gray-300">
             Renovar o plano por {assinatura.duracao_meses || 1} {Number(assinatura.duracao_meses) === 1 ? "mês" : "meses"}
             <span className="block text-[12px] text-gray-500 mt-0.5">

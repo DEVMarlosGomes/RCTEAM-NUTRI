@@ -234,7 +234,7 @@ function EditorRotina({ valor, onChange }) {
           <button type="button" onClick={() => onChange(linhas.filter((_, j) => j !== i))} className="text-gray-500 hover:text-white" aria-label="Remover refeição"><X className="h-4 w-4" /></button>
         </div>
       ))}
-      <button type="button" onClick={() => onChange([...linhas, { horario: "", refeicao: "", alimentos: "" }])} className="rc-btn-ghost h-8 -ml-2 text-[12.5px] text-rc-lime"><Plus className="h-3.5 w-3.5" /> Refeição</button>
+      <button type="button" onClick={() => onChange([...linhas, { horario: "", refeicao: "", alimentos: "" }])} className="rc-btn-ghost h-8 -ml-2 text-[12.5px] text-rc-blueLight"><Plus className="h-3.5 w-3.5" /> Refeição</button>
     </div>
   );
 }

@@ -41,7 +41,7 @@ function indicadores() {
 function Seta({ d, bom }) {
   if (d == null) return <span className="text-gray-500">não medido</span>;
   const Icone = d > 0 ? ArrowUp : d < 0 ? ArrowDown : Minus;
-  const cor = bom === true ? "text-[#4ADE80]" : bom === false ? "text-rc-coral" : "text-gray-400";
+  const cor = bom === true ? "text-[#3DDC84]" : bom === false ? "text-rc-coral" : "text-gray-400";
   return <span className={`inline-flex items-center gap-1 font-semibold ${cor}`} data-dir={d > 0 ? "up" : d < 0 ? "down" : "eq"}><Icone className="h-4 w-4" /></span>;
 }
 
@@ -153,7 +153,7 @@ export default function Comparativo({ d }) {
                     <td className="py-2 text-right font-semibold text-white">{fmtV(vb)}</td>
                     <td className="py-2 text-right">
                       {dlt == null ? <span className="text-gray-500">—</span> : (
-                        <span className={`inline-flex items-center gap-1.5 ${bom === true ? "text-[#4ADE80]" : bom === false ? "text-rc-coral" : "text-gray-300"}`}>
+                        <span className={`inline-flex items-center gap-1.5 ${bom === true ? "text-[#3DDC84]" : bom === false ? "text-rc-coral" : "text-gray-300"}`}>
                           <Seta d={dlt} bom={bom} />{dlt > 0 ? "+" : dlt < 0 ? "−" : ""}{fmt.format(Math.abs(dlt))}{un ? ` ${un}` : ""}
                         </span>
                       )}

@@ -113,7 +113,7 @@ function Geral({ config, salvar }) {
               <button type="button" onClick={() => set("refeicoes_padrao", refs.filter((_, k) => k !== i))} className="rc-btn-ghost p-2 hover:text-rc-coral" aria-label="Remover refeição"><X className="w-4 h-4" /></button>
             </div>
           ))}
-          <button type="button" onClick={() => set("refeicoes_padrao", [...refs, { nome: "", horario: "" }])} className="rc-btn-ghost text-rc-lime -ml-2"><Plus className="w-4 h-4" /> Adicionar refeição</button>
+          <button type="button" onClick={() => set("refeicoes_padrao", [...refs, { nome: "", horario: "" }])} className="rc-btn-ghost text-rc-blue -ml-2"><Plus className="w-4 h-4" /> Adicionar refeição</button>
         </div>
       </div>
       <button type="button" onClick={enviar} disabled={salvando} className="rc-btn-primary mt-2">{salvando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Salvar</button>

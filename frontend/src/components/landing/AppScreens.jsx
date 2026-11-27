@@ -13,9 +13,9 @@ export function Phone({ className = "", children, label }) {
     <div
       role="img"
       aria-label={label}
-      className={`relative w-[290px] sm:w-[310px] aspect-[9/19] rounded-[46px] bg-[#05070A] p-[10px] shadow-[0_0_0_1px_rgba(255,255,255,0.12),0_0_0_7px_#11161D,0_0_0_8px_rgba(255,255,255,0.08),0_60px_120px_-30px_rgba(0,0,0,0.9)] ${className}`}
+      className={`relative w-[290px] sm:w-[310px] aspect-[9/19] rounded-none bg-[#05070A] p-[10px] shadow-[0_0_0_1px_rgba(255,255,255,0.12),0_0_0_7px_#11161D,0_0_0_8px_rgba(255,255,255,0.08),0_60px_120px_-30px_rgba(0,0,0,0.9)] ${className}`}
     >
-      <div className="relative h-full w-full rounded-[37px] overflow-hidden bg-rc-ink">
+      <div className="relative h-full w-full rounded-none overflow-hidden bg-rc-ink">
         <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-[92px] h-[26px] rounded-full bg-black z-20" />
         <div className="absolute inset-0 bg-[radial-gradient(400px_220px_at_20%_-10%,rgba(0,129,253,0.18),transparent_60%)]" />
         {children}
@@ -29,8 +29,8 @@ function TabBar({ active }) {
   return (
     <div className="absolute bottom-0 inset-x-0 h-14 bg-rc-ink/95 border-t border-white/[0.06] grid grid-cols-4 text-[9px] z-10">
       {tabs.map((t) => (
-        <div key={t} className={`flex flex-col items-center justify-center gap-1 ${t === active ? "text-rc-lime" : "text-gray-500"}`}>
-          <span className={`w-4 h-4 rounded-[5px] ${t === active ? "bg-rc-lime/80" : "bg-white/[0.12]"}`} />{t}
+        <div key={t} className={`flex flex-col items-center justify-center gap-1 ${t === active ? "text-rc-blue" : "text-gray-500"}`}>
+          <span className={`w-4 h-4 rounded-none ${t === active ? "bg-rc-blue/80" : "bg-white/[0.12]"}`} />{t}
         </div>
       ))}
     </div>
@@ -51,7 +51,7 @@ export function WorkoutScreen() {
     <div className="relative px-4 pt-14 h-full">
       <div className="flex items-center justify-between px-1">
         <div>
-          <div className="text-[9px] uppercase tracking-[0.2em] text-rc-lime">Treino de hoje</div>
+          <div className="text-[9px] uppercase tracking-[0.2em] text-rc-blue">Treino de hoje</div>
           <div className="rc-display text-[26px] text-white mt-1">Treino A</div>
           <div className="text-[10.5px] text-gray-400">Peito · ombros · tríceps</div>
         </div>
@@ -61,13 +61,13 @@ export function WorkoutScreen() {
       </div>
       <div className="mt-3 px-1">
         <div className="flex justify-between text-[10px] text-gray-400"><span>2 de 4 exercícios</span><span className="tabular">50%</span></div>
-        <div className="h-1.5 rounded-full bg-white/[0.06] mt-1"><div className="h-full w-1/2 rounded-full bg-rc-lime" /></div>
+        <div className="h-1.5 rounded-full bg-white/[0.06] mt-1"><div className="h-full w-1/2 rounded-full bg-rc-blue" /></div>
       </div>
       <div className="mt-3 space-y-2">
         {exercicios.map((e) => (
-          <div key={e.n} className={`${card} flex items-stretch overflow-hidden ${e.now ? "shadow-[0_0_0_1.5px_#C3F53C]" : ""}`}>
-            <div className={`w-14 shrink-0 flex items-center justify-center ${e.done ? "bg-rc-lime/[0.12]" : "bg-white/[0.04]"}`}>
-              {e.done ? <Check className="w-4 h-4 text-rc-lime" strokeWidth={3} /> : <Play className={`w-3.5 h-3.5 ${e.now ? "text-rc-lime fill-current" : "text-gray-500"}`} />}
+          <div key={e.n} className={`${card} flex items-stretch overflow-hidden ${e.now ? "shadow-[0_0_0_1.5px_#0081FD]" : ""}`}>
+            <div className={`w-14 shrink-0 flex items-center justify-center ${e.done ? "bg-rc-blue/[0.12]" : "bg-white/[0.04]"}`}>
+              {e.done ? <Check className="w-4 h-4 text-rc-blue" strokeWidth={3} /> : <Play className={`w-3.5 h-3.5 ${e.now ? "text-rc-blue fill-current" : "text-gray-500"}`} />}
             </div>
             <div className="flex-1 min-w-0 px-3 py-2.5">
               <div className="flex items-center justify-between gap-1">
@@ -100,7 +100,7 @@ export function SetScreen() {
   return (
     <div className="relative px-4 pt-14 h-full">
       <div className="px-1">
-        <div className="text-[9px] uppercase tracking-[0.2em] text-rc-lime">Treino em andamento</div>
+        <div className="text-[9px] uppercase tracking-[0.2em] text-rc-blue">Treino em andamento</div>
         <div className="rc-display text-[24px] text-white mt-1">Desenvolvimento</div>
         <div className="text-[10.5px] text-gray-400">Ombros · 4x 10 · descanso 90s</div>
       </div>
@@ -109,7 +109,7 @@ export function SetScreen() {
         <div className="relative w-[84px] h-[84px] shrink-0">
           <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90" aria-hidden>
             <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="7" />
-            <circle cx="50" cy="50" r="46" fill="none" stroke="#C3F53C" strokeWidth="7" strokeLinecap="round" strokeDasharray={`${c * 0.62} ${c}`} />
+            <circle cx="50" cy="50" r="46" fill="none" stroke="#0081FD" strokeWidth="7" strokeLinecap="round" strokeDasharray={`${c * 0.62} ${c}`} />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="rc-num text-[22px] text-white leading-none">00:56</span>
@@ -128,11 +128,11 @@ export function SetScreen() {
         </div>
         <div className="space-y-1.5">
           {series.map((s, i) => (
-            <div key={i} className={`grid grid-cols-[28px_1fr_1fr_24px] items-center rounded-xl px-1 py-1.5 ${s.now ? "bg-rc-lime/[0.08] shadow-[0_0_0_1px_rgba(195,245,60,0.35)]" : ""}`}>
+            <div key={i} className={`grid grid-cols-[28px_1fr_1fr_24px] items-center rounded-xl px-1 py-1.5 ${s.now ? "bg-rc-blue/[0.08] shadow-[0_0_0_1px_rgba(0,129,253,0.35)]" : ""}`}>
               <span className="rc-num text-[14px] text-gray-400 pl-1">{i + 1}</span>
               <span className="text-[12px] text-white tabular">{s.kg} <span className="text-gray-500 text-[10px]">kg</span></span>
               <span className="text-[12px] text-white tabular">{s.reps}</span>
-              <span className={`w-5 h-5 rounded-md flex items-center justify-center ${s.ok ? "bg-rc-lime text-rc-ink" : "bg-white/[0.06]"}`}>
+              <span className={`w-5 h-5 rounded-md flex items-center justify-center ${s.ok ? "bg-rc-blue text-black" : "bg-white/[0.06]"}`}>
                 {s.ok && <Check className="w-3 h-3" strokeWidth={3} />}
               </span>
             </div>
@@ -155,7 +155,7 @@ export function ProgressScreen() {
   return (
     <div className="relative px-4 pt-14 h-full">
       <div className="px-1">
-        <div className="text-[9px] uppercase tracking-[0.2em] text-rc-lime">Evolução</div>
+        <div className="text-[9px] uppercase tracking-[0.2em] text-rc-blue">Evolução</div>
         <div className="rc-display text-[24px] text-white mt-1">Supino reto</div>
       </div>
       <div className={`${card} mt-3 p-3.5`}>
@@ -163,29 +163,29 @@ export function ProgressScreen() {
           <div className="flex items-baseline gap-1">
             <span className="rc-num text-[34px] text-white leading-none">32</span><span className="text-[10px] text-gray-400">kg</span>
           </div>
-          <span className="rounded-full bg-rc-lime/15 text-rc-lime text-[10px] font-semibold px-2 py-0.5">+10 kg</span>
+          <span className="rounded-full bg-rc-blue/15 text-rc-blue text-[10px] font-semibold px-2 py-0.5">+10 kg</span>
         </div>
         <div className="text-[10px] text-gray-500 mt-0.5">Carga máxima · 8 semanas</div>
         <svg viewBox={`-4 -6 ${w + 8} ${h + 12}`} className="w-full mt-3" aria-hidden>
           <defs>
             <linearGradient id="rc-evo" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0" stopColor="#C3F53C" stopOpacity="0.3" /><stop offset="1" stopColor="#C3F53C" stopOpacity="0" />
+              <stop offset="0" stopColor="#0081FD" stopOpacity="0.3" /><stop offset="1" stopColor="#0081FD" stopOpacity="0" />
             </linearGradient>
           </defs>
           <polygon points={`0,${h} ${path} ${w},${h}`} fill="url(#rc-evo)" />
-          <polyline points={path} fill="none" stroke="#C3F53C" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-          {pts.map((v, i) => <circle key={i} cx={(i / (pts.length - 1)) * w} cy={h - ((v - min) / (max - min)) * h} r={i === pts.length - 1 ? 4 : 2} fill="#C3F53C" />)}
+          <polyline points={path} fill="none" stroke="#0081FD" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+          {pts.map((v, i) => <circle key={i} cx={(i / (pts.length - 1)) * w} cy={h - ((v - min) / (max - min)) * h} r={i === pts.length - 1 ? 4 : 2} fill="#0081FD" />)}
         </svg>
       </div>
       <div className="mt-3 text-[9px] uppercase tracking-[0.16em] text-gray-500 px-1">Conquistas</div>
       <div className="mt-2 grid grid-cols-3 gap-2">
         {[
           { t: "Dedicado", d: "7 dias", icon: Flame, cls: "text-rc-amber bg-rc-amber/[0.12]" },
-          { t: "Força +10", d: "supino", icon: Trophy, cls: "text-rc-lime bg-rc-lime/[0.12]" },
+          { t: "Força +10", d: "supino", icon: Trophy, cls: "text-rc-blue bg-rc-blue/[0.12]" },
           { t: "Veterano", d: "50 treinos", icon: Trophy, cls: "text-gray-500 bg-white/[0.05]", locked: true },
         ].map((b) => (
           <div key={b.t} className={`${card} p-2.5 text-center ${b.locked ? "opacity-50" : ""}`}>
-            <div className={`mx-auto w-8 h-8 rounded-[10px] flex items-center justify-center ${b.cls}`}><b.icon className="w-4 h-4" /></div>
+            <div className={`mx-auto w-8 h-8 rounded-none flex items-center justify-center ${b.cls}`}><b.icon className="w-4 h-4" /></div>
             <div className="text-[10px] text-white font-semibold mt-1.5">{b.t}</div>
             <div className="text-[8.5px] text-gray-500">{b.d}</div>
           </div>
@@ -201,8 +201,8 @@ export function NutritionScreen() {
   return (
     <div className="relative px-4 pt-14 h-full">
       <div className="px-1">
-        <div className="text-[9px] uppercase tracking-[0.2em] text-rc-lime">Minha dieta</div>
-        <div className="rc-display text-[26px] text-white mt-1">Olá, <span className="text-rc-lime">Ana</span></div>
+        <div className="text-[9px] uppercase tracking-[0.2em] text-rc-blue">Minha dieta</div>
+        <div className="rc-display text-[26px] text-white mt-1">Olá, <span className="text-rc-blue">Ana</span></div>
       </div>
       <div className={`${card} mt-3 p-4 relative`}>
         <MacroRings className="absolute right-3 top-3 w-[64px] h-[64px]" stroke={20} values={{ ptn: 0.3, cho: 0.45, lip: 0.25 }} />
@@ -234,7 +234,7 @@ export function NutritionScreen() {
         </ul>
       </div>
       <div className="mt-3 rounded-2xl bg-rc-blue/[0.12] p-3.5 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-[10px] bg-rc-blue flex items-center justify-center text-rc-ink text-[11px] font-bold">RC</div>
+        <div className="w-8 h-8 rounded-none bg-rc-blue flex items-center justify-center text-rc-ink text-[11px] font-bold">RC</div>
         <div className="min-w-0">
           <div className="text-[11px] text-white font-medium">Rogério</div>
           <div className="text-[10.5px] text-gray-300 truncate">Carbo ajustado para o dia de treino.</div>

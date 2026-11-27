@@ -5,15 +5,15 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        // Geist no corpo; Archivo condensado (eixo wdth) nos titulos e numeros — linguagem atletica.
-        sans: ['Geist', 'system-ui', '-apple-system', 'sans-serif'],
-        display: ['Archivo', 'Geist', 'system-ui', 'sans-serif'],
+        // Identidade Rogério Costa: Pirulen nos títulos e números grandes, DIN nos textos.
+        // Substitutas web (as mesmas do canvas da marca): Michroma e Barlow.
+        sans: ['"DIN 2014"', 'DIN', 'Barlow', 'system-ui', '-apple-system', 'sans-serif'],
+        display: ['Pirulen', 'Michroma', 'Barlow', 'system-ui', 'sans-serif'],
+        condensed: ['"Barlow Condensed"', 'Barlow', 'system-ui', 'sans-serif'],
         mono: ['"Geist Mono"', 'ui-monospace', 'monospace'],
       },
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        none: '0', sm: '0', DEFAULT: '0', md: '0', lg: '0', xl: '0', '2xl': '0', '3xl': '0', full: '9999px',
       },
       colors: {
         background: 'hsl(var(--background))',
@@ -30,42 +30,42 @@ module.exports = {
         ring: 'hsl(var(--ring))',
         // Neutros com leve tom azul-grafite (uma unica familia de cinza em todo o app)
         gray: {
-          50: '#F4F6F8',
-          100: '#E8ECF0',
-          200: '#CFD6DE',
-          300: '#AEB8C4',
-          400: '#8A97A6',
-          500: '#687586',
-          600: '#4C5766',
-          700: '#36404C',
-          800: '#232A33',
-          900: '#151A21',
-          950: '#0C1015',
+          50: '#F5F6F7',
+          100: '#E9EBEE',
+          200: '#D3D7DC',
+          300: '#BCC3CB',
+          400: '#9AA3AE',
+          500: '#7A838F',
+          600: '#5A636E',
+          700: '#2B3440',
+          800: '#1A1F26',
+          900: '#11151A',
+          950: '#0B0D10',
         },
         // Familias do Tailwind remapeadas para a paleta da marca, para telas antigas
         // que usam cores soltas: sucesso -> lima, info -> azul, erro -> coral, alerta -> ambar.
         emerald: {
-          50: '#F6FEE4', 100: '#ECFDC6', 200: '#DEFB97', 300: '#D2FA66', 400: '#C3F53C',
-          500: '#9BCB1F', 600: '#7AA216', 700: '#5C7A12', 800: '#425810', 900: '#2C3B0B',
+          50: '#ECFBF3', 100: '#D2F6E2', 200: '#A6EDC6', 300: '#6FE3A6', 400: '#3DDC84',
+          500: '#2BB86B', 600: '#209457', 700: '#197445', 800: '#135634', 900: '#0C3A23',
         },
         green: {
-          50: '#F6FEE4', 100: '#ECFDC6', 200: '#DEFB97', 300: '#D2FA66', 400: '#C3F53C',
-          500: '#9BCB1F', 600: '#7AA216', 700: '#5C7A12', 800: '#425810', 900: '#2C3B0B',
+          50: '#ECFBF3', 100: '#D2F6E2', 200: '#A6EDC6', 300: '#6FE3A6', 400: '#3DDC84',
+          500: '#2BB86B', 600: '#209457', 700: '#197445', 800: '#135634', 900: '#0C3A23',
         },
         cyan: {
           50: '#EEF6FF', 100: '#D6EAFF', 200: '#ADD5FF', 300: '#7ABDFF', 400: '#4DA6FF',
           500: '#1A8FFF', 600: '#0081FD', 700: '#0068D1', 800: '#0A4F9C', 900: '#0B3A70',
         },
         red: {
-          50: '#FFF1EF', 100: '#FFDDD8', 200: '#FFBDB3', 300: '#FF9A8A', 400: '#FF6B57',
-          500: '#F04A34', 600: '#D13A26', 700: '#A82E1F', 800: '#7F2519', 900: '#561A12',
+          50: '#FFF1F1', 100: '#FFDCDD', 200: '#FFBCBE', 300: '#FF9497', 400: '#FF5A5F',
+          500: '#F04449', 600: '#D13A26', 700: '#A82E1F', 800: '#7F2519', 900: '#561A12',
         },
         amber: {
-          50: '#FFF8EC', 100: '#FFEDCC', 200: '#FFDB99', 300: '#FFC970', 400: '#FFB547',
+          50: '#FFF7EC', 100: '#FFEBCC', 200: '#FFD699', 300: '#FFC170', 400: '#FFA53B',
           500: '#F59E1F', 600: '#D17F0F', 700: '#A3610C', 800: '#76470B', 900: '#4D2F09',
         },
         yellow: {
-          50: '#FFF8EC', 100: '#FFEDCC', 200: '#FFDB99', 300: '#FFC970', 400: '#FFB547',
+          50: '#FFF7EC', 100: '#FFEBCC', 200: '#FFD699', 300: '#FFC170', 400: '#FFA53B',
           500: '#F59E1F', 600: '#D17F0F', 700: '#A3610C', 800: '#76470B', 900: '#4D2F09',
         },
         // Rogério Costa brand: azul da marca + verde-lima de nutricao/energia
@@ -73,32 +73,35 @@ module.exports = {
           blue: '#0081FD',
           blueDark: '#0068D1',
           blueLight: '#4DA6FF',
-          lime: '#C3F53C',
-          limeDark: '#9BCB1F',
-          amber: '#FFB547',
-          coral: '#FF6B57',
-          black: '#05070A',
-          ink: '#090C10',
-          surface: '#10151C',
-          surfaceAlt: '#0C1016',
-          raised: '#161C25',
-          line: 'rgba(255,255,255,0.07)',
+          // "lime" virou o verde de status da marca (meta atingida); não é mais cor de ação
+          lime: '#3DDC84',
+          limeDark: '#2BB86B',
+          amber: '#FFA53B',
+          coral: '#FF5A5F',
+          black: '#000000',
+          ink: '#000000',
+          surface: '#0B0D10',
+          surfaceAlt: '#06080A',
+          raised: '#12161B',
+          line: '#1A1F26',
+          border: '#2B3440',
+          muted: '#9AA3AE',
         },
         // Backwards-compat aliases usados pelas telas antigas
         evo: {
-          bg: '#090C10',
-          surface: '#10151C',
-          surfaceAlt: '#0C1016',
+          bg: '#000000',
+          surface: '#0B0D10',
+          surfaceAlt: '#06080A',
           purple: '#0081FD',     // -> azul da marca
-          teal: '#C3F53C',       // -> verde-lima (acentos de nutricao)
-          amber: '#FFB547',
-          coral: '#FF6B57',
+          teal: '#3DDC84',       // -> verde de status
+          amber: '#FFA53B',
+          coral: '#FF5A5F',
         },
         // Macronutrientes: cores fixas em todos os graficos
         macro: {
-          ptn: '#4DA6FF',
-          cho: '#C3F53C',
-          lip: '#FFB547',
+          cho: '#FFFFFF',
+          ptn: '#0081FD',
+          lip: '#7FC0FF',
         },
       },
       transitionTimingFunction: {

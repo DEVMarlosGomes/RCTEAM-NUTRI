@@ -43,7 +43,7 @@ export default function PatientLogin() {
             <span className="rc-display text-[15px] text-white">Rogério Costa</span>
           </div>
           <div className="rc-eyebrow">Área do paciente</div>
-          <h1 className="rc-display text-[52px] text-white mt-3">Seu plano,<br /><span className="text-rc-lime">no bolso.</span></h1>
+          <h1 className="rc-display text-[52px] text-white mt-3">Seu plano,<br /><span className="text-rc-blue">no bolso.</span></h1>
           <p className="text-gray-400 mt-4">Dieta, exames e assistente para tirar dúvidas entre as consultas.</p>
 
         <form onSubmit={submit} className="space-y-4 mt-8">
@@ -96,7 +96,7 @@ export default function PatientLogin() {
           <div className="mt-10 pt-5 border-t border-white/[0.06] space-y-3 text-[13px]">
             <p className="text-gray-500">
               Ainda não tem acesso? Fale com o Rogério pelo{" "}
-              <a href="https://wa.me/5511983692815" target="_blank" rel="noopener noreferrer" className="text-gray-100 underline decoration-rc-lime/60 underline-offset-4 hover:decoration-rc-lime">
+              <a href="https://wa.me/5511983692815" target="_blank" rel="noopener noreferrer" className="text-gray-100 underline decoration-rc-blue/60 underline-offset-4 hover:decoration-rc-blue">
                 WhatsApp
               </a>{" "}
               e receba seu convite.

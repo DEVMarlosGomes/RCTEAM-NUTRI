@@ -240,11 +240,11 @@ export default function PreConsulta() {
             <p className="text-[13px] font-medium text-gray-300 truncate" data-testid="preconsulta-bloco">
               Bloco {pergunta.blocoIndex + 1} de {estrutura.blocos.length}: {bloco.titulo}
             </p>
-            <span className="rc-num text-[18px] text-rc-lime tabular">{pct}%</span>
+            <span className="rc-num text-[18px] text-rc-blue tabular">{pct}%</span>
           </div>
           <div role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Progresso do formulário"
             className="mt-2 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-            <div className="h-full bg-rc-lime rounded-full transition-[width] duration-300 ease-out" style={{ width: `${pct}%` }} />
+            <div className="h-full bg-rc-blue rounded-full transition-[width] duration-300 ease-out" style={{ width: `${pct}%` }} />
           </div>
         </div>
       </header>
@@ -419,9 +419,9 @@ function EntradaFotos({ valor, token, tipoForm, onChange }) {
       {[["frente", "Frente"], ["lado", "Lado"], ["costas", "Costas"]].map(([pose, rotulo]) => {
         const ok = enviadas.some((f) => f.pose === pose);
         return (
-          <label key={pose} className={`relative flex aspect-[3/4] cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 ${ok ? "border-rc-lime" : "border-dashed border-white/[0.14] hover:border-rc-blue/50"} bg-white/[0.02] text-gray-300`}>
+          <label key={pose} className={`relative flex aspect-[3/4] cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 ${ok ? "border-rc-blue" : "border-dashed border-white/[0.14] hover:border-rc-blue/50"} bg-white/[0.02] text-gray-300`}>
             <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" aria-label={`Foto de ${rotulo.toLowerCase()}`} onChange={(e) => { enviar(pose, e.target.files?.[0]); e.target.value = ""; }} />
-            {previas[pose] ? <img src={previas[pose]} alt={rotulo} className="absolute inset-0 h-full w-full object-cover" /> : enviando === pose ? <Loader2 className="h-5 w-5 animate-spin text-rc-blue" /> : ok ? <Check className="h-6 w-6 text-rc-lime" /> : <Camera className="h-6 w-6 text-rc-blue" />}
+            {previas[pose] ? <img src={previas[pose]} alt={rotulo} className="absolute inset-0 h-full w-full object-cover" /> : enviando === pose ? <Loader2 className="h-5 w-5 animate-spin text-rc-blue" /> : ok ? <Check className="h-6 w-6 text-rc-blue" /> : <Camera className="h-6 w-6 text-rc-blue" />}
             <span className="relative rounded bg-black/50 px-2 text-[12px] font-semibold">{rotulo}{ok ? " ✓" : ""}</span>
           </label>
         );
@@ -483,7 +483,7 @@ function BoasVindas({ onComecar }) {
         <img src="/landing/rogerio.jpg" alt="Rogério Costa de braços cruzados em uma academia" className="w-full h-[46vh] md:h-[640px] object-cover object-top" />
         <div className="px-5 sm:px-8 py-10 space-y-5">
           <Brand size="sm" />
-          <h1 className="rc-display text-[clamp(32px,4.6vw,48px)] leading-[1.05]">Bem-vindo(a) à sua <span className="text-rc-blue">jornada de evolução!</span></h1>
+          <h1 className="rc-display text-[clamp(19px,2.8vw,29px)] leading-[1.05]">Bem-vindo(a) à sua <span className="text-rc-blue">jornada de evolução!</span></h1>
           <p className="text-[17px] text-gray-300 leading-relaxed">
             Você está iniciando um caminho de transformação real. Estou ao seu lado para garantir resultados concretos e fazer de você o
             próximo grande caso de sucesso do nosso time.
@@ -603,7 +603,7 @@ function Final({ nome, info, retorno }) {
   return (
     <Moldura>
       <div className="mt-10 max-w-xl space-y-6 animate-fade-up" data-testid="preconsulta-final">
-        <CheckCircle2 className="w-12 h-12 text-rc-lime" />
+        <CheckCircle2 className="w-12 h-12 text-rc-blue" />
         <div className="space-y-3">
           <h1 className="rc-h2">{nome ? `Obrigado, ${nome}!` : "Obrigado!"} Recebemos suas informações.</h1>
           <p className="text-[16px] text-gray-300 leading-relaxed">

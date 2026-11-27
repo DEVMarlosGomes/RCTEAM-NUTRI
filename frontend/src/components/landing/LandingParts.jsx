@@ -26,7 +26,7 @@ export function Reveal({ as: Tag = "div", delay = 0, className = "", children, .
 export function SectionLabel({ n, children }) {
   return (
     <div className="flex items-center gap-3 text-[12px] uppercase tracking-[0.2em] text-gray-400">
-      <span className="rc-num text-rc-lime text-[15px] tracking-normal">{n}</span>
+      <span className="rc-num text-rc-blue text-[15px] tracking-normal">{n}</span>
       <span className="h-px w-8 bg-white/15" />
       {children}
     </div>
@@ -36,7 +36,7 @@ export function SectionLabel({ n, children }) {
 export function CheckItem({ children, muted }) {
   return (
     <li className="flex gap-3 text-[15px] leading-snug">
-      <span className={`mt-0.5 w-5 h-5 shrink-0 rounded-md flex items-center justify-center ${muted ? "bg-white/[0.06] text-gray-300" : "bg-rc-lime/15 text-rc-lime"}`}>
+      <span className={`mt-0.5 w-5 h-5 shrink-0 rounded-md flex items-center justify-center ${muted ? "bg-white/[0.06] text-gray-300" : "bg-rc-blue/15 text-rc-blue"}`}>
         <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
       </span>
       <span className="text-gray-200">{children}</span>

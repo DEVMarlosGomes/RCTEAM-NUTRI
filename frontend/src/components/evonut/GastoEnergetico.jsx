@@ -81,7 +81,7 @@ function Campo({ rotulo, valor, onChange, unidade, origem, largura = "w-full", t
 function Chip({ ativo, onClick, children, testId, title }) {
   return (
     <button type="button" onClick={onClick} data-testid={testId} title={title} aria-pressed={ativo}
-      className={`h-9 min-w-[56px] rounded-lg px-3 text-[13px] font-semibold tabular transition-colors ${ativo ? "bg-rc-lime text-rc-ink" : "bg-white/[0.05] text-gray-300 hover:bg-white/[0.09]"}`}>
+      className={`h-9 min-w-[56px] rounded-lg px-3 text-[13px] font-semibold tabular transition-colors ${ativo ? "bg-rc-blue text-black" : "bg-white/[0.05] text-gray-300 hover:bg-white/[0.09]"}`}>
       {children}
     </button>
   );
@@ -148,13 +148,13 @@ function Projecao({ peso, pesoDesejado, semanas, get, meta }) {
         {[p0, p1].map((p) => (
           <g key={p}><line x1={pad} x2={W - 10} y1={y(p)} y2={y(p)} stroke="rgba(255,255,255,.06)" /><text x={pad - 6} y={y(p) + 4} textAnchor="end" fontSize="10" fill="#8b93a1">{nf1.format(p)}</text></g>
         ))}
-        <line x1={x(0)} y1={y(p0)} x2={x(sem)} y2={y(p1)} stroke="#C3F53C" strokeWidth="2.5" />
+        <line x1={x(0)} y1={y(p0)} x2={x(sem)} y2={y(p1)} stroke="#0081FD" strokeWidth="2.5" />
         {semanasMeta && <line x1={x(0)} y1={y(p0)} x2={x(Math.min(semanasMeta, total))} y2={y(p0 + kgSemanaMeta * Math.min(semanasMeta, total))} stroke="#4DA6FF" strokeWidth="2" strokeDasharray="5 4" />}
-        <circle cx={x(sem)} cy={y(p1)} r="4" fill="#C3F53C" />
+        <circle cx={x(sem)} cy={y(p1)} r="4" fill="#0081FD" />
         <text x={x(sem)} y={H - 4} textAnchor="middle" fontSize="10" fill="#8b93a1">{sem} sem</text>
         <text x={x(0)} y={H - 4} textAnchor="middle" fontSize="10" fill="#8b93a1">hoje</text>
       </svg>
-      <div className="mt-1 flex gap-4 text-[11.5px] text-gray-400"><span><span className="inline-block h-0.5 w-4 bg-rc-lime align-middle mr-1.5" />plano pelo prazo</span>{semanasMeta && <span><span className="inline-block h-0.5 w-4 bg-macro-ptn align-middle mr-1.5" />com a meta final</span>}</div>
+      <div className="mt-1 flex gap-4 text-[11.5px] text-gray-400"><span><span className="inline-block h-0.5 w-4 bg-rc-blue align-middle mr-1.5" />plano pelo prazo</span>{semanasMeta && <span><span className="inline-block h-0.5 w-4 bg-macro-ptn align-middle mr-1.5" />com a meta final</span>}</div>
     </div>
   );
 }
@@ -425,7 +425,7 @@ export default function GastoEnergetico({ d, reload, onIrMacros }) {
                   <button key={t.protocolo} type="button" role="radio" aria-checked={protocolo === t.protocolo} disabled={t.tmb == null}
                     onClick={() => setProtocolo(t.protocolo)} data-testid={`tmb-${t.protocolo}`}
                     className={`relative rounded-xl px-3.5 py-3 text-left ring-1 transition-colors disabled:opacity-40 ${protocolo === t.protocolo ? "bg-rc-blue/15 ring-rc-blue" : "bg-white/[0.03] ring-white/[0.06] hover:ring-white/20"}`}>
-                    {sugerida.includes(t.protocolo) && <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-rc-lime/15 px-1.5 text-[10px] font-semibold text-rc-lime"><Sparkles className="h-3 w-3" />sugerida</span>}
+                    {sugerida.includes(t.protocolo) && <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-rc-blue/15 px-1.5 text-[10px] font-semibold text-rc-blue"><Sparkles className="h-3 w-3" />sugerida</span>}
                     <div className="pr-14 text-[12px] font-medium text-gray-300 leading-tight">{t.nome}</div>
                     <div className="mt-1 rc-num text-[20px] text-white">{t.tmb != null ? nf0.format(t.tmb) : "—"}</div>
                     <div className="text-[10.5px] text-gray-500">{t.tmb != null ? "kcal/dia" : "precisa da massa magra"}</div>
@@ -477,7 +477,7 @@ export default function GastoEnergetico({ d, reload, onIrMacros }) {
                     </div>
                   ))}
                   <div className="flex flex-wrap items-center gap-3">
-                    <button type="button" onClick={() => setTreinos((l) => [...l, { nome: "", met: "", min: "", dias: "" }])} className="rc-btn-ghost -ml-2 text-rc-lime"><Plus className="h-4 w-4" /> Adicionar treino</button>
+                    <button type="button" onClick={() => setTreinos((l) => [...l, { nome: "", met: "", min: "", dias: "" }])} className="rc-btn-ghost -ml-2 text-rc-blue"><Plus className="h-4 w-4" /> Adicionar treino</button>
                     {(doForm.min || doForm.dias) && !m.treinos?.length && <span className="text-[11.5px] text-gray-500">Duração e dias vieram do formulário do paciente.</span>}
                   </div>
                 </div>
@@ -577,9 +577,9 @@ export default function GastoEnergetico({ d, reload, onIrMacros }) {
             </div>
           </div>
 
-          <div className="mt-2 rounded-xl bg-rc-lime/[0.07] p-4 ring-1 ring-rc-lime/25">
+          <div className="mt-2 rounded-xl bg-rc-blue/[0.07] p-4 ring-1 ring-rc-blue/25">
             <div className="flex items-baseline justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-rc-lime">Meta final</span>
+              <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-rc-blue">Meta final</span>
               {finalManual && <button type="button" onClick={() => setFinalManual(false)} className="text-[11.5px] text-gray-400 hover:text-white">voltar ao calculado</button>}
             </div>
             <div className="relative mt-2">

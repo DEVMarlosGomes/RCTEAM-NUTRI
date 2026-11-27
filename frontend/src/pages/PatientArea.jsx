@@ -133,7 +133,7 @@ export default function PatientArea() {
       <main className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6">
         <section className="pt-6 pb-6 sm:pb-8">
           <div className="rc-eyebrow">Área do paciente</div>
-          <h1 className="rc-h1 mt-3">Olá, <span className="text-rc-lime">{(user?.name || "").split(" ")[0]}</span></h1>
+          <h1 className="rc-h1 mt-3">Olá, <span className="text-rc-blue">{(user?.name || "").split(" ")[0]}</span></h1>
         </section>
 
         {/* Abas: barra inferior no celular, segmentado no desktop */}
@@ -154,10 +154,10 @@ export default function PatientArea() {
                 onClick={() => setTab(t.k)}
                 aria-current={tab === t.k ? "page" : undefined}
                 className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 h-16 sm:h-10 sm:px-4 sm:rounded-lg text-[11px] sm:text-[13.5px] transition-colors duration-150 active:scale-[0.97] ${
-                  tab === t.k ? "text-rc-lime sm:text-white sm:bg-white/[0.07] font-medium" : "text-gray-500 hover:text-gray-200"
+                  tab === t.k ? "text-rc-blue sm:text-white sm:bg-white/[0.07] font-medium" : "text-gray-500 hover:text-gray-200"
                 }`}
               >
-                <t.icon className={`w-5 h-5 sm:w-4 sm:h-4 ${tab === t.k ? "sm:text-rc-lime" : ""}`} strokeWidth={1.75} />
+                <t.icon className={`w-5 h-5 sm:w-4 sm:h-4 ${tab === t.k ? "sm:text-rc-blue" : ""}`} strokeWidth={1.75} />
                 {t.label}
               </button>
             ))}
@@ -395,7 +395,7 @@ function MacroRow({ label, g, pct, color }) {
   return (
     <div>
       <div className="flex items-baseline justify-between text-[13px]">
-        <span className="text-gray-300 inline-flex items-center gap-2"><span className={`w-2 h-2 rounded-[2px] ${color}`} />{label}</span>
+        <span className="text-gray-300 inline-flex items-center gap-2"><span className={`w-2 h-2 rounded-none ${color}`} />{label}</span>
         <span className="tabular text-gray-400"><span className="text-white font-medium">{g ?? "–"} g</span> · {pct ?? "–"}%</span>
       </div>
       <div className="h-1.5 rounded-full bg-white/[0.05] mt-1.5 overflow-hidden">

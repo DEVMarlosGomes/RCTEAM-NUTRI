@@ -31,8 +31,7 @@ export default function Login() {
   return (
     <div className="min-h-[100dvh] grid lg:grid-cols-[1.1fr_1fr]">
       {/* Painel da marca */}
-      <section className="relative hidden lg:flex flex-col justify-between p-12 xl:p-16 overflow-hidden bg-rc-black/50 border-r border-white/[0.05]">
-        <div className="absolute inset-0 rc-grid-bg pointer-events-none" />
+      <section className="rc-padrao-r relative hidden lg:flex flex-col justify-between p-12 xl:p-16 overflow-hidden bg-rc-black border-r border-[#1A1F26]">
         <div className="relative flex items-center gap-3">
           <RCLogo size={38} variant="blue" />
           <div className="leading-none">
@@ -46,8 +45,8 @@ export default function Login() {
             <MacroRings />
           </div>
           <div className="relative rc-eyebrow">Sistema clínico</div>
-          <h1 className="relative rc-display text-[clamp(56px,6.4vw,104px)] text-white mt-5 max-w-[9ch] [text-shadow:0_2px_30px_rgba(9,12,16,0.8)]">
-            Nutrição que <span className="text-rc-lime">performa</span>.
+          <h1 className="relative rc-display text-[clamp(34px,3.8vw,62px)] text-white mt-5 max-w-[14ch] [text-shadow:0_2px_30px_rgba(9,12,16,0.8)]">
+            Nutrição que <span className="text-rc-blue">performa</span>.
           </h1>
           <p className="text-gray-400 text-lg mt-6 max-w-[42ch]">
             Anamnese, exames com IA, gasto energético e prescrição no mesmo lugar, do primeiro contato ao acompanhamento.
@@ -81,7 +80,7 @@ export default function Login() {
               <div className="rc-display text-lg text-white">Rogério Costa</div>
             </div>
 
-            <h2 className="rc-display text-4xl text-white">
+            <h2 className="rc-display text-2xl text-white">
               {mode === "login" ? "Acesso profissional" : "Criar conta"}
             </h2>
             <p className="text-gray-400 mt-3">
@@ -130,7 +129,7 @@ export default function Login() {
 
             <div className="mt-10 pt-5 border-t border-white/[0.06] flex items-center justify-between gap-4 text-[13px]">
               <span className="text-gray-500">É paciente?</span>
-              <a href="/login-paciente" className="text-gray-200 hover:text-rc-lime transition-colors inline-flex items-center gap-1.5">
+              <a href="/login-paciente" className="text-gray-200 hover:text-rc-blue transition-colors inline-flex items-center gap-1.5">
                 Área do paciente <ArrowRight className="w-3.5 h-3.5" />
               </a>
             </div>

@@ -41,8 +41,8 @@ function BarraReferencia({ valor, min, max }) {
   const fora = (min != null && valor < min) || (max != null && valor > max);
   return (
     <div className="relative mt-2 h-2 rounded-full bg-white/[0.06]" aria-hidden>
-      <div className="absolute inset-y-0 rounded-full bg-[#4ADE80]/35" style={{ left: `${pos(lo)}%`, width: `${pos(hi) - pos(lo)}%` }} />
-      <div className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-rc-ink ${fora ? "bg-rc-coral" : "bg-[#4ADE80]"}`} style={{ left: `${pos(valor)}%` }} />
+      <div className="absolute inset-y-0 rounded-full bg-[#3DDC84]/35" style={{ left: `${pos(lo)}%`, width: `${pos(hi) - pos(lo)}%` }} />
+      <div className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-rc-ink ${fora ? "bg-rc-coral" : "bg-[#3DDC84]"}`} style={{ left: `${pos(valor)}%` }} />
     </div>
   );
 }
@@ -119,7 +119,7 @@ export default function DrHouseResultado({ pid, sexo, analise, lotes, longitudin
             <div className="text-[12.5px] text-gray-400">{exames.length} marcadores{anterior ? ` · comparado com ${dataBR(anterior.data_coleta)}` : " · primeiro exame registrado"}</div>
           </div>
           <div className="ml-auto flex gap-2" data-testid="contagem-exames">
-            {[["Prioridade", contagem.prioridade, "bg-rc-coral/15 text-rc-coral"], ["Atenção", contagem.atencao, "bg-rc-amber/15 text-rc-amber"], ["Normal", contagem.normal, "bg-[#4ADE80]/15 text-[#4ADE80]"]].map(([l, n, c]) => (
+            {[["Prioridade", contagem.prioridade, "bg-rc-coral/15 text-rc-coral"], ["Atenção", contagem.atencao, "bg-rc-amber/15 text-rc-amber"], ["Normal", contagem.normal, "bg-[#3DDC84]/15 text-[#3DDC84]"]].map(([l, n, c]) => (
               <div key={l} className={`rounded-xl px-4 py-2 text-center ${c}`}><div className="rc-num text-[22px] leading-none">{n}</div><div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.1em]">{l}</div></div>
             ))}
           </div>

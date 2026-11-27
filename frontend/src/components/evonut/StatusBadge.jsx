@@ -35,7 +35,7 @@ export default function StatusBadge({ status, ...props }) {
       className={`rc-chip whitespace-nowrap ${cls}`}
       {...props}
     >
-      <span className="w-1.5 h-1.5 rounded-[2px] bg-current" />
+      <span className="w-1.5 h-1.5 rounded-none bg-current" />
       {labels[status] || status}
     </span>
   );

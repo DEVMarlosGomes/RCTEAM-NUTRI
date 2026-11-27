@@ -181,7 +181,7 @@ export default function NudgeManager({ patientId }) {
                     <div className="text-[14px] font-semibold text-white">{n.label} <span className="font-normal text-gray-400">· {hh(n)} · {descricaoRepeticao(n)} · {n.canal === "whatsapp" ? "WhatsApp" : "app"}</span></div>
                     <div className="text-[12px] text-gray-500">
                       Último envio {dataHora(n.last_fired_at)}
-                      {n.respondeu_em && <span className="text-[#4ADE80]"> · respondeu {dataHora(n.respondeu_em)}</span>}
+                      {n.respondeu_em && <span className="text-[#3DDC84]"> · respondeu {dataHora(n.respondeu_em)}</span>}
                       {semResposta != null && <span className={semResposta >= 3 ? "text-rc-amber" : ""}> · sem resposta há {semResposta} {semResposta === 1 ? "dia" : "dias"}</span>}
                     </div>
                   </div>

@@ -75,7 +75,7 @@ export default function PacienteDetalhe() {
     <NutriLayout compacto={tab === "plano" || tab === "recordatorio"}>
       <header className="rc-card mb-4 px-5 py-4 sm:px-6" data-testid="cabecalho-paciente">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-          <div className="w-12 h-12 shrink-0 rounded-xl bg-rc-raised flex items-center justify-center rc-num text-xl text-rc-lime uppercase shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+          <div className="w-12 h-12 shrink-0 rounded-xl bg-rc-raised flex items-center justify-center rc-num text-xl text-rc-blue uppercase shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
             {(iniciais[0]?.[0] || "P") + (iniciais.length > 1 ? iniciais[iniciais.length - 1][0] : "")}
           </div>
           <div className="min-w-0 flex-1">
@@ -93,7 +93,7 @@ export default function PacienteDetalhe() {
             <div className="text-[10.5px] uppercase tracking-[0.14em] text-gray-500">Objetivo</div>
             {p.objetivo ? (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                <span className="inline-flex items-center gap-1.5 rounded-lg bg-rc-lime/15 px-2.5 py-1 text-[13.5px] font-semibold text-rc-lime">★ {p.objetivo}</span>
+                <span className="inline-flex items-center gap-1.5 rounded-lg bg-rc-blue/15 px-2.5 py-1 text-[13.5px] font-semibold text-rc-blue">★ {p.objetivo}</span>
                 {(p.objetivos || []).filter((o) => o !== p.objetivo).map((o) => <span key={o} className="rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-gray-300">{o}</span>)}
               </div>
             ) : <div className="mt-1 text-[13px] text-gray-500">aguardando o formulário</div>}
@@ -103,14 +103,14 @@ export default function PacienteDetalhe() {
         <ResumoFicha d={d} onPrescricao={() => setTab("plano")} reload={reload} />
       </header>
 
-      <nav className="sticky top-14 md:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10 mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]" aria-label="Seções do paciente">
+      <nav className={`sticky top-14 md:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 ${tab === "plano" || tab === "recordatorio" ? "" : "lg:-mx-10 lg:px-10"} mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]`} aria-label="Seções do paciente">
         <div role="tablist" className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {TABS.map((t, n) => (
             <button key={t.k} role="tab" aria-selected={tab === t.k} data-testid={`tab-${t.k}`} onClick={() => setTab(t.k)}
               className={`relative shrink-0 inline-flex items-center gap-1.5 h-12 px-2.5 text-[13.5px] transition-colors duration-150 ${tab === t.k ? "text-white font-medium" : "text-gray-400 hover:text-gray-100"}`}>
-              <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold tabular ${tab === t.k ? "bg-rc-lime text-rc-ink" : "bg-white/[0.06] text-gray-400"}`}>{n + 1}</span>
+              <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold tabular ${tab === t.k ? "bg-rc-blue text-black" : "bg-white/[0.06] text-gray-400"}`}>{n + 1}</span>
               {t.l}
-              <span aria-hidden className={`absolute left-2 right-2 -bottom-px h-[2px] rounded-full bg-rc-lime transition-transform duration-200 ease-out origin-center ${tab === t.k ? "scale-x-100" : "scale-x-0"}`} />
+              <span aria-hidden className={`absolute left-2 right-2 -bottom-px h-[2px] rounded-full bg-rc-blue transition-transform duration-200 ease-out origin-center ${tab === t.k ? "scale-x-100" : "scale-x-0"}`} />
             </button>
           ))}
         </div>
@@ -144,7 +144,7 @@ function ResumoFicha({ d, onPrescricao, reload }) {
   const venc = p.assinatura?.vencimento ? new Date(`${String(p.assinatura.vencimento).slice(0, 10)}T12:00:00`) : null;
   const dias = venc ? Math.round((venc - new Date()) / 86400000) : null;
   const plano = !venc ? ["sem plano", "text-gray-500"] : p.assinatura?.ativo === false ? ["cancelado", "text-gray-500"]
-    : dias < 0 ? [`vencido há ${-dias} d`, "text-rc-coral"] : dias <= 7 ? [`vence em ${dias} d`, "text-rc-amber"] : [`ativo · vence em ${dias} d`, "text-[#4ADE80]"];
+    : dias < 0 ? [`vencido há ${-dias} d`, "text-rc-coral"] : dias <= 7 ? [`vence em ${dias} d`, "text-rc-amber"] : [`ativo · vence em ${dias} d`, "text-[#3DDC84]"];
   const avs = [...(d.evaluations || [])].sort((a, b) => String(a.data_avaliacao || a.created_at || "").localeCompare(String(b.data_avaliacao || b.created_at || "")));
   const delta = (fn) => (avs.length >= 2 && fn(avs[0]) != null && fn(avs[avs.length - 1]) != null ? fn(avs[avs.length - 1]) - fn(avs[0]) : null);
   const dPeso = delta((e) => (e.peso != null ? Number(e.peso) : null));
@@ -732,8 +732,8 @@ export function AntropometriaLegado({ d, reload }) {
                 <Tooltip contentStyle={{ background: "#161C25", border: "none", boxShadow: "0 0 0 1px rgba(255,255,255,0.08), 0 16px 40px -16px rgba(0,0,0,0.8)", borderRadius: 10, fontSize: 12 }} labelStyle={{ color: "#AEB8C4" }} cursor={{ stroke: "rgba(255,255,255,0.12)" }} />
                 <Legend iconType="plainline" wrapperStyle={{ fontSize: 12, color: "#AEB8C4" }} />
                 <Line type="monotone" dataKey="peso" stroke="#4DA6FF" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#4DA6FF" }} activeDot={{ r: 5, strokeWidth: 0 }} />
-                <Line type="monotone" dataKey="pct_gordura" stroke="#FFB547" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#FFB547" }} activeDot={{ r: 5, strokeWidth: 0 }} />
-                <Line type="monotone" dataKey="massa_magra" stroke="#C3F53C" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#C3F53C" }} activeDot={{ r: 5, strokeWidth: 0 }} />
+                <Line type="monotone" dataKey="pct_gordura" stroke="#FFA53B" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#FFA53B" }} activeDot={{ r: 5, strokeWidth: 0 }} />
+                <Line type="monotone" dataKey="massa_magra" stroke="#0081FD" strokeWidth={2.5} dot={{ r: 3, strokeWidth: 0, fill: "#0081FD" }} activeDot={{ r: 5, strokeWidth: 0 }} />
               </LineChart>
             </ResponsiveContainer>
           )}

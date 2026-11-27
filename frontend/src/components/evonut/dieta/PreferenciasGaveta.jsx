@@ -43,7 +43,7 @@ export function usePreferenciasGaveta() {
 
 const BLOCOS = [
   ["evita", "Não come / evita", "bg-rc-coral/[0.08] ring-rc-coral/30", "text-rc-coral", ["alergias", "nao_gosta"]],
-  ["gosta", "Gosta / prefere", "bg-[#4ADE80]/[0.08] ring-[#4ADE80]/30", "text-[#4ADE80]", ["frutas_preferidas"]],
+  ["gosta", "Gosta / prefere", "bg-[#3DDC84]/[0.08] ring-[#3DDC84]/30", "text-[#3DDC84]", ["frutas_preferidas"]],
   ["rotina", "Rotina", "bg-rc-blue/[0.08] ring-rc-blue/30", "text-rc-blueLight", ["rotina_alimentar", "horario_fome", "beliscos", "quem_prepara", "marmita", "plano_anterior", "plano_anterior_experiencia"]],
   ["outros", "Outros", "bg-white/[0.03] ring-white/[0.08]", "text-gray-400", ["agua", "intestino"]],
 ];

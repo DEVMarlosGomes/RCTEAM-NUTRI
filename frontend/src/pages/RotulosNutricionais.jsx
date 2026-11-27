@@ -162,7 +162,7 @@ export default function RotulosNutricionais() {
                   </div>
                 </div>
 
-                <div className="max-w-md rounded-[28px] border-2 border-white bg-white text-black p-6 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)]">
+                <div className="max-w-md rounded-none border-2 border-white bg-white text-black p-6 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)]">
                   <div className="border-b-4 border-black pb-3">
                     <div className="text-2xl font-black uppercase tracking-tight">Informacao nutricional</div>
                     <div className="text-sm mt-2">Porcao de referencia: 100 g</div>

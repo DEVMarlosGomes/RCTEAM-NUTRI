@@ -33,7 +33,7 @@ export const num = (v) => {
   return Number.isFinite(x) ? x : null;
 };
 const txt = (v) => (v === null || v === undefined ? "" : String(v).replace(".", ","));
-const VERDE = "#4ADE80"; const VERMELHO = "#F87171"; const LARANJA = "#FFB547"; const CINZA = "#8A97A6";
+const VERDE = "#3DDC84"; const VERMELHO = "#F87171"; const LARANJA = "#FFA53B"; const CINZA = "#8A97A6";
 
 export const ehHipertrofia = (objetivo) => /hipertrof|ganho|massa|bulking/i.test(objetivo || "");
 export const ehEmagrecimento = (objetivo) => /emagre|perda|defini|gordura|secar/i.test(objetivo || "");

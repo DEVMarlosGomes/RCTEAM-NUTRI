@@ -13,7 +13,7 @@ import useDietaConfig from "./dieta/useDietaConfig";
  * - distribuição calórica em 1 a 8 refeições (nome editável, %, kcal e P/C/L na hora), salva com a meta e
  *   levada para o planejamento da dieta (e daí para o modelo de dieta).
  */
-const COR = { ptn: "#4DA6FF", cho: "#C3F53C", lip: "#FFB547" };
+const COR = { ptn: "#0081FD", cho: "#FFFFFF", lip: "#7FC0FF" };
 // Limite mínimo de lipídio: sugestão 0,5 g/kg — A CONFIRMAR com o Rogério.
 export const LIP_MIN_GKG = 0.5;
 const MAX_REFEICOES = 8;
@@ -67,7 +67,7 @@ export function Pizza({ partes, tamanho = 150 }) {
 function CampoMacro({ rotulo, cor, valor, onChange, modo, equivalencia, somenteLeitura, aviso }) {
   return (
     <label className="block">
-      <span className="evo-label flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-[2px]" style={{ background: cor }} />{rotulo}</span>
+      <span className="evo-label flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-none" style={{ background: cor }} />{rotulo}</span>
       <div className="relative">
         <input type="text" inputMode="decimal" readOnly={somenteLeitura} value={valor} onChange={(e) => onChange?.(e.target.value)}
           className={`evo-input h-11 pr-14 tabular ${somenteLeitura ? "bg-white/[0.02] text-gray-300 cursor-not-allowed" : ""}`}
@@ -263,7 +263,7 @@ export default function PrevisaoMacros({ d, reload, onIrGasto, onIrPrescricao })
               <tbody>
                 {macros.map((m) => (
                   <tr key={m.key} className="border-t border-white/[0.05]">
-                    <th className="px-3 py-2.5 text-left font-medium text-gray-200"><span className="mr-2 inline-block h-2 w-2 rounded-[2px]" style={{ background: COR[m.key] }} />{m.label}</th>
+                    <th className="px-3 py-2.5 text-left font-medium text-gray-200"><span className="mr-2 inline-block h-2 w-2 rounded-none" style={{ background: COR[m.key] }} />{m.label}</th>
                     <td className="px-3 py-2.5 text-center tabular font-bold text-white">{fmt(m.pct, 1)}%</td>
                     <td className="px-3 py-2.5 text-center tabular text-gray-300">{fmt(m.g, 0)}</td>
                     <td className="px-3 py-2.5 text-center tabular text-gray-300">{fmt(m.gkg, 2)}</td>

@@ -136,7 +136,7 @@ function textoPlano(pl) {
   if (pl.status === "cancelado") return ["cancelado", "text-gray-500"];
   if (pl.status === "vencido") return [`vencido há ${Math.abs(pl.dias)} ${Math.abs(pl.dias) === 1 ? "dia" : "dias"}`, "text-rc-coral"];
   if (pl.status === "vencendo") return [`vence em ${pl.dias} ${pl.dias === 1 ? "dia" : "dias"}`, "text-rc-amber"];
-  return [`ativo · ${pl.dias} dias`, "text-[#4ADE80]"];
+  return [`ativo · ${pl.dias} dias`, "text-[#3DDC84]"];
 }
 
 export default function Pacientes() {
@@ -231,7 +231,7 @@ export default function Pacientes() {
             {etapa === "lead" ? (
               <tr><th className="w-[34%] px-4 py-3">Lead</th><th className="px-4 py-3">Origem</th><th className="px-4 py-3">Contato</th><th className="px-4 py-3">Situação</th><th className="w-[260px] px-4 py-3 text-right">Ações</th></tr>
             ) : (
-              <tr><th className="w-[30%] px-4 py-3">Paciente</th><th className="px-4 py-3">Etapa</th><th className="px-4 py-3">Última consulta</th><th className="px-4 py-3">Próxima consulta</th><th className="px-4 py-3">Plano</th><th className="w-[150px] px-4 py-3 text-right">Ações</th></tr>
+              <tr><th className="w-[30%] px-4 py-3">Paciente</th><th className="px-4 py-3">Etapa</th><th className="px-4 py-3">Última consulta</th><th className="px-4 py-3">Próxima consulta</th><th className="px-4 py-3">Plano</th><th className="w-[200px] px-4 py-3 text-right">Ações</th></tr>
             )}
           </thead>
           <tbody>
@@ -255,7 +255,7 @@ export default function Pacientes() {
                       <td className="px-4 py-3 text-sm tabular text-gray-300">{dataBR(p.created_at)}</td>
                       <td className="px-4 py-3 text-sm text-gray-300">{p.status_funil === "PROPOSTA_ACEITA" ? "proposta aceita" : p.formulario?.enviado_em ? "formulário enviado" : "novo contato"}</td>
                       <td className="px-4 py-3" onClick={parar}><div className="flex justify-end gap-1">
-                        <button type="button" onClick={() => enviarFormulario(p)} className="evo-btn-ghost text-xs"><Send className="h-3.5 w-3.5" /> Enviar formulário</button>
+                        <button type="button" onClick={() => enviarFormulario(p)} className="rc-btn-lista h-9 text-xs"><Send className="h-3.5 w-3.5" /> Enviar formulário</button>
                         <button type="button" onClick={() => perdido(p)} className="evo-btn-ghost text-xs text-evo-coral">Perdido</button>
                       </div></td>
                     </>

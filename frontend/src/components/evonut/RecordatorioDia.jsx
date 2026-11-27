@@ -71,9 +71,9 @@ function ResumoConsumo({ refeicoes, peso }) {
   const t = totaisDia(refeicoes);
   const kcalMacros = t.cho * 4 + t.ptn * 4 + t.lip * 9;
   const linhas = [
-    ["CHO", "cho", t.cho, 4, "#C3F53C"],
+    ["CHO", "cho", t.cho, 4, "#3DDC84"],
     ["PTN", "ptn", t.ptn, 4, "#4DA6FF"],
-    ["LIP", "lip", t.lip, 9, "#FFB547"],
+    ["LIP", "lip", t.lip, 9, "#FFA53B"],
   ];
   return (
     <div className="rc-card p-4 sm:p-5 flex flex-wrap items-center gap-6" data-testid="resumo-consumo">

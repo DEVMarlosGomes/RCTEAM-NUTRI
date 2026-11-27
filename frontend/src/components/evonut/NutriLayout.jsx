@@ -54,20 +54,16 @@ function NavItem({ link, onNavigate, compacto }) {
       title={compacto ? link.label : undefined}
       aria-label={compacto ? link.label : undefined}
       className={({ isActive }) =>
-        `group relative flex items-center gap-3 h-9 ${compacto ? "justify-center px-0" : "pl-3 pr-2"} rounded-lg text-[13.5px] transition-colors duration-150 ${
+        `group relative flex items-center gap-3 h-11 ${compacto ? "justify-center px-0" : "pl-3 pr-2"} text-[14px] transition-colors duration-150 ${
           isActive
-            ? "bg-white/[0.06] text-white font-medium"
-            : "text-gray-400 hover:text-gray-100 hover:bg-white/[0.035]"
+            ? "rc-corte bg-rc-blue text-black font-semibold"
+            : "text-gray-400 hover:text-gray-100 hover:bg-white/[0.04]"
         }`
       }
     >
       {({ isActive }) => (
         <>
-          <span
-            aria-hidden
-            className={`absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full bg-rc-lime transition-opacity duration-200 ${isActive ? "opacity-100" : "opacity-0"}`}
-          />
-          <link.icon className={`w-[17px] h-[17px] shrink-0 ${isActive ? "text-rc-lime" : "text-gray-500 group-hover:text-gray-300"}`} strokeWidth={1.75} />
+          <link.icon className={`w-[17px] h-[17px] shrink-0 ${isActive ? "text-black" : "text-gray-500 group-hover:text-gray-300"}`} strokeWidth={1.75} />
           {!compacto && <span className="truncate">{link.label}</span>}
         </>
       )}
@@ -79,9 +75,9 @@ function SidebarContent({ user, onLogout, onNavigate, compacto }) {
   return (
     <div className="flex flex-col h-full">
       <Link to="/dashboard" onClick={onNavigate} className={`flex items-center gap-3 h-16 shrink-0 ${compacto ? "justify-center" : "px-5"}`} title={compacto ? "Painel" : undefined}>
-        <RCLogo size={30} variant="blue" />
+        <RCLogo size={34} variant="ghost" />
         {!compacto && <div className="leading-none">
-          <div className="font-display font-extrabold italic uppercase text-[15px] tracking-[0.01em] text-white" style={{ fontStretch: "75%" }}>
+          <div className="font-display uppercase text-[12px] tracking-[0.04em] text-white">
             Rogério Costa
           </div>
           <div className="text-[9.5px] uppercase tracking-[0.14em] text-gray-500 mt-1 whitespace-nowrap">Nutrição · Performance</div>
@@ -102,7 +98,7 @@ function SidebarContent({ user, onLogout, onNavigate, compacto }) {
       <div className={`border-t border-white/[0.05] ${compacto ? "p-2" : "p-3"}`}>
         <NavItem link={{ to: "/configuracoes", label: "Configurações", icon: Settings, testid: "nav-configuracoes" }} onNavigate={onNavigate} compacto={compacto} />
         <div className={`mt-1 flex items-center gap-3 rounded-xl ${compacto ? "flex-col p-1" : "p-2"}`}>
-          <div className="w-9 h-9 rounded-[10px] bg-rc-raised text-rc-lime flex items-center justify-center font-display font-bold text-sm shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+          <div className="w-9 h-9 rounded-none bg-rc-raised text-rc-blue flex items-center justify-center font-display font-bold text-sm shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
             {(user?.name || "U").slice(0, 1).toUpperCase()}
           </div>
           {!compacto && (

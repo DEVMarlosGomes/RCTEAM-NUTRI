@@ -113,7 +113,7 @@ export default function EquivalentesModal({ item, refeicaoNome, onAddSubstitutos
                   type="button"
                   disabled={ja}
                   onClick={() => setMarcados((m) => ({ ...m, [e.alimento_id]: !m[e.alimento_id] }))}
-                  className={`w-6 h-6 shrink-0 rounded-md flex items-center justify-center transition-colors ${ja ? "bg-white/[0.08] text-gray-500" : marcado ? "bg-rc-lime text-rc-ink" : "shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.18)] hover:shadow-[inset_0_0_0_1.5px_#C3F53C]"}`}
+                  className={`w-6 h-6 shrink-0 rounded-md flex items-center justify-center transition-colors ${ja ? "bg-white/[0.08] text-gray-500" : marcado ? "bg-rc-blue text-black" : "shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.18)] hover:shadow-[inset_0_0_0_1.5px_#3DDC84]"}`}
                   aria-label={ja ? "Já é substituto" : marcado ? "Desmarcar" : "Marcar como substituto"}
                 >
                   {(marcado || ja) && <Check className="w-3.5 h-3.5" strokeWidth={3} />}

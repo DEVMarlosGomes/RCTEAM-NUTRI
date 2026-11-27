@@ -64,7 +64,7 @@ export default function Dashboard() {
 
   return (
     <NutriLayout>
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4" data-testid="painel-topo">
+      <header className="rc-padrao-r rc-card mb-6 flex flex-wrap items-end justify-between gap-4 px-5 py-6 sm:px-7" data-testid="painel-topo">
         <div>
           <div className="rc-eyebrow">Painel</div>
           <h1 className="rc-h1 mt-2">{saudacao()}{nome ? `, ${nome}` : ""}</h1>
@@ -102,7 +102,7 @@ export default function Dashboard() {
 
           <section className="rc-card p-5" data-testid="painel-pendencias">
             <h2 className="rc-h3 mb-3">Pendências <span className="ml-1 rounded-full bg-white/[0.08] px-2 py-0.5 text-[12px] font-semibold tabular text-gray-200">{nPend}</span></h2>
-            {!dados ? <div className="h-10 animate-pulse-soft rounded bg-white/[0.05]" /> : !nPend ? <p className="text-[14px] text-gray-400"><Check className="mr-2 inline h-4 w-4 text-[#4ADE80]" />Tudo em dia.</p> : (
+            {!dados ? <div className="h-10 animate-pulse-soft rounded bg-white/[0.05]" /> : !nPend ? <p className="text-[14px] text-gray-400"><Check className="mr-2 inline h-4 w-4 text-[#3DDC84]" />Tudo em dia.</p> : (
               <ul className="divide-y divide-white/[0.05]">
                 {dados.pendencias.map((p) => {
                   const Ic = ICONE_PEND[p.tipo] || AlertTriangle;
@@ -110,7 +110,7 @@ export default function Dashboard() {
                     <li key={`${p.paciente_id}-${p.tipo}`} className="flex flex-wrap items-center gap-3 py-2.5" data-testid={`pendencia-${p.tipo}`}>
                       <Ic className={`h-4 w-4 shrink-0 ${COR_PEND[p.tipo] || "text-rc-blueLight"}`} />
                       <span className="min-w-0 flex-1 text-[13.5px]"><Link to={`/pacientes/${p.paciente_id}`} className="font-semibold text-white hover:underline">{p.nome}</Link> <span className="text-gray-400">· {p.texto}</span></span>
-                      <button type="button" onClick={() => agir(p)} className="rc-btn-secondary h-8 text-[12.5px]">{ROTULO_ACAO[p.acao] || "Abrir"}</button>
+                      <button type="button" onClick={() => agir(p)} className="rc-btn-lista h-9 text-[12.5px]">{ROTULO_ACAO[p.acao] || "Abrir"}</button>
                       <button type="button" onClick={() => resolver(p)} className="rc-btn-ghost h-8 text-[12px]" title="Marcar como resolvida" aria-label="Resolvida"><Check className="h-3.5 w-3.5" /></button>
                     </li>
                   );
