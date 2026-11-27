@@ -130,6 +130,7 @@ export function draftDoPlano(plano, d) {
     recomendacoes,
     listas_substituicao: (plano.listas_substituicao || []).map((l) => ({ ...blocoDoSalvo(l), nome: l.nome || "" })),
     orientacao_ids: plano.orientacao_ids || [],
+    ciclo_tipo: plano.ciclo_tipo || null,
     // o texto antigo de "Orientacoes" migra para a primeira observacao da dieta
     observacoes: (plano.recomendacoes || []).length ? plano.observacoes || "" : "",
   };
@@ -147,6 +148,7 @@ export function payloadDoDraft(draft) {
     prescricao_dietetica: { ...(draft.prescricao_dietetica || {}), estrategia: draft.estrategia || null },
     planejamento: draft.planejamento || {},
     orientacao_ids: draft.orientacao_ids || [],
+    ciclo_tipo: draft.ciclo_tipo || null,
     observacoes: draft.observacoes || "",
     refeicoes: (draft.refeicoes || []).map((r) => ({
       nome: r.nome || "",

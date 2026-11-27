@@ -19,6 +19,7 @@ import { EstatisticaRefeicaoModal } from "./dieta/Nutrientes";
 import useDietaConfig from "./dieta/useDietaConfig";
 import { itensParaSalvar } from "./dieta/calculos";
 import { draftDoPlano, draftNovo, payloadDoDraft } from "./dieta/plano";
+import { DIAS, ROTULO_NIVEL, situacaoDoCiclo } from "@/lib/ciclos";
 
 // salvar() ja avisa o erro; os demais fluxos so avisam o que ainda nao foi avisado
 const avisarErro = (error) => {
@@ -309,6 +310,7 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
                 className={`shrink-0 h-9 px-4 rounded-lg text-[13.5px] transition-colors ${ativa ? "bg-rc-raised text-white font-semibold shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)]" : "text-gray-400 hover:text-white hover:bg-white/[0.04]"}`}
               >
                 {ativa ? draft.titulo || "Sem título" : p.titulo || "Sem título"}
+                {(ativa ? draft.ciclo_tipo : p.ciclo_tipo) && <span className="ml-2 bg-rc-blue/20 px-1.5 text-[10.5px] font-semibold text-rc-blueLight">ciclo</span>}
                 {ativa && sujo && <span className="ml-2 inline-block w-1.5 h-1.5 rounded-full bg-rc-amber align-middle" title="Alterações não salvas" />}
                 {!p.id && <span className="ml-2 text-[11px] text-gray-500 font-normal">não salva</span>}
               </button>
@@ -337,6 +339,8 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
           </div>
         </div>
       )}
+
+      <FaixaCiclo ciclo={d.patient?.ciclo_carbo} draft={draft} planos={planos} onAbrir={trocarPara} />
 
       <BarraTotal refeicoes={draft.refeicoes} peso={peso} planejamento={draft.planejamento} onOutrasOpcoes={() => setOutras("vitaminas")} />
 
@@ -434,6 +438,30 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
         <PromptDialogo titulo="Modelo de refeição" rotulo="Título do modelo de refeição" valorInicial={prompt.sugestao ? prompt.sugestao.charAt(0) + prompt.sugestao.slice(1).toLowerCase() : ""}
           onConfirmar={(t) => salvarModeloRefeicao(t, prompt.bloco).catch(avisarErro)} onClose={() => setPrompt(null)} />
       )}
+    </div>
+  );
+}
+
+
+/** Ciclo de carbo (cid1/cic1): o que vale hoje e qual dieta usar. */
+function FaixaCiclo({ ciclo, draft, planos, onAbrir }) {
+  if (!ciclo) return null;
+  const sit = situacaoDoCiclo(ciclo);
+  if (!sit) return null;
+  const rotulo = (chave) => (chave?.startsWith("fase") ? (() => { const f = ciclo.fases?.[Number(chave.slice(4)) - 1]; return f ? `${f.nome} · ${f.tipo === "low" ? "low" : "high"} carb` : chave; })() : ROTULO_NIVEL[chave] || chave);
+  const hoje = ciclo.tipo === "haluch"
+    ? (sit.terminou ? "ciclo terminado" : sit.antesDoInicio ? `começa em ${String(ciclo.inicio).split("-").reverse().join("/")}` : `${rotulo(sit.chave)}${sit.semanaNaFase ? ` · semana ${sit.semanaNaFase} de ${sit.semanasFase}` : ""}`)
+    : ciclo.unidade === "semana" ? `${rotulo(sit.chave)} · semana ${sit.semana}` : `${rotulo(sit.chave)} (${DIAS.find(([k]) => k === sit.dia)?.[1] || ""})`;
+  const dietaHoje = (planos || []).find((x) => x.ciclo_tipo === sit.chave);
+  const diasDesta = draft?.ciclo_tipo && ciclo.tipo === "nivel" && ciclo.unidade !== "semana"
+    ? DIAS.filter(([k]) => (ciclo.semana || {})[k] === draft.ciclo_tipo).map(([, r]) => r).join(", ") : "";
+  return (
+    <div className="rc-card flex flex-wrap items-center gap-x-4 gap-y-2 border-l-2 border-rc-blue px-4 py-2.5 text-[13px]" data-testid="faixa-ciclo">
+      <span className="text-gray-400">Ciclo de carbo · hoje: <b className="text-white">{hoje}</b></span>
+      {draft?.ciclo_tipo && <span className="text-gray-400">Esta dieta: <b className="text-white">{rotulo(draft.ciclo_tipo)}</b>{diasDesta ? ` · ${diasDesta}` : ""}</span>}
+      {sit.proximaTroca && <span className="text-gray-500">troca em {String(sit.proximaTroca).split("-").reverse().join("/")}</span>}
+      {dietaHoje && dietaHoje.id !== draft?.id && <button type="button" onClick={() => onAbrir(dietaHoje)} className="rc-btn-lista ml-auto h-8 text-[12px]">Abrir a dieta de hoje</button>}
+      {!dietaHoje && <span className="ml-auto text-[12px] text-rc-amber">Sem dieta para {rotulo(sit.chave)}: crie em Macros › Ciclo de carboidratos.</span>}
     </div>
   );
 }

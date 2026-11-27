@@ -246,6 +246,8 @@ const dadosPessoaisDe = (p) => ({
   sexo: ["F", "M"].includes(p.sexo) ? p.sexo : "",
   gestante: Boolean(p.gestante),
   atleta: Boolean(p.atleta),
+  fase_treino: p.fase_treino || "",
+  usa_esteroides: Boolean(p.usa_esteroides),
   altura: p.altura != null ? String(p.altura) : "",
   peso: p.peso != null ? String(p.peso).replace(".", ",") : "",
   objetivo: p.objetivo || "",
@@ -280,6 +282,7 @@ function DadosPessoais({ patient, reload }) {
         data_primeira_consulta: form.data_primeira_consulta || null,
         sexo: form.sexo || null,
         gestante: form.sexo === "F" ? form.gestante : false,
+        fase_treino: form.fase_treino || null,
         altura: form.altura.trim() ? Math.round(Number(form.altura.replace(",", "."))) || null : null,
         peso: form.peso.trim() ? Number(form.peso.replace(",", ".")) || null : null,
       });
@@ -352,6 +355,23 @@ function DadosPessoais({ patient, reload }) {
             <option value="sim">Sim</option>
           </select>
           <span className="block text-[11px] text-gray-500 mt-1">Define o critério de cor das dobras cutâneas.</span>
+        </label>
+        <label className="block">
+          <span className="evo-label">Fase</span>
+          <select className="evo-input" value={form.fase_treino} onChange={(e) => set("fase_treino", e.target.value)} data-testid="dp-fase">
+            <option value="">Não definida</option>
+            <option value="off">Off-season</option>
+            <option value="cutting">Cutting</option>
+          </select>
+          <span className="block text-[11px] text-gray-500 mt-1">Escolhe a tabela de % de gordura do atleta e sugere o objetivo dos macros.</span>
+        </label>
+        <label className="block">
+          <span className="evo-label">Uso de esteroides</span>
+          <select className="evo-input" value={form.usa_esteroides ? "sim" : "nao"} onChange={(e) => set("usa_esteroides", e.target.value === "sim")} data-testid="dp-esteroides">
+            <option value="nao">Não</option>
+            <option value="sim">Sim</option>
+          </select>
+          <span className="block text-[11px] text-gray-500 mt-1">Campo sensível: visível só para você (não sai no PDF nem no app do paciente).</span>
         </label>
         {form.sexo === "F" && (
           <label className="block">

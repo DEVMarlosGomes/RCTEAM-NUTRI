@@ -44,6 +44,7 @@ from financeiro import build_financeiro_router
 from dieta import build_dieta_router
 from alimentos_base import BASE_VERSAO, corrigir_mojibake, normalizar_nome, sincronizar_base
 import anamnese_form as af
+import ciclos as ciclos_mod
 import protocolos_dobras as protd
 from types import SimpleNamespace
 import json
@@ -236,6 +237,11 @@ class PatientUpdateIn(BaseModel):
     gestante: Optional[bool] = None
     # Perfil atleta: muda o critério de cor das dobras cutâneas (faixas por dobra e sexo).
     atleta: Optional[bool] = None
+    # gor1: fase do atleta (off/cutting) e uso de esteroides (sensível: só o nutricionista vê)
+    fase_treino: Optional[Literal["off", "cutting"]] = None
+    usa_esteroides: Optional[bool] = None
+    meta_gordura: Optional[dict] = None
+    ciclo_carbo: Optional[dict] = None  # cid1/cic1: ciclo de carboidrato (ver ciclos.py)
     data_primeira_consulta: Optional[str] = None
     observacoes: Optional[str] = Field(default=None, max_length=20000)
     meta_energetica: Optional[dict] = None
@@ -2089,7 +2095,7 @@ def _link_agendamento(p: dict, plano: Optional[str] = None) -> str:
     return f"{base}/agendar/{p['lead_token']}{q}"
 
 
-async def _ai_rapido(session_id: str, sistema: str, texto: str) -> str:
+async def _ai_rapido(session_id: str, sistema: str, texto: str, max_tokens: int = 700) -> str:
     """WhatsApp pede resposta rápida: cada provedor tem um tempo curto; estourou, passa para o próximo."""
     msgs = [{"role": "user", "content": texto}]
     tentativas = []
@@ -2099,12 +2105,12 @@ async def _ai_rapido(session_id: str, sistema: str, texto: str) -> str:
             # modelos leves primeiro (respondem em segundos); cada um com uma tentativa curta
             leves = [m.strip() for m in (os.environ.get("WHATSAPP_GEMINI_MODELS") or "gemini-3.5-flash-lite,gemini-3.1-flash-lite").split(",") if m.strip()]
             modelos = list(dict.fromkeys(leves + _GEMINI_MODELS))
-            tentativas.append(("gemini", lambda: _gemini_chat(msgs, sistema, GEMINI_KEY, max_tokens=700, temperature=0.5, timeout=10,
-                                                              thinking_budget=512, models=modelos, retry_delays=[]), 35))
+            tentativas.append(("gemini", lambda: _gemini_chat(msgs, sistema, GEMINI_KEY, max_tokens=max_tokens, temperature=0.5, timeout=10 + max_tokens // 400,
+                                                              thinking_budget=512, models=modelos, retry_delays=[]), 35 + max_tokens // 200))
         elif prov == "groq" and GROQ_API_KEY:
-            tentativas.append(("groq", lambda: _groq_chat(msgs, sistema, 700, 0.5, 20), 22))
+            tentativas.append(("groq", lambda: _groq_chat(msgs, sistema, max_tokens, 0.5, 20), 22))
         elif prov == "anthropic" and ANTHROPIC_API_KEY:
-            tentativas.append(("anthropic", lambda: _anthropic_chat(msgs, sistema, session_id, 700, 0.5), 30))
+            tentativas.append(("anthropic", lambda: _anthropic_chat(msgs, sistema, session_id, max_tokens, 0.5), 45))
     falhas = []
     for nome, chamar, limite in tentativas:
         try:
@@ -2413,9 +2419,26 @@ async def _avisos_renovacao(agora: datetime) -> int:
     return feitos
 
 
+async def _avisos_troca_fase(agora: datetime) -> int:
+    """Ciclo de carbo: avisa o paciente na véspera de trocar de fase (uma vez por troca)."""
+    feitos = 0
+    hoje = agora.astimezone(TZ_BR).date()
+    async for p in db.patients.find({"ciclo_carbo": {"$ne": None}, "status_funil": {"$nin": ["PERDIDO", "INATIVO"]}}, {"_id": 0}):
+        sit = ciclos_mod.situacao(p.get("ciclo_carbo"), hoje)
+        troca = (sit or {}).get("proxima_troca")
+        if not troca or (troca - hoje).days != 1 or (p.get("ciclo_avisos") or {}).get(troca.isoformat()):
+            continue
+        await whatsapp_enviar(p, f"Oi, {_primeiro_nome(p)}! Amanhã começa a próxima etapa do seu plano: {sit.get('proximo_rotulo')}. "
+                                 "A dieta muda junto; o plano novo já fica no app.", "lembrete")
+        await db.patients.update_one({"id": p["id"]}, {"$set": {f"ciclo_avisos.{troca.isoformat()}": iso(agora)}})
+        feitos += 1
+    return feitos
+
+
 async def rodar_followups(agora: Optional[datetime] = None) -> dict:
     agora = agora or now_utc()
-    return {"leads": await _followup_leads(agora), "consultas": await _lembretes_consulta(agora), "renovacao": await _avisos_renovacao(agora)}
+    return {"leads": await _followup_leads(agora), "consultas": await _lembretes_consulta(agora), "renovacao": await _avisos_renovacao(agora),
+            "troca_fase": await _avisos_troca_fase(agora)}
 
 
 async def followups_se_for_hora():
@@ -2435,6 +2458,217 @@ async def followups_se_for_hora():
 async def rodar_followups_agora(user=Depends(require_nutritionist)):
     """Roda os follow-ups e lembretes agora (normalmente a cada 10 min)."""
     return await rodar_followups()
+
+
+# ── Cadastro de alimentos com IA (ajuste ali1 do Rogério) ───────────────────
+# Ordem: TACO → TBCA (valores reais das tabelas que já estão no banco, inclusive as arquivadas) → USDA (pela IA,
+# marcado "revisar") → estimado (revisar). Marca bloqueada por padrão: a IA devolve o nome genérico.
+# Nada é salvo sem aprovação: aprovar um da TACO/TBCA reativa o alimento da tabela; os outros viram alimento próprio.
+_MARCAS = ["growth", "integralmedica", "integral medica", "max titanium", "probiotica", "probiótica", "dux", "black skull", "optimum",
+           "nestle", "nestlé", "ninho", "italac", "piracanjuba", "danone", "activia", "yopro", "vigor", "batavo", "elegê", "itambé",
+           "sadia", "perdigão", "seara", "aurora", "quaker", "kellogg", "nescau", "toddy", "mupy", "ades", "del valle", "coca",
+           "nissin", "bauducco", "visconti", "piraquê", "marilan", "tirolez", "polenghi", "qualy", "becel", "doriana", "hellmann",
+           "liza", "soya", "camil", "tio joão", "kicaldo", "fugini", "predilecta", "essential nutrition", "atlhetica", "atlhética",
+           "new millen", "darkness", "puravida", "mais mu", "verde campo", "jasmine", "vitao", "mãe terra", "piracanjuba"]
+_FONTES_TABELA = ["TACO", "TBCA"]
+
+
+def _sem_acento(t: str) -> str:
+    return unicodedata.normalize("NFD", str(t or "")).encode("ascii", "ignore").decode().lower()
+
+
+def _marca_em(nome: str) -> Optional[str]:
+    n = f" {_sem_acento(nome)} "
+    for m in _MARCAS:
+        if f" {_sem_acento(m)} " in n or n.strip().startswith(_sem_acento(m) + " "):
+            return m
+    return None
+
+
+def categoria_app(doc: dict) -> str:
+    """Categoria organizada para a lista (frutas e hortaliças separadas de cereais/tubérculos)."""
+    g = _sem_acento(doc.get("grupo") or doc.get("categoria") or "")
+    nome = _sem_acento(doc.get("nome") or "")
+    if re.search(r"suplement|whey|creatina|albumina|maltodextrina", g + " " + nome):
+        return "Suplementos"
+    if re.search(r"fruta|fruto", g) and not re.search(r"cereais", g):
+        return "Frutas"
+    if re.search(r"cereais, raizes|cereais, ra", g):
+        if re.search(r"^(banana|maca|mamao|manga|abacaxi|laranja|uva|pera|melancia|melao|morango|kiwi|goiaba|caqui|ameixa|abacate|acai|acerola|caju|coco|figo|jabuticaba|limao|maracuja|pessego|pitanga|tangerina|mexerica)", nome):
+            return "Frutas"
+        return "Cereais, pães e tubérculos"
+    if re.search(r"vegeta|hortali|livre", g):
+        return "Hortaliças e vegetais"
+    if re.search(r"cereai|paes|pao|massa|tuberc|raiz", g):
+        return "Cereais, pães e tubérculos"
+    if re.search(r"feij|legumin", g):
+        return "Leguminosas"
+    if re.search(r"carne|peixe|ovo|prote|frango", g):
+        return "Carnes, ovos e peixes"
+    if re.search(r"leite|latic|queijo|iogur", g):
+        return "Leite e derivados"
+    if re.search(r"oleaginos|nozes|semente|oleosa", g):
+        return "Oleaginosas e sementes"
+    if re.search(r"oleo|gordura", g):
+        return "Óleos e gorduras"
+    if re.search(r"suco|bebida", g):
+        return "Bebidas e sucos"
+    if re.search(r"fibra", g):
+        return "Fibras"
+    if re.search(r"acucar|doce", g):
+        return "Açúcares e doces"
+    return "Outros"
+
+
+def _nutri_100g(doc: dict) -> dict:
+    m = _macros_100g(doc)
+    n = doc.get("nutrientes") or {}
+    p = doc.get("por_100g") or {}
+    sodio = _coerce_float(n.get("sodio_mg") if "nutrientes" in doc else p.get("sodio_mg"))
+    return {"energia_kcal": m["kcal"], "proteinas_g": m["ptn"], "carboidratos_g": m["cho"], "lipidios_g": m["lip"], "fibras_g": m["fib"], "sodio_mg": sodio}
+
+
+def _conferir_kcal(n: dict) -> dict:
+    calc = (n.get("proteinas_g") or 0) * 4 + (n.get("carboidratos_g") or 0) * 4 + (n.get("lipidios_g") or 0) * 9
+    kcal = n.get("energia_kcal")
+    if kcal is None:
+        return {"calculada": round(calc, 1), "ok": None}
+    dif = abs(calc - kcal) / kcal if kcal else (0 if calc == 0 else 1)
+    return {"calculada": round(calc, 1), "diferenca_pct": round(dif * 100, 1), "ok": dif <= 0.15}
+
+
+def _rx_sem_acento(palavra: str) -> str:
+    """Regex que casa a palavra com ou sem acento (brocolis → br[oóôõ]c[oóôõ]l[iíî]s)."""
+    mapa = {"a": "[aáàâã]", "e": "[eéê]", "i": "[iíî]", "o": "[oóôõ]", "u": "[uúü]", "c": "[cç]"}
+    return "".join(mapa.get(ch, re.escape(ch)) for ch in palavra)
+
+
+async def _candidatos_tabela(nome: str, limite: int = 6) -> list:
+    """Alimentos da TACO/TBCA (ativos ou arquivados) parecidos com o nome."""
+    palavras = [w for w in re.findall(r"[a-z0-9]+", _sem_acento(nome)) if len(w) >= 3][:3]
+    if not palavras:
+        return []
+    filtro = {"fonte": {"$in": _FONTES_TABELA}, "$and": [{"nome": {"$regex": _rx_sem_acento(w[:6]), "$options": "i"}} for w in palavras]}
+    docs = await db.alimentos.find(filtro, {"_id": 0}).limit(40).to_list(40)
+    if not docs and palavras:
+        docs = await db.alimentos.find({"fonte": {"$in": _FONTES_TABELA}, "nome": {"$regex": _rx_sem_acento(palavras[0][:6]), "$options": "i"}}, {"_id": 0}).limit(40).to_list(40)
+    docs.sort(key=lambda d: (_FONTES_TABELA.index(d.get("fonte")) if d.get("fonte") in _FONTES_TABELA else 9, len(d.get("nome") or "")))
+    return docs[:limite]
+
+
+async def _duplicado_na_base(nome: str, nid: str) -> Optional[dict]:
+    alvo = _sem_acento(nome).strip()
+    if len(alvo) < 3:
+        return None
+    rx = _rx_sem_acento(alvo.split()[0][:6])
+    async for d in db.alimentos.find({"arquivado": {"$ne": True}, "nome": {"$regex": rx, "$options": "i"},
+                                      "$or": [{"nutricionista_id": None}, {"nutricionista_id": {"$exists": False}}, {"nutricionista_id": nid}]},
+                                     {"_id": 0, "id": 1, "nome": 1, "fonte": 1}).limit(60):
+        if SequenceMatcher(None, re.sub(r"[^a-z0-9 ]", "", _sem_acento(d["nome"])), re.sub(r"[^a-z0-9 ]", "", alvo)).ratio() >= 0.9:
+            return d
+    return None
+
+
+class AlimentosIaIn(BaseModel):
+    nomes: List[str] = Field(min_length=1, max_length=40)
+    bloquear_marcas: bool = True
+
+
+@api.post("/alimentos/ia/rascunho")
+async def alimentos_ia_rascunho(payload: AlimentosIaIn, user=Depends(require_nutritionist)):
+    nomes = [x.strip() for x in payload.nomes if x and x.strip()][:40]
+    entradas = []
+    for nome in nomes:
+        entradas.append({"pedido": nome, "marca": _marca_em(nome) if payload.bloquear_marcas else None,
+                         "candidatos": [{"id": c["id"], "nome": c["nome"], "fonte": c.get("fonte")} for c in await _candidatos_tabela(nome)]})
+    sistema = ("Você ajuda um nutricionista a cadastrar alimentos. Para cada pedido: (1) se o nome tiver marca comercial e bloquear_marcas for "
+               "verdadeiro, use o nome GENÉRICO (ex.: 'whey growth' → 'Whey protein concentrado'); (2) escolha entre os candidatos o que "
+               "corresponde ao alimento (prefira TACO, depois TBCA; mesmo estado: cru/cozido); se nenhum corresponder, escolha_id = null; "
+               "(3) só quando escolha_id for null, informe os nutrientes por 100 g da USDA FoodData Central (fonte 'USDA') ou, se não houver, "
+               "uma estimativa (fonte 'estimado'). Também: categoria (Frutas, Hortaliças e vegetais, Cereais, pães e tubérculos, Leguminosas, "
+               "Carnes, ovos e peixes, Leite e derivados, Óleos e gorduras, Oleaginosas e sementes, Bebidas e sucos, Açúcares e doces, Suplementos, "
+               "Outros), porcao_g, medida_caseira (ex.: '1 unidade média (120 g)'), liquido (true/false) e densidade (g/ml, só se líquido). "
+               "Responda APENAS JSON: {\"itens\": [{\"pedido\", \"nome_generico\", \"escolha_id\", \"fonte\", \"categoria\", \"porcao_g\", "
+               "\"medida_caseira\", \"liquido\", \"densidade\", \"nutrientes\": {\"energia_kcal\", \"proteinas_g\", \"carboidratos_g\", "
+               "\"lipidios_g\", \"fibras_g\", \"sodio_mg\"} ou null}]}")
+    entrada_txt = json.dumps({"bloquear_marcas": payload.bloquear_marcas, "pedidos": entradas}, ensure_ascii=False)
+    try:
+        bruto = await _ai_rapido(f"alimentos-{user['id']}", sistema, entrada_txt, max_tokens=900 * len(nomes) + 600)
+        resp = donato_gemini.parse_json(bruto)
+    except Exception as e:
+        logging.exception("cadastro de alimentos com IA falhou")
+        raise HTTPException(503, f"IA indisponível agora: {str(e)[:120]}")
+    por_pedido = {str(x.get("pedido") or "").strip().lower(): x for x in resp.get("itens") or []}
+    saida = []
+    for e in entradas:
+        ia = por_pedido.get(e["pedido"].lower()) or {}
+        escolha = next((c for c in e["candidatos"] if c["id"] == ia.get("escolha_id")), None)
+        nome_final = (ia.get("nome_generico") or e["pedido"]).strip()
+        if escolha:
+            doc = await db.alimentos.find_one({"id": escolha["id"]}, {"_id": 0})
+            nutr = _nutri_100g(doc)
+            item = {"pedido": e["pedido"], "nome": doc.get("nome"), "fonte": doc.get("fonte"), "alimento_tabela_id": doc["id"],
+                    "ja_na_base": not doc.get("arquivado"), "revisar": False}
+        else:
+            nutr = {k: _coerce_float((ia.get("nutrientes") or {}).get(k)) for k in ("energia_kcal", "proteinas_g", "carboidratos_g", "lipidios_g", "fibras_g", "sodio_mg")}
+            fonte = "USDA" if str(ia.get("fonte") or "").upper() == "USDA" else "estimado"
+            item = {"pedido": e["pedido"], "nome": nome_final, "fonte": fonte, "alimento_tabela_id": None, "ja_na_base": False, "revisar": True}
+        item.update({"nutrientes_100g": nutr, "conferencia_kcal": _conferir_kcal(nutr), "categoria": ia.get("categoria") or "Outros",
+                     "porcao_g": _coerce_float(ia.get("porcao_g")) or 100, "medida_caseira": ia.get("medida_caseira") or "100 g",
+                     "liquido": bool(ia.get("liquido")), "densidade": _coerce_float(ia.get("densidade")),
+                     "marca_bloqueada": e["marca"], "nome_pedido_trocado": bool(e["marca"]) and _sem_acento(nome_final) != _sem_acento(e["pedido"])})
+        if item.get("ja_na_base"):  # o próprio alimento da tabela já está na base
+            item["duplicado"] = {"id": item["alimento_tabela_id"], "nome": item["nome"], "fonte": item["fonte"]}
+        else:
+            dup = await _duplicado_na_base(item["nome"], user["id"])
+            item["duplicado"] = dup if dup and dup.get("id") != item.get("alimento_tabela_id") else None
+        saida.append(item)
+    return {"itens": saida}
+
+
+class AlimentoIaAprovarItem(BaseModel):
+    nome: str = Field(min_length=2, max_length=160)
+    fonte: str
+    alimento_tabela_id: Optional[str] = None
+    categoria: str = "Outros"
+    porcao_g: float = 100
+    medida_caseira: str = "100 g"
+    liquido: bool = False
+    densidade: Optional[float] = None
+    nutrientes_100g: dict = {}
+    revisado: bool = False
+
+
+class AlimentosIaAprovarIn(BaseModel):
+    itens: List[AlimentoIaAprovarItem] = Field(min_length=1, max_length=40)
+
+
+@api.post("/alimentos/ia/aprovar")
+async def alimentos_ia_aprovar(payload: AlimentosIaAprovarIn, user=Depends(require_nutritionist)):
+    feitos, pulados = [], []
+    for it in payload.itens:
+        if it.fonte not in _FONTES_TABELA and not it.revisado:
+            pulados.append(f"{it.nome}: marque como revisado antes de aprovar")
+            continue
+        if _marca_em(it.nome):
+            pulados.append(f"{it.nome}: nome com marca (use o genérico)")
+            continue
+        if it.alimento_tabela_id:
+            # alimento da TACO/TBCA: volta para a base (sai do arquivo), com as medidas da tabela
+            res = await db.alimentos.update_one({"id": it.alimento_tabela_id, "fonte": {"$in": _FONTES_TABELA}},
+                                                {"$set": {"arquivado": False, "incluido_por_ia_em": iso(now_utc()),
+                                                          **({"liquido": True, "densidade": it.densidade} if it.liquido else {})}})
+            if res.matched_count:
+                feitos.append({"id": it.alimento_tabela_id, "nome": it.nome, "fonte": it.fonte})
+            continue
+        n = it.nutrientes_100g or {}
+        doc = {"id": str(uuid.uuid4()), "nome": it.nome.strip(), "categoria": it.categoria, "fonte": "CUSTOM", "origem_dado": it.fonte,
+               "nutricionista_id": user["id"], "porcao_padrao_g": it.porcao_g, "medida_caseira": it.medida_caseira,
+               "por_100g": {k: _coerce_float(n.get(k)) or 0 for k in ("energia_kcal", "proteinas_g", "carboidratos_g", "lipidios_g", "fibras_g", "sodio_mg")},
+               "liquido": it.liquido, "densidade": it.densidade if it.liquido else None, "revisado_em": iso(now_utc()), "criado_em": iso(now_utc())}
+        await db.alimentos.insert_one(dict(doc))
+        feitos.append({"id": doc["id"], "nome": doc["nome"], "fonte": it.fonte})
+    return {"incluidos": feitos, "pulados": pulados}
 
 
 # ── Painel "o que fazer hoje" (ajuste pain1 do Rogério) ─────────────────────
@@ -2554,6 +2788,12 @@ async def painel(user=Depends(require_nutritionist)):
             add(p, "plano_vencendo", f"Plano vence em {sit['dias']} dias", "renovar", (p.get("assinatura") or {}).get("vencimento"))
         elif sit["status"] == "vencido":
             add(p, "pagamento_atrasado", f"Pagamento atrasado há {-sit['dias']} dias", "cobrar", (p.get("assinatura") or {}).get("vencimento"))
+        sit_ciclo = ciclos_mod.situacao(p.get("ciclo_carbo"), hoje)
+        if sit_ciclo and sit_ciclo.get("proxima_troca"):
+            faltam = (sit_ciclo["proxima_troca"] - hoje).days
+            if 0 <= faltam <= 3:
+                add(p, "troca_fase", f"Troca de fase em {faltam} {'dia' if faltam == 1 else 'dias'}: {sit_ciclo.get('rotulo')} → {sit_ciclo.get('proximo_rotulo')}. Revise o plano da próxima fase",
+                    "prescricao", sit_ciclo["proxima_troca"].isoformat())
         ch = p.get("conversa_humana") or {}
         if ch.get("aberta"):
             add(p, "conversa", f"Conversa para você: {ch.get('pergunta') or 'cliente aguardando resposta'}"[:140], "conversa", max(str(ch.get("desde") or ""), str(p.get("ultima_mensagem_cliente") or "")))
@@ -3661,6 +3901,12 @@ async def _donato_clinical_context(p: dict, payload: DonatoDraftIn, scaffold: di
             "naf": comp.get("naf"), "fator_injuria": comp.get("fi"), "get_kcal": comp.get("get_kcal"),
         },
         "antropometria": {k: comp.get(k) for k in ("imc", "imc_classificacao", "pct_gordura", "massa_magra", "ic", "rcq", "peso_ideal_min", "peso_ideal_max")},
+        # gor1: fase do atleta, meta de % de gordura e peso-alvo (massa magra mantida)
+        "fase_e_meta_de_gordura": {
+            "atleta": bool(p.get("atleta")), "fase": {"off": "Off-season", "cutting": "Cutting"}.get(p.get("fase_treino")),
+            "meta_pct_gordura": [(p.get("meta_gordura") or {}).get("min"), (p.get("meta_gordura") or {}).get("max")] if (p.get("meta_gordura") or {}).get("min") is not None else None,
+            "peso_alvo_kg": [(p.get("meta_gordura") or {}).get("peso_alvo_min"), (p.get("meta_gordura") or {}).get("peso_alvo_max")] if (p.get("meta_gordura") or {}).get("peso_alvo_min") else None,
+        },
         "perimetria_cm": (aval or {}).get("perimetria"),
         "anamnese": anamnese or None,
         "exames_laboratoriais": _drhouse_lotes_payload([lote]) if lote else None,
@@ -3888,6 +4134,11 @@ async def donato_entrada(pid: str, user=Depends(require_nutritionist)):
         {"campo": "Altura", "valor": f"{(aval or {}).get('altura') or p.get('altura')} cm" if ((aval or {}).get("altura") or p.get("altura")) else None, "origem": "Ficha"},
         {"campo": "% de gordura", "valor": f"{comp.get('pct_gordura')} %" if comp.get("pct_gordura") is not None else None, "origem": "Antropometria"},
         {"campo": "Objetivo", "valor": p.get("objetivo"), "origem": "Ficha"},
+        {"campo": "Fase e meta de gordura", "valor": " · ".join(x for x in (
+            {"off": "Off-season", "cutting": "Cutting"}.get(p.get("fase_treino")),
+            (f"meta {(p.get('meta_gordura') or {}).get('min')}–{(p.get('meta_gordura') or {}).get('max')}%" if (p.get("meta_gordura") or {}).get("min") is not None else None),
+            (f"peso-alvo {(p.get('meta_gordura') or {}).get('peso_alvo_min')}–{(p.get('meta_gordura') or {}).get('peso_alvo_max')} kg" if (p.get("meta_gordura") or {}).get("peso_alvo_min") else None),
+        ) if x) or None, "origem": "Antropometria"},
         {"campo": "Diagnósticos", "valor": do_form(r"doen|diagn|patolog|condi"), "origem": "Formulário"},
         {"campo": "Medicamentos", "valor": do_form(r"medica|rem[eé]dio"), "origem": "Formulário"},
         {"campo": "Rotina", "valor": do_form(r"rotina|treino|acorda|dorme"), "origem": "Formulário"},
@@ -5922,6 +6173,8 @@ async def search_alimentos(
     for a in docs:
         # Normaliza campos de display para ambos os formatos (evonut e legado TACO/CUSTOM)
         m100 = _macros_100g(a)
+        a["sodio_mg_100g"] = _nutri_100g(a)["sodio_mg"]
+        a["categoria_app"] = categoria_app(a)
         a.pop("nutrientes", None)
         a.pop("por_100g", None)
         a["energia_kcal_100g"] = m100["kcal"]
@@ -6686,6 +6939,7 @@ class PlanoManualIn(BaseModel):
     recomendacoes: List[dict] = []          # [{titulo, texto}] - "Observacoes da dieta"
     planejamento: Optional[dict] = None     # metas: kcal, pct_*, kcal_kg, *_gkg
     listas_substituicao: List[ListaSubstituicaoPlano] = []
+    ciclo_tipo: Optional[str] = None        # dieta de um tipo do ciclo: alto|medio|baixo|fase1..fase4
 
 class PlanoTemplateIn(BaseModel):
     nome: str

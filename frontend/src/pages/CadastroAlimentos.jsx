@@ -3,15 +3,19 @@ import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
 import { Database, Download, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { useSearchParams } from "react-router-dom";
+import AlimentosIA from "@/components/evonut/AlimentosIA";
 
+// ali1: a lista mostra os macros por 100 g (antes vinha "–" em todos)
 const spotlightFields = [
-  { key: "energia_kcal_100g", label: "Energia (kcal)" },
-  { key: "proteinas_g", label: "Proteinas (g)" },
-  { key: "carboidratos_g", label: "Carboidratos (g)" },
-  { key: "lipidios_g", label: "Gorduras Totais (g)" },
-  { key: "fibras_g", label: "Fibra Alimentar (g)" },
-  { key: "sodio_mg", label: "Sodio (mg)" },
+  { key: "energia_kcal_100g", label: "Energia (kcal)", get: (f) => f.energia_kcal_100g },
+  { key: "ptn", label: "Proteínas (g)", get: (f) => f.macros_100g?.ptn },
+  { key: "cho", label: "Carboidratos (g)", get: (f) => f.macros_100g?.cho },
+  { key: "lip", label: "Gorduras (g)", get: (f) => f.macros_100g?.lip },
+  { key: "fib", label: "Fibra (g)", get: (f) => f.macros_100g?.fib },
+  { key: "sodio", label: "Sódio (mg)", get: (f) => f.sodio_mg_100g },
 ];
+const numBR = (v) => (v == null || v === "" ? "–" : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 1 }));
 
 function normalizeText(value) {
   return String(value || "")
@@ -104,6 +108,9 @@ export default function CadastroAlimentos() {
   const [modal, setModal] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [ordem, setOrdem] = useState("alfabetica");
+  const [categoria, setCategoria] = useState("");
+  const [busca] = useSearchParams();
+  const [ia, setIa] = useState(() => (busca.get("ia") != null ? busca.get("ia") : null));
 
   useEffect(() => {
     let active = true;
@@ -143,10 +150,12 @@ export default function CadastroAlimentos() {
   };
 
   const deferredQuery = useDeferredValue(query);
-  const filteredFoods = foods.filter((food) => normalizeText(food.nome).includes(normalizeText(deferredQuery)));
+  const categorias = [...new Set(foods.map((f) => f.categoria_app || "Outros"))].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const filteredFoods = foods.filter((food) => normalizeText(food.nome).includes(normalizeText(deferredQuery)) && (!categoria || (food.categoria_app || "Outros") === categoria));
 
   return (
     <NutriLayout>
+      {ia != null && <AlimentosIA inicial={ia} onClose={() => setIa(null)} onSalvo={() => setRefreshKey((v) => v + 1)} />}
       {modal && <FoodModal food={modal === "new" ? null : modal} onClose={() => setModal(null)} onSaved={() => { setModal(null); setRefreshKey((value) => value + 1); }} />}
       <div className="space-y-6">
         <section className="rc-card p-6 relative overflow-hidden">
@@ -159,7 +168,7 @@ export default function CadastroAlimentos() {
                 Base do sistema: TABELA ENXUTA (262 alimentos escolhidos pelo Rogério), mais os alimentos que você cadastrar.
               </p>
             </div>
-            <div className="flex gap-2"><div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-alimentos"><Download className="w-4 h-4" />Fonte: API</div><button onClick={() => setModal("new")} className="rc-btn-primary"><Plus className="w-4 h-4" /> Novo alimento</button></div>
+            <div className="flex gap-2"><div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-alimentos"><Download className="w-4 h-4" />Fonte: API</div><button onClick={() => setIa("")} className="rc-btn-primary" data-testid="cadastrar-ia"><Sparkles className="w-4 h-4" /> Cadastrar com IA</button><button onClick={() => setModal("new")} className="rc-btn-secondary"><Plus className="w-4 h-4" /> Novo alimento</button></div>
           </div>
         </section>
 
@@ -205,6 +214,10 @@ export default function CadastroAlimentos() {
                   <option value="planilha">Da planilha</option>
                 </select>
               </label>
+              <select value={categoria} onChange={(e) => setCategoria(e.target.value)} className="rc-input h-8 py-0 text-xs w-auto" aria-label="Categoria" data-testid="filtro-categoria">
+                <option value="">Todas as categorias</option>
+                {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
               <div className="text-xs text-gray-500">{filteredFoods.length} resultados carregados</div>
             </div>
           </div>
@@ -244,14 +257,14 @@ export default function CadastroAlimentos() {
                           {medidasAbertas[food.id] ? "Esconder medidas caseiras" : "Medidas caseiras"}
                         </button>
                         <div className="text-xs text-gray-500 mt-1">
-                          {food.grupo_display || food.categoria || "-"}
+                          {food.categoria_app || food.grupo_display || food.categoria || "-"}
                           {food.fonte ? ` · ${food.fonte}` : ""}
                           {food.porcao_padrao_g ? ` · porcao base ${food.porcao_padrao_g} g` : ""}
                         </div>
                       </td>
                       {spotlightFields.map((field) => (
                         <td key={field.key} className="px-4 py-3 text-sm text-gray-300">
-                          {food[field.key] ?? food.por_100g?.[field.key] ?? "-"}
+                          {numBR(field.get(food))}
                         </td>
                       ))}
                       <td className="px-4 py-3"><TipoLiquido food={food} /></td>

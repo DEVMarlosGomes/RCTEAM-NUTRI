@@ -15,6 +15,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 import pdf_plano
+import ciclos as ciclos_mod
 from pydantic import BaseModel, Field
 
 # ── Configurações padrão ────────────────────────────────────────────────────
@@ -815,7 +816,10 @@ table {{ width: 100%; border-collapse: collapse; }}
             raise HTTPException(404, "Paciente não encontrado")
         envio = paciente.get("plano_app") or {}
         doc = None
-        if envio.get("plano_id"):
+        sit = ciclos_mod.situacao(paciente.get("ciclo_carbo"), datetime.now(h.TZ_BR).date())
+        if sit:  # ciclo de carbo: a dieta do tipo de hoje (alto/médio/baixo ou fase)
+            doc = await db.planos_manuais.find_one({"paciente_id": pid, "ciclo_tipo": sit["chave"]}, {"_id": 0}, sort=[("atualizado_em", -1)])
+        if not doc and envio.get("plano_id"):
             doc = await db.planos_manuais.find_one({"id": envio["plano_id"], "paciente_id": pid}, {"_id": 0})
         if not doc:
             doc = await db.planos_manuais.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("atualizado_em", -1), ("criado_em", -1)])

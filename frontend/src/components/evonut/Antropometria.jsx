@@ -1,3 +1,4 @@
+import MetaGordura from "./MetaGordura";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Baby, ChevronLeft, ChevronRight, ClipboardPlus, HeartPulse, LineChart as IconeGrafico, Pencil, Ruler, ScanLine,
@@ -677,6 +678,7 @@ export default function Antropometria({ d, reload }) {
   return (
     <div className="space-y-4" data-testid="anthropometry-workspace">
       <div className="rc-card px-5 py-4"><ModeloAvaliacao patient={patient} reload={reload} /></div>
+      <MetaGordura patient={patient} avaliacao={ultimaAval} reload={reload} />
       <div className="evo-card p-2 overflow-x-auto">
         <div className="flex min-w-max gap-1.5">
           {secoes.map(([key, label, Icon]) => (

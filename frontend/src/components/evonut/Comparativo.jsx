@@ -1,6 +1,9 @@
+import { classeGordura, pesoAlvo } from "@/lib/gordura";
+import { contextoGordura } from "./MetaGordura";
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Loader2, Minus, Send } from "lucide-react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { linhaDoTempo } from "@/lib/ciclos";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 
@@ -93,7 +96,12 @@ export default function Comparativo({ d }) {
     : [];
 
   const [rotG, fnG, unG] = inds.find((i) => i[0] === grafico) || inds[0];
-  const dadosGrafico = rows.map((e, i) => ({ nome: `${i + 1}ª`, data: dataBR(e), v: fnG(e) }));
+  const dadosGrafico = rows.map((e, i) => ({ nome: `${i + 1}ª`, data: dataBR(e), v: fnG(e), iso: String(e.data_avaliacao || e.created_at || "").slice(0, 10) }));
+  // cic1: fases do ciclo de carboidratos ao fundo do gráfico (avaliações dentro de cada fase)
+  const fasesGrafico = linhaDoTempo(p.ciclo_carbo).map((f) => {
+    const dentro = dadosGrafico.filter((x) => x.iso >= f.inicio && x.iso < f.fim);
+    return dentro.length ? { ...f, x1: dentro[0].nome, x2: dentro[dentro.length - 1].nome } : null;
+  }).filter(Boolean);
 
   const baixarPdf = async (enviar) => {
     setAcao(enviar ? "app" : "pdf");
@@ -161,6 +169,23 @@ export default function Comparativo({ d }) {
                   </tr>
                 );
               })}
+              {(() => {
+                // gor1: classe do % de gordura em cada avaliação e quanto falta até a meta
+                const ctx = contextoGordura(p);
+                const ca2 = classeGordura({ ...ctx, pct: a.composicao?.pct_gordura });
+                const cb2 = classeGordura({ ...ctx, pct: b.composicao?.pct_gordura });
+                const mg = p.meta_gordura;
+                const alvo = mg?.min != null ? pesoAlvo({ peso: b.peso, pct: b.composicao?.pct_gordura, massaMagra: b.composicao?.massa_magra, faixa: [mg.min, mg.max] }) : null;
+                if (!ca2 && !cb2) return null;
+                return (
+                  <tr className="border-t border-white/[0.05]" data-testid="cmp-classe-gordura">
+                    <td className="py-2 text-gray-300">Classe do % de gordura</td>
+                    <td className="py-2 text-right text-gray-300">{ca2?.nivel || "não medido"}</td>
+                    <td className="py-2 text-right font-semibold text-white">{cb2?.nivel || "não medido"}{ca2 && cb2 && ca2.nivel !== cb2.nivel ? " ↺" : ""}</td>
+                    <td className="py-2 text-right text-[12px] text-gray-400">{alvo ? (alvo.perderMin > 0 ? `faltam ${n1.format(alvo.perderMin)}–${n1.format(alvo.perderMax)} kg de gordura` : "meta atingida") : mg ? "" : "sem meta de % de gordura"}</td>
+                  </tr>
+                );
+              })()}
               <tr className="border-t border-white/[0.05]">
                 <td className="py-2 text-gray-300">Meta calórica atual</td>
                 <td className="py-2" />
@@ -199,9 +224,14 @@ export default function Comparativo({ d }) {
             <YAxis stroke="#4C5766" tick={{ fill: "#8A97A6" }} tickLine={false} axisLine={false} fontSize={11} width={44} domain={["auto", "auto"]} />
             <Tooltip formatter={(v) => [`${n1.format(v)} ${unG}`, rotG]} labelFormatter={(l, pl) => `${l} · ${pl?.[0]?.payload?.data || ""}`}
               contentStyle={{ background: "#161C25", border: "none", borderRadius: 10, fontSize: 12 }} />
-            <Line type="monotone" dataKey="v" stroke="#4DA6FF" strokeWidth={2.5} connectNulls dot={{ r: 3.5, fill: "#4DA6FF", strokeWidth: 0 }} />
+            {fasesGrafico.map((f) => (
+              <ReferenceArea key={f.chave} x1={f.x1} x2={f.x2} fill={f.tipo === "high" ? "#0081FD" : "#FFFFFF"} fillOpacity={0.08} ifOverflow="extendDomain"
+                label={{ value: f.nome, position: "insideTop", fill: "#9AA3AE", fontSize: 10 }} />
+            ))}
+            <Line type="monotone" dataKey="v" stroke="#0081FD" strokeWidth={2.5} connectNulls dot={{ r: 3.5, fill: "#0081FD", strokeWidth: 0 }} />
           </LineChart>
         </ResponsiveContainer>
+        {fasesGrafico.length > 0 && <p className="mt-1 text-[11.5px] text-gray-500" data-testid="fases-grafico">Fases do ciclo ao fundo: {fasesGrafico.map((f) => f.nome).join(" · ")}</p>}
       </section>
 
       {(Object.keys(fa).length > 0 || Object.keys(fb).length > 0) && (

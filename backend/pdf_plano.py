@@ -184,6 +184,7 @@ h1, h2, h3, .tit {{ font-family: 'Montserrat', Arial, sans-serif; }}
 .para .nome {{ font-family: 'Montserrat', Arial, sans-serif; font-weight: 900; font-size: 18pt; text-transform: uppercase; line-height: 1.1; }}
 .para .obj {{ color: {AZUL}; font-weight: 700; margin-top: 1mm; }}
 .resumo {{ background: #000; color: #fff; border-radius: 4mm; padding: 5mm 6mm; }}
+.ciclo {{ margin: 3mm 0 0; padding: 2.5mm 4mm; border-left: 1.2mm solid #0081FD; background: #F2F7FF; font-size: 9pt; color: #111; }}
 .resumo table {{ width: 100%; border-collapse: collapse; }}
 .resumo .kcal {{ font-family: 'Montserrat', Arial, sans-serif; font-weight: 900; font-size: 26pt; line-height: 1; }}
 .resumo .kcal small {{ font-size: 9pt; font-weight: 600; color: #aaa; }}
@@ -250,6 +251,23 @@ def _alimentos(itens: list, com_ou: bool) -> str:
     return f'<table class="al">{linhas}</table>' if linhas else ""
 
 
+def _bloco_ciclo(paciente: dict, plano: dict, hoje: datetime) -> str:
+    """Ciclo de carbo (cid1/cic1): qual dieta é esta, em que dias usar e o que vale hoje."""
+    import ciclos as ciclos_mod
+    ciclo = paciente.get("ciclo_carbo")
+    tipo = plano.get("ciclo_tipo")
+    if not ciclo or not tipo:
+        return ""
+    partes = [f"<b>{_esc(ciclos_mod.rotulo_tipo(ciclo, tipo))}</b>"]
+    dias = ciclos_mod.dias_do_tipo(ciclo, tipo)
+    if dias:
+        partes.append("use em: " + ", ".join(ciclos_mod.NOME_DIA[d] for d in dias))
+    sit = ciclos_mod.situacao(ciclo, hoje.date())
+    if sit:
+        partes.append(f"hoje: {_esc(sit.get('texto'))}")
+    return f'<div class="ciclo">CICLO DE CARBOIDRATO · {" · ".join(partes)}</div>'
+
+
 def html_plano(paciente: dict, plano: dict, opcoes: Optional[dict] = None, hoje: Optional[datetime] = None) -> str:
     o = {"ou": True, "macros": True, "orientacoes": True, "total": True, **(opcoes or {})}
     hoje = hoje or datetime.now()
@@ -269,8 +287,9 @@ def html_plano(paciente: dict, plano: dict, opcoes: Optional[dict] = None, hoje:
               f'<td class="m"><b>{_num(c, 0)} g</b><span>Carboidratos · {pct(c, 4)}%</span></td>'
               f'<td class="m"><b>{_num(g, 0)} g</b><span>Gorduras · {pct(g, 9)}%</span></td>'
               f'<td class="m"><b>{_num(fib, 0)} g</b><span>Fibras</span></td></tr></table>'
-              f'<div class="barra"><div style="width:{pct(p, 4)}%;background:#4DA6FF"></div><div style="width:{pct(c, 4)}%;background:#C3F53C"></div>'
-              f'<div style="width:{max(0, 100 - pct(p, 4) - pct(c, 4))}%;background:#FFB547"></div></div></div>')
+              f'<div class="barra"><div style="width:{pct(p, 4)}%;background:#0081FD"></div><div style="width:{pct(c, 4)}%;background:#FFFFFF"></div>'
+              f'<div style="width:{max(0, 100 - pct(p, 4) - pct(c, 4))}%;background:#7FC0FF"></div></div></div>')
+    corpo += _bloco_ciclo(paciente, plano, hoje)
 
     # cartões curtos: hidratação + orientações principais
     pd = plano.get("prescricao_dietetica") or {}

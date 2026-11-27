@@ -434,6 +434,11 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
             onTexto={(t) => onChange({ nome: t })} onEscolher={escolherAlimento}
             onEnterLivre={() => focar(`${bk}-${i}-${temCalculo && !ehGramas(item.medida_nome) ? "qtd" : "g"}`)} />
         </div>
+        {!item.alimento_id && (item.nome || "").trim().length > 2 && Number(item.quantidade_g) > 0 && (
+          <a href={`/cadastro-alimentos?ia=${encodeURIComponent(item.nome.trim())}`} target="_blank" rel="noopener noreferrer"
+            className="shrink-0 bg-rc-amber/15 px-2 py-0.5 text-[10.5px] font-semibold text-rc-amber hover:underline" data-testid={`${bk}-${i}-externo`}
+            title="Alimento fora da base: abre o cadastro com IA já com este nome">fonte externa · Incluir na base</a>
+        )}
         {selo === "evita" && <span className="shrink-0 rounded-full bg-rc-amber/15 px-2 py-0.5 text-[10.5px] font-semibold text-rc-amber" data-testid={`${bk}-${i}-selo`} title="Está em Não come / evita nas preferências">cliente não gosta</span>}
         {selo === "gosta" && <span className="shrink-0 rounded-full bg-[#3DDC84]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#3DDC84]" data-testid={`${bk}-${i}-selo`}>preferida</span>}
       </div>

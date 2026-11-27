@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Plus, Save, Scale, X } from "lucide-react";
 import { toast } from "sonner";
 import ModelosMacros from "./ModelosMacros";
+import CicloCarbo from "./CicloCarbo";
 import { api, formatApiError } from "@/lib/evo-api";
 import { pesoDoPaciente } from "./dieta/plano";
 import useDietaConfig from "./dieta/useDietaConfig";
@@ -85,10 +86,9 @@ export default function PrevisaoMacros({ d, reload, onIrGasto, onIrPrescricao })
   const patient = d.patient;
   const meta = useMemo(() => patient.meta_energetica || {}, [patient.meta_energetica]);
   const { config } = useDietaConfig();
-  // modelo de macros aplicado: a meta passa a ser kcal/kg do modelo × peso (salva como nova meta)
-  const [kcalModelo, setKcalModelo] = useState(null);
+  // modelo de macros aplicado: só divide as calorias da dieta (Gasto Energético) entre os macros
   const [modeloNome, setModeloNome] = useState(meta.modelo_macros || null);
-  const kcal = kcalModelo ?? num(meta.kcal_final);
+  const kcal = num(meta.kcal_final);
   const peso = num(pesoDoPaciente(d));
 
   // valores guardados em g/kg (compatível com metas antigas: carboidrato vinha de macros_g)
@@ -169,7 +169,7 @@ export default function PrevisaoMacros({ d, reload, onIrGasto, onIrPrescricao })
       await api.patch(`/patients/${patient.id}`, {
         meta_energetica: {
           ...meta,
-          ...(over?.kcal != null || kcalModelo != null ? { kcal_final: Math.round(k), modelo_macros: over?.nome || modeloNome } : {}),
+          modelo_macros: over?.nome || modeloNome || null,
           modo_macros: modo,
           ptn_gkg: r1(pg * 100) / 100,
           cho_gkg: r1(cg * 100) / 100,
@@ -195,9 +195,10 @@ export default function PrevisaoMacros({ d, reload, onIrGasto, onIrPrescricao })
   const aplicarModelo = async (res, modelo, irPrescricao) => {
     const l = Object.fromEntries(res.linhas.map((x) => [x.k, x]));
     const pg = l.ptn.g / peso; const cg = l.cho.g / peso;
-    setKcalModelo(res.kcal); setPtnGkg(pg); setChoGkg(cg); setTextos({}); setModeloNome(modelo.nome);
-    toast.success(`Modelo ${modelo.nome} aplicado: ${fmt(res.kcal, 0)} kcal.`);
-    if (irPrescricao && (await salvar({ kcal: res.kcal, ptnGkg: pg, choGkg: cg, nome: modelo.nome }))) onIrPrescricao?.();
+    // o modelo só divide as calorias da dieta entre os macros (as calorias não mudam)
+    setPtnGkg(pg); setChoGkg(cg); setTextos({}); setModeloNome(modelo.nome);
+    toast.success(`Modelo ${modelo.nome} aplicado sobre ${fmt(kcal, 0)} kcal.`);
+    if (irPrescricao && (await salvar({ ptnGkg: pg, choGkg: cg, nome: modelo.nome }))) onIrPrescricao?.();
   };
 
   if (kcal == null && !peso) {
@@ -211,10 +212,11 @@ export default function PrevisaoMacros({ d, reload, onIrGasto, onIrPrescricao })
 
   return (
     <div className="space-y-4" data-testid="previsao-macros">
-      <ModelosMacros peso={peso} objetivoPaciente={patient.objetivo} onAplicar={aplicarModelo} />
+      <ModelosMacros peso={peso} meta={num(meta.kcal_final)} get={num(meta.get_base)} objetivoPaciente={patient.objetivo} fase={patient.fase_treino} onAplicar={aplicarModelo} onIrGasto={onIrGasto} />
+      <CicloCarbo d={d} peso={peso} meta={num(meta.kcal_final)} reload={reload} onIrPrescricao={onIrPrescricao} />
       {kcal == null ? (
         <div className="evo-card p-8 text-center text-sm text-gray-400" data-testid="macros-sem-meta">
-          Defina a meta calórica em Gasto Energético ou aplique um modelo acima.
+          Defina a meta calórica em Gasto Energético para usar a previsão e os modelos.
           {onIrGasto && <div className="mt-4"><button type="button" className="evo-btn-primary" onClick={onIrGasto}>Ir para Gasto Energético</button></div>}
         </div>
       ) : (<>
@@ -223,7 +225,7 @@ export default function PrevisaoMacros({ d, reload, onIrGasto, onIrPrescricao })
           <div>
             <h3 className="evo-h3">Previsão de macros</h3>
             <p className="mt-1 text-xs text-gray-500">
-              Meta {fmt(kcal, 0)} kcal/dia ({kcalModelo != null || meta.modelo_macros ? `modelo ${modeloNome}` : "Gasto Energético"}){peso ? ` · peso ${fmt(peso)} kg` : ""}. Proteína e carboidrato são digitados; o lipídio completa a meta.
+              Meta {fmt(kcal, 0)} kcal/dia (Gasto Energético{modeloNome ? ` · modelo ${modeloNome}` : ""}){peso ? ` · peso ${fmt(peso)} kg` : ""}. Proteína e carboidrato são digitados; o lipídio completa a meta.
             </p>
           </div>
           <div role="group" aria-label="Unidade" className="inline-flex p-0.5 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.08]">
