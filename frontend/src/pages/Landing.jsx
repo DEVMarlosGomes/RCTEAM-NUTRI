@@ -165,7 +165,9 @@ function Hero({ onStart }) {
             <button onClick={onStart} className="rc-btn-lime h-14 px-7 text-[15px]" data-testid="hero-cta">
               Quero começar minha transformação <ArrowRight className="w-4 h-4" />
             </button>
-            <a href="#resultados" className="rc-btn-secondary h-14 px-6 text-[15px]">Ver resultados</a>
+            <a href={waLink("Olá, Rogério! Vim pelo site e tenho algumas dúvidas.")} target="_blank" rel="noopener noreferrer" className="rc-btn-secondary h-14 px-6 text-[15px]" data-testid="hero-duvida">
+              <MessageCircle className="w-4 h-4" /> Tenho dúvidas
+            </a>
           </div>
           <p className="mt-4 text-[13px] text-gray-500 animate-fade-up" style={{ animationDelay: "220ms" }}>
             Atendimento inicial em menos de 5 minutos · Garantia de satisfação
@@ -580,7 +582,7 @@ function Planos({ onStart }) {
         <Reveal className="text-center mt-10">
           <p className="text-gray-400">
             Ainda em dúvida?{" "}
-            <button onClick={onStart} className="text-white underline decoration-rc-lime/60 underline-offset-4 hover:decoration-rc-lime">Faça o atendimento inicial</button>{" "}
+            <a href={waLink("Olá, Rogério! Vim pelo site e queria entender qual plano é melhor para mim.")} target="_blank" rel="noopener noreferrer" className="text-white underline decoration-rc-lime/60 underline-offset-4 hover:decoration-rc-lime">Fale com a gente no WhatsApp</a>{" "}
             e descubra o formato ideal para você.
           </p>
         </Reveal>
@@ -643,7 +645,10 @@ function ChamadaFinal({ onStart }) {
         <Reveal>
           <h2 className="rc-display text-[clamp(54px,8.4vw,128px)] text-white">O próximo treino <br className="hidden sm:block" />começa com <span className="text-rc-lime">um plano.</span></h2>
           <p className="text-gray-300 text-[18px] mt-7 max-w-[46ch] mx-auto">Conte seu objetivo em poucos minutos. O Rogério monta a estratégia, você executa com suporte do primeiro ao último dia.</p>
-          <button onClick={onStart} className="rc-btn-lime h-14 px-8 text-[15px] mt-10">Quero começar agora <ArrowRight className="w-4 h-4" /></button>
+          <div className="mt-10 flex flex-wrap justify-center gap-3">
+            <button onClick={onStart} className="rc-btn-lime h-14 px-8 text-[15px]">Quero começar agora <ArrowRight className="w-4 h-4" /></button>
+            <a href={waLink("Olá, Rogério! Vim pelo site e tenho algumas dúvidas.")} target="_blank" rel="noopener noreferrer" className="rc-btn-secondary h-14 px-6 text-[15px]"><MessageCircle className="w-4 h-4" /> Tirar dúvidas no WhatsApp</a>
+          </div>
         </Reveal>
       </div>
     </section>
@@ -676,7 +681,7 @@ export default function Landing() {
   const navigate = useNavigate();
   const [depoimentos, setDepoimentos] = useState(DEPOIMENTOS_PADRAO);
   const [showSticky, setShowSticky] = useState(false);
-  const onStart = () => navigate("/atendimento");
+  const onStart = () => navigate("/agendar"); // decidido: direto ao horário e pagamento (ajuste fn1)
 
   useEffect(() => {
     document.title = "Rogério Costa | App de treino com acompanhamento nutricional";

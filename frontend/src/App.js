@@ -15,6 +15,7 @@ import Pacientes from "@/pages/Pacientes";
 import PacienteDetalhe from "@/pages/PacienteDetalhe";
 import Agenda from "@/pages/Agenda";
 import Agentes from "@/pages/Agentes";
+import Conversas from "@/pages/Conversas";
 import Consultorio from "@/pages/Consultorio";
 import PatientArea from "@/pages/PatientArea";
 import Configuracoes from "@/pages/Configuracoes";
@@ -93,6 +94,7 @@ function App() {
             <Route path="/configuracoes" element={<Protected role="nutritionist"><Configuracoes /></Protected>} />
             <Route path="/configuracoes-dieta" element={<Protected role="nutritionist"><ConfiguracoesDieta /></Protected>} />
             <Route path="/agente-config" element={<Protected role="nutritionist"><AgenteConfig /></Protected>} />
+            <Route path="/acompanhamento/conversas" element={<Protected role="nutritionist"><Conversas /></Protected>} />
             <Route path="/acompanhamento/mensagens" element={<Protected role="nutritionist"><MensagensLembretes /></Protected>} />
             <Route path="/acompanhamento/formularios" element={<Protected role="nutritionist"><Formularios /></Protected>} />
             <Route path="/depoimentos" element={<Protected role="nutritionist"><Depoimentos /></Protected>} />

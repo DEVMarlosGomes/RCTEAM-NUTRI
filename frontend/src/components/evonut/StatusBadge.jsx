@@ -3,6 +3,7 @@ import React from "react";
 // Jornada do paciente: neutro (lead) -> azul (em processo) -> ambar (agendado) -> lima (resultado)
 const styles = {
   LEAD_INICIADO: "bg-white/[0.06] text-gray-300",
+  PROPOSTA_ACEITA: "bg-rc-blue/[0.14] text-rc-blueLight",
   ANAMNESE_COMPLETA: "bg-rc-blue/[0.14] text-rc-blueLight",
   CONSULTA_AGENDADA: "bg-rc-amber/[0.13] text-rc-amber",
   CONSULTA_REALIZADA: "bg-rc-blue/[0.14] text-rc-blueLight",
@@ -14,6 +15,7 @@ const styles = {
 
 const labels = {
   LEAD_INICIADO: "Lead",
+  PROPOSTA_ACEITA: "Proposta aceita",
   ANAMNESE_COMPLETA: "Anamnese ok",
   CONSULTA_AGENDADA: "Agendada",
   CONSULTA_REALIZADA: "Consulta feita",

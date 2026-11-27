@@ -12,7 +12,7 @@ const emptyForm = {
 };
 
 const statuses = [
-  "LEAD_INICIADO", "ANAMNESE_COMPLETA", "CONSULTA_AGENDADA",
+  "LEAD_INICIADO", "PROPOSTA_ACEITA", "ANAMNESE_COMPLETA", "CONSULTA_AGENDADA",
   "CONSULTA_REALIZADA", "PLANO_ENTREGUE", "EM_ACOMPANHAMENTO", "INATIVO", "PERDIDO",
 ];
 
@@ -253,7 +253,7 @@ export default function Pacientes() {
                     <>
                       <td className="px-4 py-3 text-sm text-gray-300">{ORIGENS[p.origem] || "—"}</td>
                       <td className="px-4 py-3 text-sm tabular text-gray-300">{dataBR(p.created_at)}</td>
-                      <td className="px-4 py-3 text-sm text-gray-300">{p.formulario?.enviado_em ? "formulário enviado" : "novo contato"}</td>
+                      <td className="px-4 py-3 text-sm text-gray-300">{p.status_funil === "PROPOSTA_ACEITA" ? "proposta aceita" : p.formulario?.enviado_em ? "formulário enviado" : "novo contato"}</td>
                       <td className="px-4 py-3" onClick={parar}><div className="flex justify-end gap-1">
                         <button type="button" onClick={() => enviarFormulario(p)} className="evo-btn-ghost text-xs"><Send className="h-3.5 w-3.5" /> Enviar formulário</button>
                         <button type="button" onClick={() => perdido(p)} className="evo-btn-ghost text-xs text-evo-coral">Perdido</button>

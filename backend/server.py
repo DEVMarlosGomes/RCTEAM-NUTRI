@@ -295,7 +295,7 @@ class MealPlanRequest(BaseModel):
     restricoes: Optional[str] = None
 
 # ---------- Agents / Patient ----------
-AGENT_CODES = ("agent1", "agent2", "agent3", "donato", "drhouse")
+AGENT_CODES = ("agent1", "agent2", "agent3", "donato", "drhouse", "vendas")
 AGENT_PROMPT_MAX_CHARS = 50_000  # cap full system prompt length
 # Dr. House carrega o prompt mestre + toda a base de biomarcadores (~65k chars)
 AGENT_PROMPT_MAX_CHARS_BY_CODE = {"drhouse": 120_000, "agent2": 120_000}
@@ -505,6 +505,43 @@ AGENT_DEFAULTS = {
         "knowledge_mode": "vector_store",
         "schema_version": DONATO_SCHEMA_VERSION,
         "requires_human_approval": True,
+        "active": True,
+    },
+    "vendas": {
+        "name": "Agente de Vendas — WhatsApp",
+        "description": (
+            "Atende quem chega pelo WhatsApp (Instagram e site): entende o objetivo, apresenta planos e valores, "
+            "envia o link de agendamento quando a pessoa aceita e passa para o Rogério o que for clínico."
+        ),
+        "base_prompt": (
+            "Você é o atendente do Rogério Costa (treinador e nutricionista) no WhatsApp. Responda em português do Brasil, "
+            "em mensagens curtas (até 4 linhas), tom próximo e direto, sem emoji em excesso. Faça UMA pergunta por vez.\n\n"
+            "OBJETIVO: entender o que a pessoa quer (emagrecer, ganhar massa, saúde, performance), se prefere online ou presencial "
+            "e se quer treino, dieta ou os dois; então indicar o plano certo, passar valores e condições e levar ao agendamento.\n\n"
+            "PLANOS E VALORES (o Rogério edita esta parte em Agentes IA):\n"
+            "- Consultoria Gold: treino + dieta integrados, 3 meses, app com treino e plano alimentar, suporte VIP no WhatsApp. Valor: A DEFINIR.\n"
+            "- Nutrition e Training: treino + nutrição, 2 meses. Valor: A DEFINIR.\n"
+            "- Personal presencial: aulas presenciais com o Rogério. Valor e horários: A DEFINIR.\n"
+            "Condições: Pix ou cartão. A consulta inicial só é marcada após o pagamento.\n"
+            "Preço só se passa aqui no WhatsApp (o site não mostra valores).\n\n"
+            "PERGUNTAS FREQUENTES:\n"
+            "- Como funciona? Consulta inicial, avaliação, plano no app e ajustes pelo acompanhamento.\n"
+            "- Falo direto com o Rogério? Sim, o suporte é com ele.\n\n"
+            "MARCAÇÃO DE AÇÃO: na maioria das mensagens NÃO escreva marcação nenhuma; continue a conversa normalmente. "
+            "Use marcação só nos casos abaixo.\n\n"
+            "REGRAS:\n"
+            "1. Nunca dê orientação clínica, dieta, dose de suplemento ou opinião sobre exame/remédio/doença. Diga que o Rogério "
+            "vai responder pessoalmente e termine com [ACAO: humano].\n"
+            "2. Só quando a pessoa PERGUNTAR algo que você não sabe responder (ou pedir um valor que está 'A DEFINIR'), diga que vai "
+            "confirmar com o Rogério e termine com [ACAO: humano]. Perguntas de descoberta (objetivo, online/presencial) nunca levam marcação.\n"
+            "3. Quando a pessoa ACEITAR um plano (ex.: 'quero', 'fechado', 'vamos', 'quero fechar'), SEMPRE confirme em uma frase e termine com "
+            "[ACAO: proposta_aceita | plano=<nome do plano>]. NÃO pergunte forma de pagamento: o sistema anexa o link para escolher o horário "
+            "e pagar (Pix ou cartão). Não invente links.\n"
+            "4. Quando a pessoa mostrar interesse em UM plano específico sem aceitar ainda, pode terminar com [ACAO: plano | plano=<nome exato>].\n"
+            "5. Se quem escreve voltou depois de um tempo, retome com naturalidade e já ofereça o horário.\n"
+            "6. A marcação [ACAO: ...] vai sempre na última linha e nunca é mostrada ao cliente."
+        ),
+        "prompt_version": "vendas-1.2",
         "active": True,
     },
     "drhouse": {
@@ -759,6 +796,8 @@ async def _gemini_chat(
     timeout: float = 90.0,
     thinking_budget: int = 1024,
     response_mime_type: Optional[str] = None,
+    models: Optional[list] = None,
+    retry_delays: Optional[list] = None,
 ) -> str:
     """Chama a Gemini 2.5 Flash com retry exponencial em caso de alta demanda."""
     import httpx, asyncio
@@ -783,10 +822,10 @@ async def _gemini_chat(
         body["generationConfig"]["responseMimeType"] = response_mime_type
     falhas = []
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for model in _GEMINI_MODELS:
+        for model in (models or _GEMINI_MODELS):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             last_err = "desconhecido"
-            for attempt, delay in enumerate([0] + _GEMINI_RETRY_DELAYS):
+            for attempt, delay in enumerate([0] + (_GEMINI_RETRY_DELAYS if retry_delays is None else retry_delays)):
                 if delay:
                     await asyncio.sleep(delay)
                 try:
@@ -1711,11 +1750,11 @@ async def schedule(payload: ScheduleIn):
 
 # ---------- Authenticated CRM ----------
 PATIENT_STATUSES = {
-    "LEAD_INICIADO", "ANAMNESE_COMPLETA", "CONSULTA_AGENDADA",
+    "LEAD_INICIADO", "PROPOSTA_ACEITA", "ANAMNESE_COMPLETA", "CONSULTA_AGENDADA",
     "CONSULTA_REALIZADA", "PLANO_ENTREGUE", "EM_ACOMPANHAMENTO", "INATIVO", "PERDIDO",
 }
 # etapa da lista de Pacientes (ajuste pac1): lead não conta como paciente
-_ETAPA_DO_STATUS = {"LEAD_INICIADO": "lead", "ANAMNESE_COMPLETA": "atendimento", "CONSULTA_AGENDADA": "atendimento",
+_ETAPA_DO_STATUS = {"LEAD_INICIADO": "lead", "PROPOSTA_ACEITA": "lead", "ANAMNESE_COMPLETA": "atendimento", "CONSULTA_AGENDADA": "atendimento",
                     "CONSULTA_REALIZADA": "atendimento", "PLANO_ENTREGUE": "atendimento", "EM_ACOMPANHAMENTO": "acompanhamento",
                     "INATIVO": "inativo", "PERDIDO": "perdido"}
 
@@ -1855,11 +1894,7 @@ async def criar_reserva(payload: ReservaIn):
     # paciente: pelo token do link, pelo telefone ou novo lead
     p = await db.patients.find_one({"lead_token": payload.token}) if payload.token else None
     if not p:
-        tel = re.sub(r"\D", "", payload.telefone)[-8:]
-        async for x in db.patients.find({"nutricionista_id": nutri["id"]}, {"_id": 0}):
-            if re.sub(r"\D", "", str(x.get("telefone") or ""))[-8:] == tel:
-                p = x
-                break
+        p = await _paciente_por_telefone(nutri["id"], payload.telefone)
     agora = now_utc()
     if not p:
         p = {"id": str(uuid.uuid4()), "nutricionista_id": nutri["id"], "lead_token": secrets.token_urlsafe(16), "nome": payload.nome.strip(),
@@ -1983,13 +2018,283 @@ async def confirmar_reserva_manual(rid: str, user=Depends(require_nutritionist))
     return {"ok": True, "status": res["status"], "consulta_id": res.get("consulta_id")}
 
 
+# ── Agente de vendas no WhatsApp (ajuste fn1 do Rogério) ────────────────────
+# API oficial do WhatsApp Business (Meta Cloud API). Enquanto o número não estiver ligado (sem WHATSAPP_TOKEN /
+# WHATSAPP_PHONE_NUMBER_ID), as respostas ficam guardadas como "aguardando o número" e a conversa pode ser
+# testada pelo simulador da tela Conversas.
+_WA_GRAPH = "https://graph.facebook.com/v21.0"
+_ACAO_RX = re.compile(r"\[ACAO:\s*([a-z_]+)\s*(?:\|\s*plano\s*=\s*([^\]]+))?\]", re.I)
+
+
+def _chave_telefone(v) -> str:
+    """DDD + 8 últimos dígitos: '11 98888-7777', '5511988887777' e '551188887777' dão a mesma chave."""
+    d = _so_digitos(v)
+    if len(d) >= 12 and d.startswith("55"):
+        d = d[2:]
+    return f"{d[:2]}{d[-8:]}" if len(d) >= 10 else d[-8:]
+
+
+async def _paciente_por_telefone(nid: str, telefone: str) -> Optional[dict]:
+    chave = _chave_telefone(telefone)
+    if len(chave) < 8:
+        return None
+    async for x in db.patients.find({"nutricionista_id": nid, "telefone": {"$regex": chave[-4:]}}, {"_id": 0}):
+        if _chave_telefone(x.get("telefone")) == chave:
+            return x
+    return None
+
+
+async def whatsapp_enviar(paciente: dict, texto: str, origem: str = "agente") -> dict:
+    """Envia texto pelo WhatsApp (Cloud API) e guarda na conversa. Sem número ligado: fica 'aguardando_numero'."""
+    token, phone_id = os.environ.get("WHATSAPP_TOKEN"), os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
+    para = _so_digitos(paciente.get("telefone"))
+    if len(para) in (10, 11):
+        para = "55" + para
+    doc = {"id": str(uuid.uuid4()), "patient_id": paciente["id"], "nutricionista_id": paciente.get("nutricionista_id"),
+           "direcao": "saida", "texto": texto, "origem": origem, "created_at": iso(now_utc()), "status": "aguardando_numero"}
+    if token and phone_id and para:
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(f"{_WA_GRAPH}/{phone_id}/messages", headers={"Authorization": f"Bearer {token}"},
+                                         json={"messaging_product": "whatsapp", "to": para, "type": "text", "text": {"body": texto[:4000]}})
+            dados = resp.json() if resp.content else {}
+            if resp.is_success:
+                doc["status"], doc["wa_id"] = "enviada", ((dados.get("messages") or [{}])[0]).get("id")
+            else:
+                erro = dados.get("error") or {}
+                # 131047: passou de 24 h sem o cliente escrever; só modelo aprovado pela Meta pode reabrir
+                doc["status"] = "fora_da_janela" if erro.get("code") == 131047 else "erro"
+                doc["erro"] = str(erro.get("message") or resp.status_code)[:200]
+        except Exception as e:  # noqa: BLE001
+            doc["status"], doc["erro"] = "erro", str(e)[:200]
+    await db.whatsapp_mensagens.insert_one(dict(doc))
+    return doc
+
+
+def _link_agendamento(p: dict, plano: Optional[str] = None) -> str:
+    base = (os.environ.get("FRONTEND_URL") or "").split(",")[0].strip().rstrip("/")
+    q = f"?plano={plano.strip().replace(' ', '%20')}" if plano else ""
+    return f"{base}/agendar/{p['lead_token']}{q}"
+
+
+async def _ai_rapido(session_id: str, sistema: str, texto: str) -> str:
+    """WhatsApp pede resposta rápida: cada provedor tem um tempo curto; estourou, passa para o próximo."""
+    msgs = [{"role": "user", "content": texto}]
+    tentativas = []
+    order = [x.strip().lower() for x in (os.environ.get("AI_PROVIDER_ORDER") or "gemini,groq,anthropic").split(",") if x.strip()]
+    for prov in order:
+        if prov == "gemini" and GEMINI_KEY:
+            # modelos leves primeiro (respondem em segundos); cada um com uma tentativa curta
+            leves = [m.strip() for m in (os.environ.get("WHATSAPP_GEMINI_MODELS") or "gemini-3.5-flash-lite,gemini-3.1-flash-lite").split(",") if m.strip()]
+            modelos = list(dict.fromkeys(leves + _GEMINI_MODELS))
+            tentativas.append(("gemini", lambda: _gemini_chat(msgs, sistema, GEMINI_KEY, max_tokens=700, temperature=0.5, timeout=10,
+                                                              thinking_budget=512, models=modelos, retry_delays=[]), 35))
+        elif prov == "groq" and GROQ_API_KEY:
+            tentativas.append(("groq", lambda: _groq_chat(msgs, sistema, 700, 0.5, 20), 22))
+        elif prov == "anthropic" and ANTHROPIC_API_KEY:
+            tentativas.append(("anthropic", lambda: _anthropic_chat(msgs, sistema, session_id, 700, 0.5), 30))
+    falhas = []
+    for nome, chamar, limite in tentativas:
+        try:
+            texto_ia = await asyncio.wait_for(chamar(), limite)
+            if texto_ia and texto_ia.strip():
+                return texto_ia
+        except Exception as e:  # noqa: BLE001
+            falhas.append(f"{nome}: {type(e).__name__}")
+    raise RuntimeError("; ".join(falhas) or "nenhum provedor de IA configurado")
+
+
+async def _agente_vendas_responder(p: dict) -> Optional[str]:
+    """Lê a conversa e responde como o agente de vendas. Executa a ação pedida (proposta aceita, passar para o Rogério)."""
+    if (p.get("conversa_humana") or {}).get("aberta"):
+        return None  # o Rogério assumiu a conversa
+    await ensure_agents_seeded()
+    hist = await db.whatsapp_mensagens.find({"patient_id": p["id"]}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    hist.reverse()
+    contexto = (f"DADOS DO CONTATO: nome={p.get('nome') or 'não informado'}; etapa={p.get('status_funil')}; "
+                f"origem={p.get('origem') or 'whatsapp'}; plano de interesse={p.get('plano_interesse') or 'não definido'}.")
+    sistema = await build_agent_system_prompt("vendas", extra_context=contexto)
+    conversa = "\n".join(f"{'Cliente' if m['direcao'] == 'entrada' else 'Você'}: {m['texto']}" for m in hist)
+    try:
+        bruto = await _ai_rapido(f"vendas-{p['id']}", sistema, conversa + "\nVocê:")
+    except Exception:
+        logging.exception("agente de vendas falhou")
+        bruto = "Recebi sua mensagem! Já já o Rogério te responde por aqui. [ACAO: humano]"
+    acao = _ACAO_RX.search(bruto or "")
+    texto = _ACAO_RX.sub("", bruto or "").strip()
+    agora = iso(now_utc())
+    if acao and acao.group(1).lower() == "proposta_aceita":
+        plano = (acao.group(2) or p.get("plano_interesse") or "").strip() or None
+        token = p.get("lead_token") or secrets.token_urlsafe(16)
+        await db.patients.update_one({"id": p["id"]}, {"$set": {
+            "lead_token": token, "proposta_aceita_em": agora, "plano_interesse": plano,
+            **({"status_funil": "PROPOSTA_ACEITA"} if p.get("status_funil") in (None, "LEAD_INICIADO", "PERDIDO") else {})}})
+        link = _link_agendamento({**p, "lead_token": token}, plano)
+        texto = f"{texto}\n\nEscolha o melhor horário e garanta sua vaga aqui: {link}".strip()
+    elif acao and acao.group(1).lower() == "humano":
+        pergunta = next((m["texto"] for m in reversed(hist) if m["direcao"] == "entrada"), "")
+        await db.patients.update_one({"id": p["id"]}, {"$set": {"conversa_humana": {"aberta": True, "desde": agora, "pergunta": pergunta[:300]}}})
+    elif acao and acao.group(1).lower() == "plano" and acao.group(2):
+        await db.patients.update_one({"id": p["id"]}, {"$set": {"plano_interesse": acao.group(2).strip()}})
+    if texto:
+        await whatsapp_enviar(p, texto, "agente")
+    return texto
+
+
+async def whatsapp_receber(nid: str, telefone: str, texto: str, nome: Optional[str] = None, wa_id: Optional[str] = None) -> dict:
+    """Mensagem que chegou (webhook da Meta ou simulador): acha ou cria o lead, guarda e deixa o agente responder."""
+    p = await _paciente_por_telefone(nid, telefone)
+    agora = now_utc()
+    if not p:
+        p = {"id": str(uuid.uuid4()), "nutricionista_id": nid, "lead_token": secrets.token_urlsafe(16), "nome": (nome or "Contato do WhatsApp").strip(),
+             "telefone": telefone, "status_funil": "LEAD_INICIADO", "origem": "whatsapp", "created_at": iso(agora), "updated_at": iso(agora)}
+        await db.patients.insert_one(dict(p))
+    elif not p.get("lead_token"):
+        p["lead_token"] = secrets.token_urlsafe(16)
+        await db.patients.update_one({"id": p["id"]}, {"$set": {"lead_token": p["lead_token"]}})
+    if wa_id and await db.whatsapp_mensagens.find_one({"wa_id": wa_id}):
+        return {"patient_id": p["id"], "duplicada": True}  # a Meta reenvia avisos; não responder duas vezes
+    await db.whatsapp_mensagens.insert_one({"id": str(uuid.uuid4()), "patient_id": p["id"], "nutricionista_id": nid, "direcao": "entrada",
+                                            "texto": texto, "wa_id": wa_id, "created_at": iso(agora)})
+    upd = {"ultima_mensagem_cliente": iso(agora)}
+    if p.get("status_funil") == "PERDIDO":
+        upd["status_funil"] = "LEAD_INICIADO"  # voltou a conversar: sai de perdido (ajuste fn3)
+    await db.patients.update_one({"id": p["id"]}, {"$set": upd, "$unset": {"followup": ""}})
+    p = await db.patients.find_one({"id": p["id"]}, {"_id": 0})
+    resposta = await _agente_vendas_responder(p)
+    return {"patient_id": p["id"], "resposta": resposta}
+
+
+_WA_TAREFAS: set = set()
+
+
+async def _whatsapp_receber_seguro(*args):
+    try:
+        await whatsapp_receber(*args)
+    except Exception:
+        logging.exception("whatsapp webhook: falha ao tratar mensagem")
+
+
+@api.get("/whatsapp/webhook")
+async def whatsapp_verificar(request: Request):
+    """Verificação do webhook na Meta (hub.challenge)."""
+    q = request.query_params
+    if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") and q.get("hub.verify_token") == os.environ.get("WHATSAPP_VERIFY_TOKEN"):
+        return Response(content=q.get("hub.challenge") or "", media_type="text/plain")
+    raise HTTPException(403, "Token de verificação inválido")
+
+
+@api.post("/whatsapp/webhook")
+async def whatsapp_webhook(request: Request):
+    corpo = await request.body()
+    segredo = os.environ.get("WHATSAPP_APP_SECRET")
+    if segredo:
+        import hmac
+        esperado = "sha256=" + hmac.new(segredo.encode(), corpo, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(esperado, request.headers.get("X-Hub-Signature-256", "")):
+            raise HTTPException(401, "Assinatura inválida")
+    try:
+        dados = json.loads(corpo or b"{}")
+    except ValueError:
+        raise HTTPException(400, "JSON inválido")
+    nutri = await _nutri_padrao()
+    if not nutri:
+        return {"ok": True}
+    for entrada in dados.get("entry") or []:
+        for mudanca in entrada.get("changes") or []:
+            valor = mudanca.get("value") or {}
+            nomes = {c.get("wa_id"): (c.get("profile") or {}).get("name") for c in valor.get("contacts") or []}
+            for m in valor.get("messages") or []:
+                tipo = m.get("type")
+                texto = ((m.get("text") or {}).get("body") if tipo == "text"
+                         else ((m.get("button") or {}).get("text") if tipo == "button"
+                               else f"[{tipo} recebido]"))
+                # a Meta espera resposta em poucos segundos: o agente responde em segundo plano
+                tarefa = asyncio.create_task(_whatsapp_receber_seguro(nutri["id"], m.get("from") or "", texto or "", nomes.get(m.get("from")), m.get("id")))
+                _WA_TAREFAS.add(tarefa)
+                tarefa.add_done_callback(_WA_TAREFAS.discard)
+            for st in valor.get("statuses") or []:
+                await db.whatsapp_mensagens.update_one({"wa_id": st.get("id")}, {"$set": {"status": st.get("status")}})
+    return {"ok": True}
+
+
+@api.get("/conversas")
+async def listar_conversas(user=Depends(require_nutritionist)):
+    ultimas = {}
+    async for m in db.whatsapp_mensagens.aggregate([{"$match": {"nutricionista_id": user["id"]}}, {"$sort": {"created_at": -1}},
+                                                    {"$group": {"_id": "$patient_id", "m": {"$first": "$$ROOT"}, "n": {"$sum": 1}}}]):
+        ultimas[m["_id"]] = m
+    pacs = await db.patients.find({"id": {"$in": list(ultimas)}}, {"_id": 0, "id": 1, "nome": 1, "telefone": 1, "status_funil": 1, "conversa_humana": 1, "plano_interesse": 1, "origem": 1}).to_list(None)
+    out = []
+    for p in pacs:
+        u = ultimas[p["id"]]["m"]
+        out.append({**p, "ultima": {"texto": u.get("texto"), "direcao": u.get("direcao"), "created_at": u.get("created_at")},
+                    "total": ultimas[p["id"]]["n"], "para_voce": bool((p.get("conversa_humana") or {}).get("aberta"))})
+    out.sort(key=lambda x: x["ultima"]["created_at"] or "", reverse=True)
+    out.sort(key=lambda x: not x["para_voce"])
+    return {"conversas": out, "numero_ligado": bool(os.environ.get("WHATSAPP_TOKEN") and os.environ.get("WHATSAPP_PHONE_NUMBER_ID"))}
+
+
+@api.get("/conversas/{pid}")
+async def ver_conversa(pid: str, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0, "id": 1, "nome": 1, "telefone": 1, "status_funil": 1, "conversa_humana": 1, "plano_interesse": 1})
+    if not p:
+        raise HTTPException(404, "Contato não encontrado")
+    msgs = await db.whatsapp_mensagens.find({"patient_id": pid}, {"_id": 0}).sort("created_at", 1).to_list(300)
+    return {"contato": p, "mensagens": msgs}
+
+
+class ResponderConversaIn(BaseModel):
+    texto: str = Field(min_length=1, max_length=4000)
+
+
+@api.post("/conversas/{pid}/responder")
+async def responder_conversa(pid: str, payload: ResponderConversaIn, user=Depends(require_nutritionist)):
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Contato não encontrado")
+    doc = await whatsapp_enviar(p, payload.texto.strip(), "rogerio")
+    await db.patients.update_one({"id": pid}, {"$set": {"pendencias_resolvidas.conversa": iso(now_utc())}})
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+class AgenteConversaIn(BaseModel):
+    ativo: bool
+
+
+@api.post("/conversas/{pid}/agente")
+async def agente_na_conversa(pid: str, payload: AgenteConversaIn, user=Depends(require_nutritionist)):
+    """ativo=True devolve a conversa ao agente; False: o Rogério assume (o agente para de responder)."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
+    if not p:
+        raise HTTPException(404, "Contato não encontrado")
+    if payload.ativo:
+        await db.patients.update_one({"id": pid}, {"$set": {"conversa_humana.aberta": False, "pendencias_resolvidas.conversa": iso(now_utc())}})
+    else:
+        await db.patients.update_one({"id": pid}, {"$set": {"conversa_humana": {"aberta": True, "desde": iso(now_utc()), "pergunta": "assumida pelo Rogério"}}})
+    return {"ok": True}
+
+
+class SimularWhatsappIn(BaseModel):
+    telefone: str = Field(min_length=8, max_length=30)
+    texto: str = Field(min_length=1, max_length=2000)
+    nome: Optional[str] = Field(default=None, max_length=120)
+
+
+@api.post("/conversas/simular")
+async def simular_whatsapp(payload: SimularWhatsappIn, user=Depends(require_nutritionist)):
+    """Testa o agente como se o cliente tivesse escrito no WhatsApp (útil antes de ligar o número)."""
+    return await whatsapp_receber(user["id"], payload.telefone, payload.texto, payload.nome)
+
+
 # ── Painel "o que fazer hoje" (ajuste pain1 do Rogério) ─────────────────────
 _PASSO_DA_ETAPA = {
     "ANAMNESE_COMPLETA": "agendar a consulta", "CONSULTA_AGENDADA": "conferir o formulário antes da consulta",
     "CONSULTA_REALIZADA": "montar e entregar o plano", "PLANO_ENTREGUE": "acompanhar a adaptação",
     "EM_ACOMPANHAMENTO": "agendar o retorno antes do plano vencer", "LEAD_INICIADO": "enviar o formulário",
 }
-_JORNADA = [("lead", "Lead", ["LEAD_INICIADO"]), ("formulario", "Formulário", ["ANAMNESE_COMPLETA"]),
+_JORNADA = [("lead", "Lead", ["LEAD_INICIADO", "PROPOSTA_ACEITA"]), ("formulario", "Formulário", ["ANAMNESE_COMPLETA"]),
             ("agendada", "Agendada", ["CONSULTA_AGENDADA"]), ("consulta", "Consulta feita", ["CONSULTA_REALIZADA"]),
             ("plano", "Plano entregue", ["PLANO_ENTREGUE"]), ("acompanhamento", "Acompanhamento", ["EM_ACOMPANHAMENTO"])]
 
@@ -2100,6 +2405,9 @@ async def painel(user=Depends(require_nutritionist)):
             add(p, "plano_vencendo", f"Plano vence em {sit['dias']} dias", "renovar", (p.get("assinatura") or {}).get("vencimento"))
         elif sit["status"] == "vencido":
             add(p, "pagamento_atrasado", f"Pagamento atrasado há {-sit['dias']} dias", "cobrar", (p.get("assinatura") or {}).get("vencimento"))
+        ch = p.get("conversa_humana") or {}
+        if ch.get("aberta"):
+            add(p, "conversa", f"Conversa para você: {ch.get('pergunta') or 'cliente aguardando resposta'}"[:140], "conversa", max(str(ch.get("desde") or ""), str(p.get("ultima_mensagem_cliente") or "")))
         if st == "LEAD_INICIADO" and not (p.get("formulario") or {}).get("enviado_em"):
             criado = str(p.get("created_at") or "")
             try:

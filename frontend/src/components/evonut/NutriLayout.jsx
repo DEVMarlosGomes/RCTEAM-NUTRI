@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   LayoutDashboard, Users, CalendarDays, LogOut, Bot, Stethoscope, Settings, Database,
-  BookOpenText, PackagePlus, Menu, X, Wallet, SlidersHorizontal, MessageCircle, ClipboardList,
+  BookOpenText, PackagePlus, Menu, X, Wallet, SlidersHorizontal, MessageCircle, ClipboardList, MessagesSquare,
 } from "lucide-react";
 import RCLogo from "./RCLogo";
 
@@ -23,6 +23,7 @@ const groups = [
   {
     label: "Acompanhamento",
     links: [
+      { to: "/acompanhamento/conversas", label: "Conversas do WhatsApp", icon: MessagesSquare, testid: "nav-conversas" },
       { to: "/acompanhamento/mensagens", label: "Mensagens e lembretes", icon: MessageCircle, testid: "nav-mensagens" },
       { to: "/acompanhamento/formularios", label: "Formulários", icon: ClipboardList, testid: "nav-formularios" },
     ],

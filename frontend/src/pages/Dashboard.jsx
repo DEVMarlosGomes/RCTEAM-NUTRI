@@ -22,7 +22,7 @@ function saudacao() {
 }
 const ICONE_PEND = { formulario: ClipboardList, sem_plano: Utensils, exame: FlaskConical, sem_resposta: MessageCircle, plano_vencendo: Wallet, pagamento_atrasado: Wallet, lead_parado: Send };
 const COR_PEND = { pagamento_atrasado: "text-rc-coral", sem_resposta: "text-rc-amber", lead_parado: "text-rc-amber", plano_vencendo: "text-rc-amber" };
-const ROTULO_ACAO = { revisar: "Revisar", prescricao: "Montar plano", exames: "Ver exames", whatsapp: "WhatsApp", renovar: "Renovar", cobrar: "Cobrar", proposta: "Enviar formulário" };
+const ROTULO_ACAO = { revisar: "Revisar", prescricao: "Montar plano", exames: "Ver exames", whatsapp: "WhatsApp", renovar: "Renovar", cobrar: "Cobrar", proposta: "Enviar formulário", conversa: "Responder" };
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -44,6 +44,7 @@ export default function Dashboard() {
     if (p.acao === "exames") { await resolver(p); navigate(`/pacientes/${p.paciente_id}?aba=exames`); return; }
     if (p.acao === "whatsapp") { if (zap) window.open(`${zap}?text=${encodeURIComponent(`Oi, ${(p.nome || "").split(" ")[0]}! Tudo certo? Me conta como está indo o plano.`)}`, "_blank", "noopener"); await resolver(p); return; }
     if (p.acao === "renovar" || p.acao === "cobrar") { navigate("/pagamentos"); return; }
+    if (p.acao === "conversa") { navigate(`/acompanhamento/conversas?c=${p.paciente_id}`); return; }
     if (p.acao === "proposta") {
       try {
         const { data } = await api.post(`/patients/${p.paciente_id}/formulario/enviar`, { tipo: "inicial" });
