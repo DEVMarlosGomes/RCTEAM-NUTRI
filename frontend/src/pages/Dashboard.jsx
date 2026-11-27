@@ -167,7 +167,18 @@ export default function Dashboard() {
                 <dt className="text-[10.5px] uppercase tracking-[0.14em] text-gray-500">Recebido / a receber</dt>
                 <dd className="text-[16px] font-semibold text-white tabular">{moeda(mes.recebido)} <span className="text-gray-500">/ {moeda(mes.a_receber)}</span></dd>
               </div>
-              {mes.leads > 0 && <p className="col-span-2 text-[12px] text-gray-500">{mes.leads} leads, {mes.convertidos} fecharam.</p>}
+              <div className="col-span-2 border-t border-white/[0.05] pt-3" data-testid="funil-mes">
+                <dt className="mb-2 text-[10.5px] uppercase tracking-[0.14em] text-gray-500">Funil do mês</dt>
+                {[["Leads", mes.leads], ["Propostas aceitas", mes.propostas], ["Pagos", mes.pagos]].map(([l, v]) => {
+                  const pct = mes.leads ? Math.round(((v || 0) / mes.leads) * 100) : 0;
+                  return (
+                    <dd key={l} className="mb-1.5">
+                      <div className="flex justify-between text-[12.5px]"><span className="text-gray-300">{l}</span><span className="tabular text-white">{v ?? 0}</span></div>
+                      <div className="mt-0.5 h-1.5 bg-white/[0.06]"><div className="h-full bg-rc-blue" style={{ width: `${l === "Leads" ? (mes.leads ? 100 : 0) : pct}%` }} /></div>
+                    </dd>
+                  );
+                })}
+              </div>
             </dl>
           </section>
         </aside>

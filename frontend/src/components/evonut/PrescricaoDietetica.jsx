@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bot, ChevronLeft, ChevronRight, Copy, FileDown, FilePlus2, FolderInput, Loader2, Save, LibraryBig, Settings2, Star, Trash2, Utensils } from "lucide-react";
+import { Sparkles, ChevronLeft, ChevronRight, Copy, FileDown, FilePlus2, FolderInput, Loader2, Save, LibraryBig, Settings2, Star, Trash2, Utensils } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError } from "@/lib/evo-api";
 import EditorRefeicoes, { BarraTotal, LARGURA_EDITOR } from "./dieta/EditorRefeicoes";
@@ -12,7 +12,7 @@ import PreferenciasGaveta, { PreferenciasContext, preferenciasDe, usePreferencia
 import { carregarEstrutura } from "@/lib/anamnese";
 import ModelosDietaModal, { SalvarModeloDialogo } from "./dieta/ModelosDietaModal";
 import ObservacoesDieta from "./dieta/ObservacoesDieta";
-import DonatoPanel from "./dieta/DonatoPanel";
+import DonatoGaveta, { ajustarRefeicaoAMeta } from "./dieta/DonatoGaveta";
 import Combobox from "./dieta/Combobox";
 import { PromptDialogo } from "./dieta/Dialogo";
 import { EstatisticaRefeicaoModal } from "./dieta/Nutrientes";
@@ -70,6 +70,8 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
   const [importar, setImportar] = useState(false);
   const [gerarPdf, setGerarPdf] = useState(false);
   const [donato, setDonato] = useState(false);
+  // rascunho do Dr. Donatto na tabela (ajuste don1): nada é salvo até "Aplicar plano"
+  const [rascunhoDonato, setRascunhoDonato] = useState(null);
   const gaveta = usePreferenciasGaveta();
   const [estruturaForm, setEstruturaForm] = useState(null);
   useEffect(() => { carregarEstrutura().then(setEstruturaForm).catch(() => {}); }, []);
@@ -148,6 +150,7 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
 
   const trocarPara = async (plano) => {
     if (plano.id === draft?.id) return;
+    if (rascunhoDonato) { toast.info("Aplique ou descarte o rascunho do Dr. Donatto antes de trocar de dieta."); setDonato(true); return; }
     if (sujo) { try { await salvar({ silencioso: true }); } catch { return; } }
     abrir(plano);
   };
@@ -234,6 +237,50 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
     if (alvo) abrir(alvo);
   };
 
+  const kcalDieta = Number(draft?.planejamento?.kcal) || Number(d.patient?.meta_energetica?.kcal_final) || null;
+
+  const receberRascunho = (previa, generationId) => {
+    const novo = draftDoPlano(previa.plano, dRef.current);
+    const r = previa.resumo || {};
+    const g = (x) => Number(x?.quantidade_g) || 0;
+    const kcal = Number(r.valor_energetico_total_kcal) || kcalDieta;
+    const planejamento = kcal && g(r.proteinas)
+      ? { ...novo.planejamento, kcal: Math.round(kcalDieta || kcal),
+          pct_ptn: Math.round((g(r.proteinas) * 400) / kcal), pct_cho: Math.round((g(r.carboidratos) * 400) / kcal), pct_lip: Math.round((g(r.gorduras) * 900) / kcal) }
+      : novo.planejamento;
+    setRascunhoDonato((atual) => ({ generationId, validacao: previa.validacao, justificativa: previa.justificativa,
+      anterior: atual?.anterior || { draft, salvoJson } }));
+    setDraft({ ...novo, id: null, titulo: "Rascunho · Dr. Donatto", planejamento });
+    setSalvoJson("");
+  };
+  const refeicaoRegenerada = (i, previa) => {
+    const bloco = draftDoPlano(previa.plano, dRef.current).refeicoes[i];
+    if (!bloco) return;
+    setDraft((cur) => ({ ...cur, refeicoes: cur.refeicoes.map((r, j) => (j === i ? { ...bloco, meta_pct: r.meta_pct ?? bloco.meta_pct } : r)) }));
+    setRascunhoDonato((cur) => ({ ...cur, validacao: previa.validacao }));
+  };
+  const ajustarRefeicao = (i) => setDraft((cur) => ({ ...cur, refeicoes: cur.refeicoes.map((r, j) => (j === i ? ajustarRefeicaoAMeta(r, kcalDieta) : r)) }));
+  const aplicarDonato = async () => {
+    try {
+      const { data } = await api.post(`/patients/${pid}/donato/plans/${rascunhoDonato.generationId}/approve`, { plano: payloadDoDraft(draft) });
+      const { data: lista } = await api.get(`/patients/${pid}/planos-manuais`);
+      setPlanos(lista || []);
+      setRascunhoDonato(null);
+      abrir(data);
+      setDonato(false);
+      toast.success(`${data.titulo} salva. O plano anterior continua guardado.`);
+    } catch (error) { toast.error(formatApiError(error.response?.data?.detail)); }
+  };
+  const descartarDonato = async () => {
+    if (!window.confirm("Descartar o rascunho do Dr. Donatto? A dieta anterior volta para a tela.")) return;
+    api.post(`/patients/${pid}/donato/plans/${rascunhoDonato.generationId}/reject`).catch(() => {});
+    const { anterior } = rascunhoDonato;
+    setRascunhoDonato(null);
+    setDraft(anterior.draft);
+    setSalvoJson(anterior.salvoJson);
+    toast.success("Rascunho descartado.");
+  };
+
   if (!planos || !draft) {
     return <div className="rc-card p-10 flex items-center justify-center gap-2 text-gray-400"><Loader2 className="w-4 h-4 animate-spin" /> Carregando dietas…</div>;
   }
@@ -270,12 +317,26 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
         </div>
         <button type="button" onClick={() => mover(1)} disabled={posicao < 0 || posicao >= planos.length - 1} className="rc-btn-ghost p-1.5 disabled:opacity-25" title="Mover dieta para a direita" aria-label="Mover dieta para a direita"><ChevronRight className="w-5 h-5" /></button>
         <div className="hidden sm:flex items-center gap-1 pl-2 ml-1 border-l border-white/[0.06]">
-          <button type="button" onClick={() => setDonato((v) => !v)} className={`rc-btn-ghost text-[12.5px] ${donato ? "text-rc-blueLight" : ""}`}><Bot className="w-4 h-4" /> DONATO</button>
+          <button type="button" onClick={() => setDonato((v) => !v)} className={`rc-btn-ghost text-[12.5px] ${donato ? "text-rc-blueLight" : ""}`} data-testid="abrir-donatto"><Sparkles className="w-4 h-4" /> Gerar com Dr. Donatto</button>
           <Link to="/configuracoes-dieta" className="rc-btn-ghost p-2" title="Configurações da dieta" aria-label="Configurações da dieta"><Settings2 className="w-4 h-4" /></Link>
         </div>
       </div>
 
-      {donato && <DonatoPanel d={d} onApproved={() => aposImportar(null)} />}
+      {donato && (
+        <DonatoGaveta pid={pid} draft={draft} kcalMeta={kcalDieta} preferencias={preferencias} rascunho={rascunhoDonato}
+          onFechar={() => setDonato(false)} onRascunho={receberRascunho} onRegenerada={refeicaoRegenerada} onAjustar={ajustarRefeicao}
+          onAplicar={aplicarDonato} onDescartar={descartarDonato} />
+      )}
+      {rascunhoDonato && (
+        <div className="rc-card flex flex-wrap items-center justify-between gap-3 border-l-2 border-rc-amber px-4 py-3" data-testid="faixa-rascunho-donatto">
+          <div className="text-[13.5px] text-gray-200"><Sparkles className="-mt-0.5 mr-1.5 inline h-4 w-4 text-rc-blue" />Rascunho do Dr. Donatto · <span className="text-rc-amber">nada foi salvo ainda</span>. Revise na tabela e aplique.</div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setDonato(true)} className="rc-btn-ghost h-9 text-[12.5px]">Abrir conferência</button>
+            <button type="button" onClick={descartarDonato} className="rc-btn-ghost h-9 text-[12.5px]">Descartar</button>
+            <button type="button" onClick={() => { if (window.confirm("Salvar este plano como nova versão? O plano anterior continua guardado.")) aplicarDonato(); }} className="rc-btn-primary h-9 text-[12.5px]">Aplicar plano</button>
+          </div>
+        </div>
+      )}
 
       <BarraTotal refeicoes={draft.refeicoes} peso={peso} planejamento={draft.planejamento} onOutrasOpcoes={() => setOutras("vitaminas")} />
 

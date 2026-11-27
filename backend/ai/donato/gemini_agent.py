@@ -15,6 +15,8 @@ from .schemas import DONATO_PLAN_DRAFT_SCHEMA
 # Ordem de leitura da base: normas e motor primeiro, protocolos depois.
 _PRIORITY_ORDER = {"critical": 0, "high": 1, "support": 2}
 
+_FONTES_OFICIAIS = ["TACO", "TBCA", "IBGE", "Tucunduva"]
+
 # Itens comuns na pratica esportiva que nao existem na TACO.
 _EXTRA_FOOD_PATTERNS = [
     "^whey", "til[aá]pia", "peito de peru", "pasta de amendoim", "^tapioca", "^chia",
@@ -26,11 +28,11 @@ Sua tarefa é gerar um RASCUNHO estruturado de plano alimentar para revisão hum
 
 REGRAS INEGOCIÁVEIS
 1. Siga a BASE DE CONHECIMENTO abaixo (protocolos clínicos, motor nutricional, biblioteca e manual de saída). Ela tem prioridade sobre o seu conhecimento geral.
-2. Use SOMENTE alimentos do CARDÁPIO EVONUT fornecido, copiando exatamente o "id" no campo alimento_id e o nome no campo nome. Nunca invente alimentos ou IDs. Alternativas também precisam vir do cardápio.
+2. Use SOMENTE alimentos do CARDÁPIO EVONUT fornecido (base de alimentos do app; nunca rótulos de fabricantes nem industrializados de marca), copiando exatamente o "id" no campo alimento_id e o nome no campo nome. Nunca invente alimentos ou IDs. Alternativas também precisam vir do cardápio.
 3. Respeite alergias, intolerâncias, aversões e restrições do paciente em TODOS os alimentos E TODAS as alternativas (ex.: quem não come peixe não pode receber atum ou sardinha como substituto). Considere a rotina (horário de treino), os sintomas e os exames laboratoriais ao escolher alimentos.
 3a. Mantenha a proteína dentro da faixa do motor nutricional para o objetivo (em geral 1,6 a 2,2 g/kg para emagrecimento com treino de força); varie as fontes proteicas entre as refeições.
 3b. Enzimas hepáticas (TGO/TGP) elevadas em quem treina intensamente podem ter origem muscular; não afirme esteatose com base apenas nelas.
-4. Defina a meta energética a partir do gasto energético total informado e do objetivo, seguindo o motor nutricional da base. Informe essa meta em resumo_nutricional.valor_energetico_total_kcal e explique o cálculo em justificativa_tecnica.
+4. PARÂMETROS DEFINIDOS EXCLUSIVAMENTE PELO NUTRICIONISTA: só as CALORIAS DA DIETA (parametros_do_nutricionista.calorias_dieta_kcal) e o número de refeições. Use exatamente essas calorias em resumo_nutricional.valor_energetico_total_kcal. Se vierem refeições com nome, horário e % (pct), siga-os. Todo o resto você define com autonomia seguindo o motor nutricional da base: distribuição de macronutrientes (CHO/PTN/LIP), água, fibras, horários (quando não vierem), alimentos, quantidades e substituições. Explique as escolhas em justificativa_tecnica.
 5. Escolha quantidades em gramas (quantidade.peso_g) para que a soma do plano atinja a meta e a distribuição de macronutrientes definida. Use as kcal/100 g e macros do cardápio para calcular. Inclua medida caseira legível.
 6. Não prescreva medicamentos nem suplementos com doses; se houver suplemento em uso, apenas registre em observacoes.
 7. Use null para dados ausentes e liste o que falta em dados_pendentes. Nunca invente dados clínicos.
@@ -76,7 +78,9 @@ async def build_food_catalog(db) -> list[dict[str, Any]]:
         if row:
             catalog[row["id"]] = row
     for pattern in _EXTRA_FOOD_PATTERNS:
-        candidates = await db.alimentos.find({"arquivado": {"$ne": True}, "nome": {"$regex": pattern, "$options": "i"}}, {"_id": 0}).to_list(40)
+        # so fontes oficiais: nada de rotulo de fabricante (cadastros proprios costumam ter marca)
+        candidates = await db.alimentos.find({"arquivado": {"$ne": True}, "fonte": {"$in": _FONTES_OFICIAIS},
+                                              "nome": {"$regex": pattern, "$options": "i"}}, {"_id": 0}).to_list(40)
         rows = [r for r in (_food_row(c) for c in candidates) if r]
         rows.sort(key=lambda r: len(r["nome"] or ""))  # nome mais curto tende a ser o item generico
         for row in rows[:2]:
@@ -84,8 +88,9 @@ async def build_food_catalog(db) -> list[dict[str, Any]]:
     return sorted(catalog.values(), key=lambda r: (r.get("grupo") or "", r.get("nome") or ""))
 
 
-def build_prompt(context: dict[str, Any], knowledge: list[dict[str, Any]], catalog: list[dict[str, Any]]) -> tuple[str, str]:
-    """Retorna (system_prompt, user_prompt)."""
+def build_prompt(context: dict[str, Any], knowledge: list[dict[str, Any]], catalog: list[dict[str, Any]],
+                 prompt_mestre: str | None = None) -> tuple[str, str]:
+    """Retorna (system_prompt, user_prompt). prompt_mestre: o Prompt Mestre colado em Agentes IA (opcional)."""
     kb = "\n\n".join(
         f"### [{d.get('source_document_id')}] {d.get('title')}\n{d['content'].strip()}" for d in knowledge
     )
@@ -93,8 +98,14 @@ def build_prompt(context: dict[str, Any], knowledge: list[dict[str, Any]], catal
         f"{f['id']} | {f['nome']} | {f['kcal']} kcal | P {f['ptn']} | C {f['cho']} | G {f['lip']} | fibra {f['fib']}"
         for f in catalog
     )
+    mestre = ""
+    if (prompt_mestre or "").strip():
+        mestre = ("\n--- PROMPT MESTRE DO DR. DONATTO (cadastrado pelo nutricionista) ---\n" + prompt_mestre.strip()
+                  + "\n(As REGRAS INEGOCIÁVEIS acima prevalecem: o app já envia os dados do paciente, as calorias são do "
+                  "nutricionista e a saída é sempre o CONTRATO JSON.)\n")
     system = (
         RUNTIME_PROMPT
+        + mestre
         + "\n--- BASE DE CONHECIMENTO (Dr. Donatto) ---\n" + kb
         + "\n\n--- CONTRATO JSON (schema obrigatório da resposta) ---\n"
         + json.dumps(DONATO_PLAN_DRAFT_SCHEMA, ensure_ascii=False)

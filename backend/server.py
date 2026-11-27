@@ -317,8 +317,19 @@ class AgentDocCreate(BaseModel):
 
 class DonatoDraftIn(BaseModel):
     objetivo: Optional[str] = None
-    numero_refeicoes: int = Field(default=6, ge=3, le=10)
+    numero_refeicoes: int = Field(default=6, ge=1, le=10)
     observacoes: Optional[str] = None
+    kcal_meta: Optional[float] = Field(default=None, gt=300, lt=10000)  # CALORIAS DA DIETA (definidas pelo nutricionista)
+    refeicoes: Optional[List[dict]] = None  # [{nome, horario, pct}] da Prescrição
+
+
+class DonatoAplicarIn(BaseModel):
+    plano: Optional[dict] = None  # o plano como ficou no editor (revisado pelo nutricionista)
+
+
+class DonatoRegerarIn(BaseModel):
+    kcal_meta: Optional[float] = None
+    refeicoes: Optional[List[dict]] = None
 
 class DonatoDraftPatch(BaseModel):
     draft: dict
@@ -1237,7 +1248,7 @@ async def atendimento_save_lead(payload: AtendimentoLeadIn):
         "nome": payload.nome or "Visitante",
         "telefone": payload.telefone or "",
         "email": payload.email or "",
-        "status_funil": "LEAD_ATENDIMENTO",
+        "status_funil": "LEAD_INICIADO", "origem": "site",
         "nutricionista_id": nutri_doc["id"],
         "lead_token": token,
         "objetivo": payload.objetivo,
@@ -1754,7 +1765,7 @@ PATIENT_STATUSES = {
     "CONSULTA_REALIZADA", "PLANO_ENTREGUE", "EM_ACOMPANHAMENTO", "INATIVO", "PERDIDO",
 }
 # etapa da lista de Pacientes (ajuste pac1): lead não conta como paciente
-_ETAPA_DO_STATUS = {"LEAD_INICIADO": "lead", "PROPOSTA_ACEITA": "lead", "ANAMNESE_COMPLETA": "atendimento", "CONSULTA_AGENDADA": "atendimento",
+_ETAPA_DO_STATUS = {"LEAD_INICIADO": "lead", "LEAD_ATENDIMENTO": "lead", "PROPOSTA_ACEITA": "lead", "ANAMNESE_COMPLETA": "atendimento", "CONSULTA_AGENDADA": "atendimento",
                     "CONSULTA_REALIZADA": "atendimento", "PLANO_ENTREGUE": "atendimento", "EM_ACOMPANHAMENTO": "acompanhamento",
                     "INATIVO": "inativo", "PERDIDO": "perdido"}
 
@@ -2288,6 +2299,144 @@ async def simular_whatsapp(payload: SimularWhatsappIn, user=Depends(require_nutr
     return await whatsapp_receber(user["id"], payload.telefone, payload.texto, payload.nome)
 
 
+# ── Follow-up e lembretes automáticos (ajuste fn3 do Rogério) ───────────────
+# Roda junto do agendador de lembretes, a cada 10 minutos. Tudo sai pelo WhatsApp (whatsapp_enviar) e fica na
+# conversa. Fora da janela de 24 h da Meta o envio fica marcado "fora_da_janela" até existir modelo aprovado.
+_FOLLOWUP_INTERVALO = timedelta(minutes=10)
+_followup_ultimo = {"em": None}
+
+
+def _primeiro_nome(p: dict) -> str:
+    return (p.get("nome") or "").split(" ")[0] or "tudo bem"
+
+
+def _dt(v) -> Optional[datetime]:
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=TZ_BR)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _followup_leads(agora: datetime) -> int:
+    """Quem não fechou: 24 h sem resposta → 1ª mensagem; 3 dias → 2ª; mais 2 dias sem resposta → Perdido."""
+    feitos = 0
+    async for p in db.patients.find({"status_funil": {"$in": ["LEAD_INICIADO", "PROPOSTA_ACEITA"]}}, {"_id": 0}):
+        if (p.get("conversa_humana") or {}).get("aberta"):
+            continue  # o Rogério está conversando
+        ultima = await db.whatsapp_mensagens.find_one({"patient_id": p["id"]}, {"_id": 0}, sort=[("created_at", -1)])
+        if not ultima:
+            continue  # lead sem conversa no WhatsApp: não há o que seguir
+        ult_cliente = await db.whatsapp_mensagens.find_one({"patient_id": p["id"], "direcao": "entrada"}, {"_id": 0, "created_at": 1}, sort=[("created_at", -1)])
+        base = _dt((ult_cliente or {}).get("created_at")) or _dt(p.get("created_at"))
+        if not base:
+            continue
+        fu = p.get("followup") or {}
+        horas = (agora - base).total_seconds() / 3600
+        nome = _primeiro_nome(p)
+        link = _link_agendamento(p, p.get("plano_interesse")) if p.get("lead_token") else None
+        if not fu.get("1") and horas >= 24:
+            txt = (f"Oi, {nome}! Passando para saber se ficou alguma dúvida sobre os planos. "
+                   + (f"Se quiser, já pode escolher seu horário por aqui: {link}" if p.get("status_funil") == "PROPOSTA_ACEITA" and link
+                      else "Posso te ajudar a escolher o melhor para o seu objetivo?"))
+            await whatsapp_enviar(p, txt, "followup")
+            await db.patients.update_one({"id": p["id"]}, {"$set": {"followup.1": iso(agora)}})
+            feitos += 1
+        elif fu.get("1") and not fu.get("2") and horas >= 72:
+            txt = (f"{nome}, ainda dá tempo de começar! Tenho horários livres nesta semana"
+                   + (f": {link}" if link else ". Quer que eu te mande as opções?"))
+            await whatsapp_enviar(p, txt, "followup")
+            await db.patients.update_one({"id": p["id"]}, {"$set": {"followup.2": iso(agora)}})
+            feitos += 1
+        elif fu.get("2") and (agora - (_dt(fu["2"]) or agora)) >= timedelta(days=2):
+            await db.patients.update_one({"id": p["id"]}, {"$set": {"status_funil": "PERDIDO", "perdido_em": iso(agora), "perdido_motivo": "sem resposta ao follow-up"}})
+            feitos += 1
+    return feitos
+
+
+async def _lembretes_consulta(agora: datetime) -> int:
+    """Formulário 2 dias antes (se não respondido); consulta 24 h e 2 h antes (com link se online)."""
+    feitos = 0
+    fim = agora + timedelta(days=2, hours=1)
+    async for c in db.consultations.find({"status": "AGENDADA", "paga": {"$ne": False}}, {"_id": 0}):
+        quando = _dt(c.get("data_hora"))
+        if not quando or not (agora < quando <= fim):
+            continue
+        p = await db.patients.find_one({"id": c.get("paciente_id")}, {"_id": 0})
+        if not p:
+            continue
+        falta = quando - agora
+        nome = _primeiro_nome(p)
+        hora = quando.astimezone(TZ_BR).strftime("%d/%m às %H:%M")
+        link_chamada = c.get("link_chamada") or os.environ.get("CONSULTA_LINK_ONLINE")
+        online = c.get("modalidade") == "online" or bool(c.get("link_chamada"))
+        sets = {}
+        f = p.get("formulario") or {}
+        if falta <= timedelta(days=2) and f.get("estado") != "respondido" and not c.get("lembrete_formulario_em"):
+            token = p.get("lead_token") or secrets.token_urlsafe(16)
+            if not p.get("lead_token"):
+                await db.patients.update_one({"id": p["id"]}, {"$set": {"lead_token": token}})
+            base = (os.environ.get("FRONTEND_URL") or "").split(",")[0].strip().rstrip("/")
+            await whatsapp_enviar(p, f"Oi, {nome}! Sua consulta é {hora}. Para aproveitarmos melhor o tempo, preencha o formulário pré-consulta: {base}/pre-consulta/{token}", "lembrete")
+            sets["lembrete_formulario_em"] = iso(agora)
+        if falta <= timedelta(hours=24) and falta > timedelta(hours=2) and not c.get("lembrete_24h_em"):
+            extra = f" O link da chamada: {link_chamada}" if online and link_chamada else (" Te espero no local combinado." if c.get("modalidade") == "presencial" else "")
+            dia = "hoje" if quando.astimezone(TZ_BR).date() == agora.astimezone(TZ_BR).date() else "amanhã"
+            await whatsapp_enviar(p, f"{nome}, lembrete: {dia} tem consulta, {hora}.{extra}", "lembrete")
+            sets["lembrete_24h_em"] = iso(agora)
+        if falta <= timedelta(hours=2) and not c.get("lembrete_2h_em"):
+            extra = f" Entre por aqui: {link_chamada}" if online and link_chamada else ""
+            await whatsapp_enviar(p, f"{nome}, sua consulta começa em breve ({quando.astimezone(TZ_BR).strftime('%H:%M')}).{extra}", "lembrete")
+            sets["lembrete_2h_em"] = iso(agora)
+        if sets:
+            await db.consultations.update_one({"id": c["id"]}, {"$set": sets})
+            feitos += len(sets)
+    return feitos
+
+
+async def _avisos_renovacao(agora: datetime) -> int:
+    """Plano perto de vencer (7 dias): um aviso por vencimento."""
+    from financeiro import situacao_plano
+    feitos = 0
+    hoje = agora.astimezone(TZ_BR).date()
+    async for p in db.patients.find({"assinatura.vencimento": {"$exists": True}, "status_funil": {"$nin": ["PERDIDO", "INATIVO"]}}, {"_id": 0}):
+        a = p.get("assinatura") or {}
+        sit = situacao_plano(a, 7, hoje)
+        venc = str(a.get("vencimento"))[:10]
+        if sit["status"] != "vencendo" or (p.get("aviso_renovacao") or {}).get(venc):
+            continue
+        dias = sit["dias"]
+        await whatsapp_enviar(p, f"Oi, {_primeiro_nome(p)}! Seu plano vence em {dias} {'dia' if dias == 1 else 'dias'} ({venc[8:10]}/{venc[5:7]}). "
+                                 "Vamos renovar para manter o ritmo? Te mando as condições.", "lembrete")
+        await db.patients.update_one({"id": p["id"]}, {"$set": {f"aviso_renovacao.{venc}": iso(agora)}})
+        feitos += 1
+    return feitos
+
+
+async def rodar_followups(agora: Optional[datetime] = None) -> dict:
+    agora = agora or now_utc()
+    return {"leads": await _followup_leads(agora), "consultas": await _lembretes_consulta(agora), "renovacao": await _avisos_renovacao(agora)}
+
+
+async def followups_se_for_hora():
+    agora = now_utc()
+    if _followup_ultimo["em"] and agora - _followup_ultimo["em"] < _FOLLOWUP_INTERVALO:
+        return
+    _followup_ultimo["em"] = agora
+    try:
+        r = await rodar_followups(agora)
+        if any(r.values()):
+            logging.info("follow-ups: %s", r)
+    except Exception:
+        logging.exception("follow-ups falharam")
+
+
+@api.post("/followups/rodar")
+async def rodar_followups_agora(user=Depends(require_nutritionist)):
+    """Roda os follow-ups e lembretes agora (normalmente a cada 10 min)."""
+    return await rodar_followups()
+
+
 # ── Painel "o que fazer hoje" (ajuste pain1 do Rogério) ─────────────────────
 _PASSO_DA_ETAPA = {
     "ANAMNESE_COMPLETA": "agendar a consulta", "CONSULTA_AGENDADA": "conferir o formulário antes da consulta",
@@ -2438,6 +2587,8 @@ async def painel(user=Depends(require_nutritionist)):
         "recebido": round(sum(float(g.get("valor") or 0) for g in pagos), 2),
         "a_receber": round(a_receber, 2),
         "leads": len(leads_mes), "convertidos": len(fecharam),
+        "propostas": await db.patients.count_documents({"nutricionista_id": nid, "proposta_aceita_em": {"$gte": ini_mes}}),
+        "pagos": await db.reservas.count_documents({"nutricionista_id": nid, "status": "confirmada", "confirmada_em": {"$gte": ini_mes}}),
     }
     # próximos passos: últimos atendidos, etapa e o que falta
     vistos, passos = set(), []
@@ -3246,32 +3397,37 @@ def _donato_to_manual_payload(draft: dict) -> dict:
             q = item.get("quantidade") or {}
             foods.append({
                 "alimento_id": item.get("alimento_id"),
-                "medida_nome": q.get("medida_caseira") or q.get("unidade") or "Gramas",
+                "nome": item.get("nome"),
+                "medida_nome": "Gramas",
                 "quantidade": q.get("peso_g"),
                 "quantidade_g": q.get("peso_g"),
+                "medida_caseira": q.get("medida_caseira"),
                 "substituivel": True,
                 "substitutos": [
                     {
                         "alimento_id": alt.get("alimento_id"),
                         "nome": alt.get("nome"),
-                        "medida_nome": (alt.get("quantidade") or {}).get("medida_caseira") or "Gramas",
+                        "medida_nome": "Gramas",
                         "quantidade": (alt.get("quantidade") or {}).get("peso_g"),
                         "quantidade_g": (alt.get("quantidade") or {}).get("peso_g"),
                     }
                     for alt in item.get("alternativas") or []
                     if alt.get("alimento_id")
                 ],
-                "observacao": item.get("modo_preparo"),
+                "observacao": " · ".join(x for x in (q.get("medida_caseira"), item.get("modo_preparo")) if x) or None,
             })
+        total = _coerce_float(resumo.get("valor_energetico_total_kcal")) or 0
+        kcal_ref = _coerce_float((meal.get("resumo_refeicao") or {}).get("energia_kcal")) or 0
         refs.append({
             "nome": meal.get("nome") or "Refeicao",
             "horario": meal.get("horario"),
+            "meta_pct": meal.get("meta_pct") if meal.get("meta_pct") is not None else (round(kcal_ref / total * 100) if total else None),
             "meta_kcal": (meal.get("resumo_refeicao") or {}).get("energia_kcal"),
             "alimentos": foods,
             "observacao": None,
         })
     return {
-        "titulo": "Prescricao Dietetica - DONATO",
+        "titulo": "Dieta · gerada pelo Dr. Donatto",
         "objetivo": ((draft.get("estrategia_nutricional") or {}).get("objetivo_principal")),
         "estrategia": ((draft.get("estrategia_nutricional") or {}).get("tipo_plano")),
         "meta_kcal": resumo.get("valor_energetico_total_kcal"),
@@ -3490,8 +3646,16 @@ async def _donato_clinical_context(p: dict, payload: DonatoDraftIn, scaffold: di
     anamnese = af.legiveis(anam)
     comp = (aval or {}).get("composicao") or {}
     return {
+        "parametros_do_nutricionista": {
+            "calorias_dieta_kcal": payload.kcal_meta,
+            "numero_refeicoes": payload.numero_refeicoes,
+            "refeicoes": payload.refeicoes or None,
+            "regra": ("As calorias da dieta são definidas pelo nutricionista e devem ser usadas exatamente. "
+                      "Macronutrientes, água, fibras, horários (se não vierem), alimentos, quantidades e substituições "
+                      "são definidos por você com autonomia, seguindo o motor nutricional da base."),
+        },
         "paciente": scaffold.get("paciente"),
-        "estrategia_solicitada": payload.model_dump(),
+        "estrategia_solicitada": payload.model_dump(exclude={"refeicoes"}),
         "gasto_energetico": {
             "tmb_kcal": comp.get("tmb"), "protocolo_tmb": comp.get("tmb_protocolo"),
             "naf": comp.get("naf"), "fator_injuria": comp.get("fi"), "get_kcal": comp.get("get_kcal"),
@@ -3514,12 +3678,14 @@ async def _donato_generate_with_gemini(p: dict, payload: DonatoDraftIn, scaffold
         })
     catalog = await donato_gemini.build_food_catalog(db)
     context = await _donato_clinical_context(p, payload, scaffold)
-    system_prompt, user_prompt = donato_gemini.build_prompt(context, knowledge, catalog)
+    agente = await db.agents.find_one({"code": "donato"}, {"_id": 0, "base_prompt": 1, "prompt_customized": 1}) or {}
+    mestre = agente.get("base_prompt") if agente.get("prompt_customized") else None
+    system_prompt, user_prompt = donato_gemini.build_prompt(context, knowledge, catalog, prompt_mestre=mestre)
     opts = dict(max_tokens=32768, temperature=0.4, timeout=300.0, thinking_budget=4096, response_mime_type="application/json")
     messages = [{"role": "user", "content": user_prompt}]
     raw = await _gemini_chat(messages, system_prompt, GEMINI_KEY, **opts)
     draft = donato_gemini.parse_json(raw)
-    meta_kcal = _coerce_float((draft.get("resumo_nutricional") or {}).get("valor_energetico_total_kcal"))
+    meta_kcal = payload.kcal_meta or _coerce_float((draft.get("resumo_nutricional") or {}).get("valor_energetico_total_kcal"))
     draft = await _donato_recalculate_evonut(draft)
     real_kcal = _coerce_float((draft.get("resumo_nutricional") or {}).get("valor_energetico_total_kcal"))
     def problemas_do(plano: dict, total: Optional[float]) -> list[str]:
@@ -3563,6 +3729,10 @@ async def create_donato_plan_draft(pid: str, payload: DonatoDraftIn, user=Depend
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
     if not p:
         raise HTTPException(404, "Paciente nao encontrado")
+    if not payload.kcal_meta:
+        payload.kcal_meta = _coerce_float((p.get("meta_energetica") or {}).get("kcal_final"))
+    if not payload.kcal_meta:
+        raise HTTPException(400, "Informe as calorias da dieta (Gasto Energético ou Previsão de Macros) antes de gerar.")
     settings = get_donato_settings()
     scaffold = await _build_donato_draft(p, payload)
     provider = "deterministic_scaffold"
@@ -3651,7 +3821,7 @@ async def update_donato_plan_draft(pid: str, generation_id: str, payload: Donato
     return await db.donato_plan_generations.find_one({"id": generation_id}, {"_id": 0})
 
 @api.post("/patients/{pid}/donato/plans/{generation_id}/approve", status_code=201)
-async def approve_donato_plan(pid: str, generation_id: str, user=Depends(require_nutritionist)):
+async def approve_donato_plan(pid: str, generation_id: str, payload: Optional[DonatoAplicarIn] = None, user=Depends(require_nutritionist)):
     p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]})
     if not p:
         raise HTTPException(404, "Paciente nao encontrado")
@@ -3665,20 +3835,127 @@ async def approve_donato_plan(pid: str, generation_id: str, user=Depends(require
         raise HTTPException(400, "Rascunho possui dados pendentes e nao pode ser aprovado")
     latest = await db.planos_manuais.find_one({"paciente_id": pid}, {"versao": 1}, sort=[("versao", -1)])
     now = iso(now_utc())
+    versao = int((latest or {}).get("versao") or 0) + 1
+    corpo = PlanoManualIn(**payload.plano).model_dump() if payload and payload.plano else _donato_to_manual_payload(draft)
+    revisado = bool(payload and payload.plano)
+    corpo["titulo"] = f"Versão {versao} · gerado pelo Dr. Donatto{' e revisado por você' if revisado else ''}"
     manual = {
         "id": str(uuid.uuid4()),
         "paciente_id": pid,
         "nutricionista_id": user["id"],
-        **_donato_to_manual_payload(draft),
-        "versao": int((latest or {}).get("versao") or 0) + 1,
+        **corpo,
+        "versao": versao,
+        "ordem": await _proxima_ordem_plano(pid),
         "origem_donato_generation_id": generation_id,
         "criado_em": now,
         "atualizado_em": now,
     }
     await db.planos_manuais.insert_one(manual)
     await _create_plano_snapshot(manual, "approve_donato", user["id"])
+    await _sincronizar_lembretes_refeicao(pid)
     await db.donato_plan_generations.update_one({"id": generation_id}, {"$set": {"approval_status": "approved", "approved_by": user["id"], "approved_at": now, "plano_manual_id": manual["id"], "updated_at": now}})
     return await _enrich_plano({k: v for k, v in manual.items() if k != "_id"})
+
+@api.get("/patients/{pid}/donato/entrada")
+async def donato_entrada(pid: str, user=Depends(require_nutritionist)):
+    """O que o app manda ao Dr. Donatto, com a aba de origem de cada dado (✓ preenchido / pendente)."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Paciente nao encontrado")
+    aval = await db.evaluations.find_one({"paciente_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
+    comp = (aval or {}).get("composicao") or {}
+    leg = af.legiveis(await _anamnese_principal(pid)) or {}
+    respostas = [(t, v) for bloco in leg.values() for t, v in bloco.items()]
+
+    def do_form(rx):
+        achados = [f"{t}: {v}" for t, v in respostas if re.search(rx, t, re.I)]
+        return "; ".join(achados)[:220] or None
+
+    house = await db.drhouse_exam_analyses.find_one({"paciente_id": pid}, {"_id": 0, "created_at": 1}, sort=[("created_at", -1)])
+    lote = await db.exames_manuais.find_one({"paciente_id": pid}, {"_id": 0, "data_coleta": 1}, sort=[("data_coleta", -1)])
+    idade = None
+    try:
+        nasc = date.fromisoformat(str(p.get("data_nascimento"))[:10])
+        hoje = now_utc().astimezone(TZ_BR).date()
+        idade = hoje.year - nasc.year - ((hoje.month, hoje.day) < (nasc.month, nasc.day))
+    except (TypeError, ValueError):
+        pass
+    peso = (aval or {}).get("peso") or p.get("peso")
+    itens = [
+        {"campo": "Idade", "valor": f"{idade} anos" if idade is not None else None, "origem": "Ficha"},
+        {"campo": "Sexo", "valor": {"M": "Masculino", "F": "Feminino"}.get(p.get("sexo"), p.get("sexo")), "origem": "Ficha"},
+        {"campo": "Peso", "valor": f"{peso} kg" if peso else None, "origem": "Antropometria" if (aval or {}).get("peso") else "Ficha"},
+        {"campo": "Altura", "valor": f"{(aval or {}).get('altura') or p.get('altura')} cm" if ((aval or {}).get("altura") or p.get("altura")) else None, "origem": "Ficha"},
+        {"campo": "% de gordura", "valor": f"{comp.get('pct_gordura')} %" if comp.get("pct_gordura") is not None else None, "origem": "Antropometria"},
+        {"campo": "Objetivo", "valor": p.get("objetivo"), "origem": "Ficha"},
+        {"campo": "Diagnósticos", "valor": do_form(r"doen|diagn|patolog|condi"), "origem": "Formulário"},
+        {"campo": "Medicamentos", "valor": do_form(r"medica|rem[eé]dio"), "origem": "Formulário"},
+        {"campo": "Rotina", "valor": do_form(r"rotina|treino|acorda|dorme"), "origem": "Formulário"},
+        {"campo": "Preferências", "valor": do_form(r"gosta|prefer|fruta"), "origem": "Formulário"},
+        {"campo": "Alergias e intolerâncias", "valor": do_form(r"alerg|intoler"), "origem": "Formulário"},
+        {"campo": "Exames", "valor": (f"análise do Dr. House de {str(house['created_at'])[8:10]}/{str(house['created_at'])[5:7]}" if house
+                                      else (f"coleta de {str(lote.get('data_coleta'))[:10]}" if lote else None)), "origem": "Exames (Dr. House)"},
+    ]
+    kcal = _coerce_float((p.get("meta_energetica") or {}).get("kcal_final"))
+    return {"itens": itens, "kcal_meta": kcal, "formulario_respondido": bool(leg)}
+
+
+@api.get("/patients/{pid}/donato/plans/{generation_id}/plano")
+async def donato_plano_previa(pid: str, generation_id: str, user=Depends(require_nutritionist)):
+    """O rascunho no formato do editor da Prescrição (nada é salvo)."""
+    g = await db.donato_plan_generations.find_one({"id": generation_id, "paciente_id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not g:
+        raise HTTPException(404, "Rascunho DONATO nao encontrado")
+    plano = await _enrich_plano({"id": None, "paciente_id": pid, "nutricionista_id": user["id"], **_donato_to_manual_payload(g.get("draft") or {})})
+    return {"plano": plano, "validacao": (g.get("draft") or {}).get("validacao") or {}, "generation": {k: v for k, v in g.items() if k != "draft"},
+            "resumo": (g.get("draft") or {}).get("resumo_nutricional"), "justificativa": ((g.get("draft") or {}).get("justificativa_tecnica") or {}).get("texto")}
+
+
+@api.post("/patients/{pid}/donato/plans/{generation_id}/refeicoes/{idx}/regenerar")
+async def donato_regenerar_refeicao(pid: str, generation_id: str, idx: int, payload: DonatoRegerarIn, user=Depends(require_nutritionist)):
+    """Refaz só uma refeição, mantendo a meta dela; o resto do rascunho fica igual."""
+    p = await db.patients.find_one({"id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    g = await db.donato_plan_generations.find_one({"id": generation_id, "paciente_id": pid, "nutricionista_id": user["id"]}, {"_id": 0})
+    if not p or not g:
+        raise HTTPException(404, "Rascunho DONATO nao encontrado")
+    draft = g.get("draft") or {}
+    refeicoes = draft.get("refeicoes") or []
+    if not (0 <= idx < len(refeicoes)):
+        raise HTTPException(400, "Refeição inválida")
+    if not GEMINI_KEY:
+        raise HTTPException(503, "Nenhum provedor de IA configurado")
+    alvo = refeicoes[idx]
+    meta = _coerce_float((alvo.get("resumo_refeicao") or {}).get("energia_kcal"))
+    if payload.refeicoes and idx < len(payload.refeicoes) and payload.kcal_meta and payload.refeicoes[idx].get("pct"):
+        meta = round(payload.kcal_meta * float(payload.refeicoes[idx]["pct"]) / 100)
+    entrada = DonatoDraftIn(numero_refeicoes=len(refeicoes), kcal_meta=payload.kcal_meta or _coerce_float((draft.get("resumo_nutricional") or {}).get("valor_energetico_total_kcal")),
+                            refeicoes=payload.refeicoes)
+    knowledge = await donato_gemini.load_knowledge(db)
+    catalog = await donato_gemini.build_food_catalog(db)
+    scaffold = await _build_donato_draft(p, entrada)
+    context = await _donato_clinical_context(p, entrada, scaffold)
+    agente = await db.agents.find_one({"code": "donato"}, {"_id": 0, "base_prompt": 1, "prompt_customized": 1}) or {}
+    system_prompt, user_prompt = donato_gemini.build_prompt(context, knowledge, catalog, prompt_mestre=agente.get("base_prompt") if agente.get("prompt_customized") else None)
+    outras = [{"nome": r.get("nome"), "alimentos": [a.get("nome") for a in r.get("alimentos") or []]} for j, r in enumerate(refeicoes) if j != idx]
+    pedido = (user_prompt + "\n\nTAREFA DESTA CHAMADA: refaça SOMENTE a refeição "
+              f"\"{alvo.get('nome')}\" (horário {alvo.get('horario') or 'o mesmo'}), com meta de {round(meta or 0)} kcal, trocando os alimentos "
+              "principais por outras opções do cardápio. Não repita os alimentos principais das outras refeições: "
+              + json.dumps(outras, ensure_ascii=False)
+              + "\nResponda APENAS com o JSON de UMA refeição, no mesmo formato de um item de \"refeicoes\" do contrato.")
+    raw = await _gemini_chat([{"role": "user", "content": pedido}], system_prompt, GEMINI_KEY, max_tokens=8192, temperature=0.6,
+                             timeout=180.0, thinking_budget=2048, response_mime_type="application/json")
+    nova = donato_gemini.parse_json(raw)
+    if isinstance(nova, dict) and "refeicoes" in nova and nova["refeicoes"]:
+        nova = nova["refeicoes"][0]
+    nova["nome"] = alvo.get("nome") or nova.get("nome")
+    nova["horario"] = alvo.get("horario") or nova.get("horario")
+    refeicoes[idx] = nova
+    draft["refeicoes"] = refeicoes
+    draft = await _donato_recalculate_evonut(draft)
+    await db.donato_plan_generations.update_one({"id": generation_id}, {"$set": {"draft": draft, "updated_at": iso(now_utc())},
+                                                                         "$inc": {"regeneracoes": 1}})
+    return await donato_plano_previa(pid, generation_id, user)
+
 
 @api.post("/patients/{pid}/donato/plans/{generation_id}/reject")
 async def reject_donato_plan(pid: str, generation_id: str, user=Depends(require_nutritionist)):
@@ -4335,6 +4612,7 @@ async def nudge_scheduler_loop():
                 )
         except Exception:
             logging.exception("nudge_scheduler_loop error")
+        await followups_se_for_hora()
         await asyncio.sleep(60)
 
 # ================================================================
@@ -7958,6 +8236,11 @@ async def startup():
     await db.patients.create_index("lead_token")
     await db.patients.create_index("nutricionista_id")
     await db.patients.create_index("user_id")
+    # leads antigos do atendimento do site entram como lead normal (aparecem na aba Leads)
+    await db.patients.update_many({"status_funil": "LEAD_ATENDIMENTO"}, {"$set": {"status_funil": "LEAD_INICIADO", "origem": "site"}})
+    await db.whatsapp_mensagens.create_index([("patient_id", 1), ("created_at", -1)])
+    await db.whatsapp_mensagens.create_index("wa_id", sparse=True)
+    await db.reservas.create_index([("nutricionista_id", 1), ("data_hora", 1)])
     await db.pagamentos.create_index([("nutricionista_id", 1), ("data_pagamento", -1)])
     await db.pagamentos.create_index("paciente_id")
     await db.consultations.create_index("nutricionista_id")
