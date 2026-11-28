@@ -135,6 +135,40 @@
     .rc-btn, .rc-btn-ghost { min-height: 44px; min-width: 44px; }
   }
 
+  /* ── Tabela que vira cartões no celular: <table class="tabela-responsiva"> e <td data-rot="Coluna"> ── */
+  @media (max-width: 767.98px) {
+    .tabela-responsiva { min-width: 0 !important; width: 100%; }
+    .tabela-responsiva thead { display: none; }
+    .tabela-responsiva tbody, .tabela-responsiva tr { display: block; }
+    .tabela-responsiva tr { padding: 0.75rem 1rem; border-top: 1px solid #1A1F26; }
+    .tabela-responsiva td { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.2rem 0 !important; text-align: left !important; min-height: 1.75rem; }
+    .tabela-responsiva td[data-rot]::before { content: attr(data-rot); color: #7A838F; font-size: 12px; font-weight: 400; flex-shrink: 0; }
+    .tabela-responsiva td:first-child { font-size: 14px; }
+    .tabela-responsiva td > div { flex-wrap: wrap; }
+  }
+
+  /* ── Editor de refeições (Prescrição e Recordatório) ── */
+  .ed-linha {
+    display: grid; align-items: center; column-gap: 0.5rem; row-gap: 0.15rem;
+    grid-template-columns: 40px repeat(4, minmax(0, 1fr)) auto;
+    grid-template-areas: "g n n n n a" ". q q q q q" ". k c p l l";
+  }
+  .ed-linha > :nth-child(1) { grid-area: g; } .ed-linha > :nth-child(2) { grid-area: n; min-width: 0; }
+  .ed-linha > :nth-child(3) { grid-area: q; } .ed-linha > :nth-child(4) { grid-area: k; }
+  .ed-linha > :nth-child(5) { grid-area: c; } .ed-linha > :nth-child(6) { grid-area: p; }
+  .ed-linha > :nth-child(7) { grid-area: l; } .ed-linha > :nth-child(8) { grid-area: a; }
+  @media (max-width: 1023.98px) {
+    .ed-linha { padding-top: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid #1A1F26; }
+    .ed-linha > :nth-child(n+4):nth-child(-n+7) { text-align: left; font-size: 12px; white-space: nowrap; }
+    .ed-linha > :nth-child(4):not(:empty)::after { content: " kcal"; color: #7A838F; font-weight: 400; }
+    .ed-linha > :nth-child(5):not(:empty)::before { content: "CHO "; color: #7A838F; font-weight: 400; }
+    .ed-linha > :nth-child(6):not(:empty)::before { content: "PTN "; color: #7A838F; font-weight: 400; }
+    .ed-linha > :nth-child(7):not(:empty)::before { content: "LIP "; color: #7A838F; font-weight: 400; }
+  }
+  @media (min-width: 1024px) {
+    .ed-linha { column-gap: 0.5rem; grid-template-columns: 40px minmax(180px, 1fr) minmax(220px, 270px) 54px 50px 50px 50px 128px; grid-template-areas: "g n q k c p l a"; }
+  }
+
   /* corte diagonal do R (canto inferior direito) */
   .rc-corte { clip-path: polygon(0 0, 100% 0, 100% calc(100% - var(--rc-corte)), calc(100% - var(--rc-corte)) 100%, 0 100%); }
 

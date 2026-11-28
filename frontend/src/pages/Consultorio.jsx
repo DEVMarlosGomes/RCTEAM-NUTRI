@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   FlaskConical,
   FileCheck2,
+  ArrowLeft,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -100,8 +101,8 @@ export default function Consultorio() {
           description={<>Apoio do <strong className="text-gray-100 font-medium">Agente 2</strong> durante a consulta. Selecione o paciente para começar.</>}
         />
 
-        <div className="grid lg:grid-cols-[320px_1fr] gap-6">
-          <aside className="rc-card p-3 flex flex-col" style={{ maxHeight: "calc(100vh - 200px)" }} data-testid="consultorio-patient-list">
+        <div className="grid lg:grid-cols-[320px_minmax(0,1fr)] gap-6">
+          <aside className={`rc-card p-3 flex-col ${selectedId ? "hidden lg:flex" : "flex"}`} style={{ maxHeight: "calc(100vh - 200px)" }} data-testid="consultorio-patient-list">
             <input
               data-testid="consultorio-search"
               className="rc-input mb-3"
@@ -137,7 +138,7 @@ export default function Consultorio() {
             </div>
           </aside>
 
-          <section className="rc-card flex flex-col" style={{ minHeight: "calc(100vh - 200px)" }} data-testid="consultorio-chat">
+          <section className={`rc-card flex-col ${selectedId ? "flex" : "hidden lg:flex"}`} style={{ minHeight: "calc(100vh - 200px)" }} data-testid="consultorio-chat">
             {!selectedId ? (
               <div className="flex-1 flex flex-col items-center justify-center text-gray-500 p-10">
                 <MessageCircle className="w-10 h-10 mb-3 opacity-40" />
@@ -146,9 +147,12 @@ export default function Consultorio() {
             ) : (
               <>
                 <header className="px-5 py-3 border-b border-white/5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setSelectedId("")} className="rc-btn-ghost -ml-2 p-2 lg:hidden" aria-label="Voltar à lista de pacientes"><ArrowLeft className="h-5 w-5" /></button>
+                    <div>
                     <div className="text-xs uppercase tracking-widest text-gray-500 font-bold">Paciente em atendimento</div>
                     <div className="font-bold text-base mt-0.5">{selected?.nome}</div>
+                    </div>
                   </div>
                   <div className="flex flex-col items-start gap-2 sm:items-end">
                     <div className="text-[10px] uppercase tracking-widest text-cyan-300 font-bold">Agente 2 - Consultorio</div>

@@ -88,12 +88,11 @@ export default function Dashboard() {
             ) : (
               <ol className="relative space-y-2 border-l border-white/[0.08] pl-5">
                 {dados.hoje.map((c) => (
-                  <li key={c.id || `${c.hora}-${c.paciente_id}`} className="relative flex flex-wrap items-center gap-3">
-                    <span className="absolute -left-[25px] h-2.5 w-2.5 rounded-full bg-rc-blue" />
-                    <span className="rc-num w-14 text-[17px] text-white tabular">{c.hora}</span>
-                    <span className="min-w-0 flex-1"><span className="font-semibold text-white">{c.nome || "Paciente"}</span> <span className="text-[12.5px] text-gray-500">{c.tipo || ""}</span></span>
-                    <span className="text-[12px] text-gray-400">{c.status}</span>
-                    {c.paciente_id && <Link to={`/pacientes/${c.paciente_id}`} className="rc-btn-ghost h-8 text-[12.5px]">Abrir ficha <ChevronRight className="h-3.5 w-3.5" /></Link>}
+                  <li key={c.id || `${c.hora}-${c.paciente_id}`} className="relative grid grid-cols-[3.75rem_minmax(0,1fr)_auto] items-center gap-x-3">
+                    <span className="absolute -left-[25px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-rc-blue" />
+                    <span className="rc-num text-[16px] text-white tabular">{c.hora}</span>
+                    <span className="min-w-0"><span className="block truncate font-semibold text-white">{c.nome || "Paciente"}</span><span className="block text-[12px] text-gray-500">{[c.tipo, c.status && c.status.toLowerCase()].filter(Boolean).join(" · ")}</span></span>
+                    {c.paciente_id && <Link to={`/pacientes/${c.paciente_id}`} className="rc-btn-ghost h-8 px-2 text-[12.5px]" aria-label={`Abrir ficha de ${c.nome || "paciente"}`}><span className="hidden sm:inline">Abrir ficha</span> <ChevronRight className="h-4 w-4" /></Link>}
                   </li>
                 ))}
               </ol>

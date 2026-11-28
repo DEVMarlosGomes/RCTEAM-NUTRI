@@ -166,8 +166,8 @@ export default function PatientArea() {
 
         {tab === "diet" && (
           <div data-testid="patient-diet-panel" className="animate-fade-up">
-            <div className="mb-4 flex justify-end">
-              <button type="button" onClick={() => baixarPlano("evolucao")} disabled={baixandoPlano} className="rc-btn-secondary h-11 mr-2" data-testid="baixar-evolucao-pdf">
+            <div className="mb-4 grid grid-cols-1 gap-2 sm:flex sm:justify-end">
+              <button type="button" onClick={() => baixarPlano("evolucao")} disabled={baixandoPlano} className="rc-btn-secondary h-11" data-testid="baixar-evolucao-pdf">
                 <Download className="w-4 h-4" /> Baixar minha evolução
               </button>
               <button type="button" onClick={() => baixarPlano("plano")} disabled={baixandoPlano} className="rc-btn-primary h-11" data-testid="baixar-plano-pdf">

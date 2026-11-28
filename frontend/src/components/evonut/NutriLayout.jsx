@@ -145,13 +145,13 @@ export default function NutriLayout({ children, compacto = false }) {
         Pular para o conteúdo
       </a>
 
-      <aside className={`${compacto ? "w-[64px]" : "w-[248px]"} hidden md:block shrink-0 sticky top-0 h-[100dvh] bg-rc-black/40 border-r border-white/[0.05] transition-[width] duration-200`} data-testid="menu-lateral">
+      <aside className={`${compacto ? "w-[64px]" : "w-[248px]"} hidden lg:block shrink-0 sticky top-0 h-[100dvh] bg-rc-black/40 border-r border-white/[0.05] transition-[width] duration-200`} data-testid="menu-lateral">
         <SidebarContent user={user} onLogout={handleLogout} compacto={compacto} />
       </aside>
 
       {/* Drawer mobile */}
       <div
-        className={`md:hidden fixed inset-0 z-50 transition-opacity duration-200 ${drawerOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        className={`lg:hidden fixed inset-0 z-50 transition-opacity duration-200 ${drawerOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
         aria-hidden={!drawerOpen}
         inert={!drawerOpen}
       >
@@ -167,7 +167,7 @@ export default function NutriLayout({ children, compacto = false }) {
       </div>
 
       <main id="conteudo" className="flex-1 min-w-0">
-        <div className="md:hidden flex items-center justify-between h-14 px-4 border-b border-white/[0.05] bg-rc-ink/80 backdrop-blur-xl sticky top-0 z-30">
+        <div className="lg:hidden flex items-center justify-between h-14 px-4 border-b border-white/[0.05] bg-rc-ink/80 backdrop-blur-xl sticky top-0 z-30">
           <button
             onClick={() => setDrawerOpen(true)}
             className="rc-btn-ghost p-2 -ml-2"

@@ -66,11 +66,11 @@ export default function CicloCarbo({ d, peso, meta, reload, onIrPrescricao }) {
     <section className="rc-card p-5" data-testid="ciclo-carbo">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h3 className="rc-h3"><CalendarRange className="-mt-0.5 mr-1.5 inline h-4 w-4 text-rc-blue" />Ciclo de carboidratos</h3>
-        <div role="radiogroup" aria-label="Tipo de ciclo" className="ml-auto inline-flex bg-white/[0.04] p-0.5 ring-1 ring-white/[0.06]">
+        <div role="radiogroup" aria-label="Tipo de ciclo" className="grid w-full grid-cols-3 bg-white/[0.04] p-0.5 ring-1 ring-white/[0.06] sm:ml-auto sm:inline-flex sm:w-auto">
           {[["nenhum", "Sem ciclo"], ["nivel", "Alto · médio · baixo"], ["haluch", "Haluch (4 fases)"]].map(([k, l]) => (
             <button key={k} type="button" role="radio" aria-checked={tipoAtual === k} data-testid={`ciclo-${k}`}
               onClick={() => setCiclo(k === "nenhum" ? null : k === "nivel" ? cicloNivelPadrao() : cicloHaluchPadrao())}
-              className={`h-8 px-3 text-[12.5px] font-semibold ${tipoAtual === k ? "bg-rc-blue text-black" : "text-gray-400 hover:text-white"}`}>{l}</button>
+              className={`min-h-9 px-2 py-1.5 text-[12.5px] font-semibold leading-tight sm:px-3 ${tipoAtual === k ? "bg-rc-blue text-black" : "text-gray-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
       </div>

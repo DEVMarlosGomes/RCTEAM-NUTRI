@@ -208,9 +208,9 @@ export default function Pacientes() {
       <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
         <div><div className="rc-eyebrow">CRM clínico</div><h1 className="evo-h2 mt-1">Pacientes</h1>
           <p className="text-sm text-gray-400 mt-1">{loading ? "…" : `${contar("todos")} pacientes · ${contar("lead")} leads`}</p></div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-            <input placeholder="Buscar por nome ou telefone" value={q} onChange={(e) => setQ(e.target.value)} className="evo-input pl-10 w-64" data-testid="busca-pacientes" /></div>
+        <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
+          <div className="relative w-full sm:w-auto"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+            <input placeholder="Buscar por nome ou telefone" value={q} onChange={(e) => setQ(e.target.value)} className="evo-input pl-10 w-full sm:w-64" data-testid="busca-pacientes" /></div>
           <select className="evo-input w-auto" value={ordem} onChange={(e) => setOrdem(e.target.value)} aria-label="Ordenar">
             <option value="proxima">Próxima consulta</option><option value="vencimento">Vencimento do plano</option><option value="nome">Nome</option>
           </select>
@@ -225,7 +225,47 @@ export default function Pacientes() {
           </button>
         ))}
       </div>
-      <div className="evo-card overflow-hidden">
+      {/* celular e tablet: cartões; a tabela fica a partir de 1024 px */}
+      <ul className="space-y-2 lg:hidden" data-testid="cartoes-pacientes">
+        {loading && [0, 1, 2].map((i) => <li key={i} className="evo-card h-24 animate-pulse-soft" />)}
+        {!loading && filtered.length === 0 && <li className="evo-card px-4 py-10 text-center text-sm text-gray-500">Nenhum paciente nesta etapa.</li>}
+        {!loading && filtered.map((p) => {
+          const [plano, corPlano] = textoPlano(p.plano);
+          const link = zap(p.telefone);
+          return (
+            <li key={p.id} className="evo-card">
+              <button type="button" onClick={() => navigate(`/pacientes/${p.id}`)} className="block w-full px-4 pt-3 text-left">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-white break-words">{p.nome}</div>
+                    <div className="text-xs text-gray-500">{[p.objetivo, foneBR(p.telefone)].filter(Boolean).join(" · ") || "—"}</div>
+                  </div>
+                  <span className="shrink-0 text-[12px] text-gray-300">{etapa === "lead" ? (ORIGENS[p.origem] || "lead") : ROTULO_ETAPA[etapaDe(p)]}</span>
+                </div>
+                {etapa === "lead" ? (
+                  <div className="mt-2 text-[12.5px] text-gray-400">{p.status_funil === "PROPOSTA_ACEITA" ? "proposta aceita" : p.formulario?.enviado_em ? "formulário enviado" : "novo contato"} · desde {dataBR(p.created_at)}</div>
+                ) : (
+                  <dl className="mt-2 grid grid-cols-3 gap-2 text-[12px]">
+                    <div><dt className="text-gray-500">Última</dt><dd className="tabular text-gray-200">{dataBR(p.ultima_consulta)}</dd></div>
+                    <div><dt className="text-gray-500">Próxima</dt><dd className="tabular text-gray-200">{p.proxima_consulta ? `${dataBR(p.proxima_consulta).slice(0, 5)} ${String(p.proxima_consulta).slice(11, 16)}` : "—"}</dd></div>
+                    <div><dt className="text-gray-500">Plano</dt><dd className={corPlano}>{plano}</dd></div>
+                  </dl>
+                )}
+              </button>
+              <div className="mt-2 flex flex-wrap gap-1 border-t border-white/[0.05] px-2 py-1.5">
+                {link && <a href={link} target="_blank" rel="noopener noreferrer" className="evo-btn-ghost text-[12.5px]"><MessageCircle className="h-4 w-4" /> WhatsApp</a>}
+                <button type="button" onClick={() => enviarFormulario(p)} className="evo-btn-ghost text-[12.5px]"><Send className="h-4 w-4" /> Formulário</button>
+                {etapa === "lead"
+                  ? <button type="button" onClick={() => perdido(p)} className="evo-btn-ghost text-[12.5px] text-evo-coral">Perdido</button>
+                  : <Link to="/agenda" className="evo-btn-ghost text-[12.5px]"><CalendarPlus className="h-4 w-4" /> Agendar</Link>}
+                <button type="button" onClick={() => setModal(p)} className="evo-btn-ghost ml-auto p-2" aria-label="Editar"><Pencil className="h-4 w-4" /></button>
+                <button type="button" onClick={() => remove(p)} className="evo-btn-ghost p-2 text-evo-coral" aria-label="Excluir"><Trash2 className="h-4 w-4" /></button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="evo-card hidden overflow-hidden lg:block">
         <table className="w-full table-fixed text-left" data-testid="tabela-pacientes">
           <thead className="bg-evo-surface text-[11px] uppercase tracking-wider text-gray-400">
             {etapa === "lead" ? (

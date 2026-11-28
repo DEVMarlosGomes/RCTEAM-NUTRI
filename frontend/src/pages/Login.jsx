@@ -134,11 +134,6 @@ export default function Login() {
               </a>
             </div>
 
-            {mode === "login" && (
-              <div className="mt-6 rc-well px-3.5 py-3 text-[12.5px] text-gray-400">
-                <span className="text-gray-200 font-medium">Demo</span> · admin@rogeriocosta.com.br / rogerio2025
-              </div>
-            )}
           </div>
         </div>
       </section>

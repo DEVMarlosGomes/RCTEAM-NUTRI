@@ -26,8 +26,10 @@ import {
  * favoritos/recentes na busca, teclado (alimento → Enter → quantidade → Enter = nova linha), arrastar alimentos
  * entre refeições, duplicar refeição. Cores: CHO lima, PTN azul, LIP laranja.
  */
-const COLS = "grid grid-cols-[40px_minmax(180px,1fr)_minmax(220px,270px)_54px_50px_50px_50px_128px] gap-2 items-center";
-export const LARGURA_EDITOR = "min-w-[880px]";
+// linha do editor: tabela de 8 colunas a partir de 1024 px; abaixo disso cada alimento ocupa 2–3 linhas
+// (nome e ações · quantidade · kcal/CHO/PTN/LIP com rótulo). Layout em index.css (.ed-linha).
+const COLS = "ed-linha";
+export const LARGURA_EDITOR = "lg:min-w-[880px]";
 const r1 = (v) => Math.round(num(v) * 10) / 10;
 const COR = { cho: "text-macro-cho", ptn: "text-macro-ptn", lip: "text-macro-lip" };
 const RECENTES_KEY = "rc_alimentos_recentes";
@@ -558,7 +560,7 @@ function LinhaAlimento({ bk, i, item, ultima, config, favoritos, onFavoritar, on
 
 function CabecalhoColunas() {
   return (
-    <div className={`${COLS} px-2 pt-1 pb-1 text-[10.5px] uppercase tracking-[0.1em] text-gray-500`}>
+    <div className={`${COLS} hidden lg:grid px-2 pt-1 pb-1 text-[10.5px] uppercase tracking-[0.1em] text-gray-500`}>
       <span />
       <span>Alimento</span>
       <span>Quantidade</span>

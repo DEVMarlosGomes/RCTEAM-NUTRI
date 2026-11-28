@@ -86,17 +86,17 @@ export function Formularios() {
           </button>
         ))}
       </div>
-      <section className="rc-card overflow-x-auto" data-testid="central-formularios">
+      <section className="rc-card overflow-x-auto md:overflow-x-auto" data-testid="central-formularios">
         {lista === null ? <div className="p-6"><Loader2 className="h-4 w-4 animate-spin text-gray-400" /></div> : (
-          <table className="w-full min-w-[720px] text-[13.5px]">
+          <table className="tabela-responsiva w-full min-w-[720px] text-[13.5px]">
             <thead><tr className="text-[10.5px] uppercase tracking-[0.12em] text-gray-500"><th className="px-5 py-3 text-left font-medium">Paciente</th><th className="text-left font-medium">Formulário</th><th className="text-left font-medium">Situação</th><th className="text-left font-medium">Data</th><th className="px-5 text-right font-medium">Ações</th></tr></thead>
             <tbody>
               {vis.map((x) => (
                 <tr key={x.paciente_id} className="border-t border-white/[0.05]">
                   <td className="px-5 py-3"><Link to={`/pacientes/${x.paciente_id}`} className="font-semibold text-white hover:underline">{x.nome}</Link></td>
-                  <td className="text-gray-300">{x.tipo === "retorno" ? "Retorno" : "Pré-consulta"}</td>
-                  <td>{x.estado === "respondido" ? <span className="text-[#3DDC84]">respondido</span> : <span className="text-rc-amber">aguardando</span>}</td>
-                  <td className="tabular text-gray-400">{dataHora(x.estado === "respondido" ? x.respondido_em : x.enviado_em)}</td>
+                  <td data-rot="Formulário" className="text-gray-300">{x.tipo === "retorno" ? "Retorno" : "Pré-consulta"}</td>
+                  <td data-rot="Situação">{x.estado === "respondido" ? <span className="text-[#3DDC84]">respondido</span> : <span className="text-rc-amber">aguardando</span>}</td>
+                  <td data-rot="Data" className="tabular text-gray-400">{dataHora(x.estado === "respondido" ? x.respondido_em : x.enviado_em)}</td>
                   <td className="px-5">
                     <div className="flex justify-end gap-1">
                       {x.lead_token && <button type="button" className="rc-btn-ghost p-2" title="Copiar link" aria-label={`Copiar link de ${x.nome}`}

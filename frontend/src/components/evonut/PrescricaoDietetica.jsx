@@ -357,7 +357,7 @@ export default function PrescricaoDietetica({ d, onAbrirAnamnese }) {
               <span className="rc-label">Título</span>
               <Combobox id="dieta-titulo" value={draft.titulo} onChange={(v) => set("titulo", v)} opcoes={config.titulos} placeholder="Título da dieta" inputClassName="rc-input h-10 font-medium" onEnter={() => document.getElementById("r0-nome")?.focus()} />
             </label>
-            <div className="flex items-center gap-0.5">
+            <div className="flex w-full flex-wrap items-center gap-0.5 sm:w-auto">
               <AcaoTopo titulo="Modelos de dieta por categoria (um clique aplica)" rotulo="Modelos" onClick={() => setModelosDieta(true)}><LibraryBig className="w-5 h-5" /></AcaoTopo>
               <AcaoTopo titulo="Importar dieta (modelos, recordatório, outros pacientes)" rotulo="Importar" onClick={() => setImportar(true)}><FolderInput className="w-5 h-5" /></AcaoTopo>
               <AcaoTopo titulo="Nova dieta em branco" rotulo="Nova" onClick={novaDieta}><FilePlus2 className="w-5 h-5" /></AcaoTopo>

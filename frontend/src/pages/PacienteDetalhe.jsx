@@ -80,7 +80,7 @@ export default function PacienteDetalhe() {
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-display font-black uppercase text-[24px] leading-none text-white break-words" style={{ fontStretch: "82%" }}>{p.nome}</h1>
+              <h1 className="font-display uppercase text-[17px] sm:text-[21px] leading-tight text-white break-words line-clamp-2">{p.nome}</h1>
               <StatusBadge status={p.status_funil} />
             </div>
             <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[12.5px] text-gray-400 mt-1.5">
@@ -89,7 +89,7 @@ export default function PacienteDetalhe() {
               <span className="tabular">{[idade != null && `${idade} anos`, pesoAtual && `${String(pesoAtual).replace(".", ",")} kg`, alturaAtual && `${alturaAtual} cm`, imc && `IMC ${String(Math.round(imc * 10) / 10).replace(".", ",")}`].filter(Boolean).join(" · ")}</span>
             </div>
           </div>
-          <div className="min-w-0" data-testid="objetivo-destaque">
+          <div className="min-w-0 basis-full sm:basis-auto" data-testid="objetivo-destaque">
             <div className="text-[10.5px] uppercase tracking-[0.14em] text-gray-500">Objetivo</div>
             {p.objetivo ? (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -103,7 +103,7 @@ export default function PacienteDetalhe() {
         <ResumoFicha d={d} onPrescricao={() => setTab("plano")} reload={reload} />
       </header>
 
-      <nav className={`sticky top-14 md:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 ${tab === "plano" || tab === "recordatorio" ? "" : "lg:-mx-10 lg:px-10"} mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]`} aria-label="Seções do paciente">
+      <nav className={`sticky top-14 lg:top-0 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 ${tab === "plano" || tab === "recordatorio" ? "" : "lg:-mx-10 lg:px-10"} mb-6 bg-rc-ink/85 backdrop-blur-xl border-b border-white/[0.06]`} aria-label="Seções do paciente">
         <div role="tablist" className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {TABS.map((t, n) => (
             <button key={t.k} role="tab" aria-selected={tab === t.k} data-testid={`tab-${t.k}`} onClick={() => setTab(t.k)}
@@ -166,12 +166,12 @@ function ResumoFicha({ d, onPrescricao, reload }) {
     <div className="min-w-0"><div className="text-[10.5px] uppercase tracking-[0.14em] text-gray-500">{rot}</div><div className={`mt-0.5 text-[13.5px] font-medium tabular ${cls}`}>{val}</div></div>
   );
   return (
-    <div className="mt-3 flex flex-wrap items-end gap-x-6 gap-y-3 border-t border-white/[0.05] pt-3" data-testid="resumo-ficha">
+    <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-white/[0.05] pt-3 sm:flex sm:flex-wrap sm:items-end sm:gap-x-6" data-testid="resumo-ficha">
       {item("Última consulta", fmtData(ultima))}
       {item("Próxima consulta", fmtData(proxima))}
       {item("Plano", plano[0], plano[1])}
-      {item("Desde a 1ª avaliação", avs.length >= 2 ? `peso ${sinal(dPeso, "kg")} · massa magra ${sinal(dMM, "kg")}` : "—")}
-      <div className="ml-auto flex flex-wrap gap-1.5">
+      <div className="col-span-2 sm:col-span-1 min-w-0">{item("Desde a 1ª avaliação", avs.length >= 2 ? `peso ${sinal(dPeso, "kg")} · massa magra ${sinal(dMM, "kg")}` : "—")}</div>
+      <div className="col-span-2 flex flex-wrap gap-1.5 sm:col-span-1 sm:ml-auto">
         {zap && <a href={zap} target="_blank" rel="noopener noreferrer" className="rc-btn-ghost h-9 text-[12.5px]"><MessageCircle className="h-4 w-4" /> WhatsApp</a>}
         <Link to="/agenda" className="rc-btn-ghost h-9 text-[12.5px]"><CalendarPlus className="h-4 w-4" /> Agendar retorno</Link>
         <button type="button" onClick={enviarFormulario} className="rc-btn-ghost h-9 text-[12.5px]"><Send className="h-4 w-4" /> Enviar formulário</button>

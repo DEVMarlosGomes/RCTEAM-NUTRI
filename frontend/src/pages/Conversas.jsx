@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Bot, FlaskConical, Hand, Loader2, Send, UserRound } from "lucide-react";
+import { ArrowLeft, Bot, FlaskConical, Hand, Loader2, Send, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import PageHeader from "@/components/evonut/PageHeader";
@@ -75,8 +75,8 @@ export default function Conversas() {
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-        <aside className="rc-card overflow-hidden" aria-label="Conversas">
+      <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className={`rc-card overflow-hidden ${aberta ? "hidden lg:block" : ""}`} aria-label="Conversas">
           {lista === null && <div className="p-5 text-sm text-gray-500"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Carregando…</div>}
           {lista?.length === 0 && <div className="p-5 text-sm text-gray-500">Nenhuma conversa ainda.</div>}
           <ul className="max-h-[560px] divide-y divide-white/[0.05] overflow-y-auto">
@@ -110,12 +110,13 @@ export default function Conversas() {
           </div>
         </aside>
 
-        <section className="rc-card flex min-h-[560px] flex-col" aria-label="Conversa">
+        <section className={`rc-card min-h-[480px] flex-col lg:min-h-[560px] ${aberta ? "flex" : "hidden lg:flex"}`} aria-label="Conversa">
           {!conversa && <div className="m-auto p-8 text-sm text-gray-500">Escolha uma conversa.</div>}
           {conversa && (
             <>
               <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-3">
-                <div>
+                <button type="button" onClick={() => { abrir(null); setConversa(null); }} className="rc-btn-ghost -ml-2 p-2 lg:hidden" aria-label="Voltar às conversas"><ArrowLeft className="h-5 w-5" /></button>
+                <div className="min-w-0 flex-1">
                   <Link to={`/pacientes/${conversa.contato.id}`} className="font-semibold text-white hover:underline">{conversa.contato.nome}</Link>
                   <div className="text-[12px] text-gray-400">{conversa.contato.telefone} · {ETAPA[conversa.contato.status_funil] || "paciente"}{conversa.contato.plano_interesse ? ` · interesse: ${conversa.contato.plano_interesse}` : ""}</div>
                 </div>

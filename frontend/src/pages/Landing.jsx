@@ -123,19 +123,19 @@ function Nav({ onStart }) {
           <RCLogo size={30} variant="blue" />
           <span className="rc-display text-[16px] text-white">Rogério Costa</span>
         </a>
-        <nav className="hidden md:flex items-center gap-1" aria-label="Seções">
+        <nav className="hidden lg:flex items-center gap-1" aria-label="Seções">
           {links.map(([h, l]) => <a key={h} href={h} className="rc-btn-ghost">{l}</a>)}
         </nav>
         <div className="flex items-center gap-2">
-          <Link to="/login-paciente" className="hidden sm:inline-flex rc-btn-ghost">Área do paciente</Link>
+          <Link to="/login-paciente" className="hidden lg:inline-flex rc-btn-ghost">Área do paciente</Link>
           <button onClick={onStart} className="hidden sm:inline-flex rc-btn-lime">Começar agora</button>
-          <button className="md:hidden rc-btn-ghost p-2 -mr-2" onClick={() => setOpen((v) => !v)} aria-label="Menu" aria-expanded={open}>
+          <button className="lg:hidden rc-btn-ghost p-2 -mr-2" onClick={() => setOpen((v) => !v)} aria-label="Menu" aria-expanded={open}>
             {open ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
       </div>
       {open && (
-        <nav className="md:hidden px-5 pb-5 pt-1 grid gap-1 animate-fade-in" aria-label="Seções">
+        <nav className="lg:hidden px-5 pb-5 pt-1 grid gap-1 animate-fade-in" aria-label="Seções">
           {links.map(([h, l]) => <a key={h} href={h} onClick={() => setOpen(false)} className="py-3 text-[17px] text-gray-100 border-b border-white/[0.05]">{l}</a>)}
           <Link to="/login-paciente" className="py-3 text-[17px] text-gray-400">Área do paciente</Link>
         </nav>

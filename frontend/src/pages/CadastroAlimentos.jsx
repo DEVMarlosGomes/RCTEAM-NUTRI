@@ -1,7 +1,7 @@
 import React, { useDeferredValue, useEffect, useState } from "react";
 import NutriLayout from "@/components/evonut/NutriLayout";
 import { api, formatApiError } from "@/lib/evo-api";
-import { Database, Download, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Database, Pencil, Plus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams } from "react-router-dom";
 import AlimentosIA from "@/components/evonut/AlimentosIA";
@@ -168,7 +168,7 @@ export default function CadastroAlimentos() {
                 Base do sistema: TABELA ENXUTA (262 alimentos escolhidos pelo Rogério), mais os alimentos que você cadastrar.
               </p>
             </div>
-            <div className="flex gap-2"><div className="rc-btn-secondary opacity-70 cursor-default" data-testid="download-cadastro-alimentos"><Download className="w-4 h-4" />Fonte: API</div><button onClick={() => setIa("")} className="rc-btn-primary" data-testid="cadastrar-ia"><Sparkles className="w-4 h-4" /> Cadastrar com IA</button><button onClick={() => setModal("new")} className="rc-btn-secondary"><Plus className="w-4 h-4" /> Novo alimento</button></div>
+            <div className="flex flex-wrap gap-2"><button onClick={() => setIa("")} className="rc-btn-primary" data-testid="cadastrar-ia"><Sparkles className="w-4 h-4" /> Cadastrar com IA</button><button onClick={() => setModal("new")} className="rc-btn-secondary"><Plus className="w-4 h-4" /> Novo alimento</button></div>
           </div>
         </section>
 
@@ -226,7 +226,7 @@ export default function CadastroAlimentos() {
           {!loading && error && <div className="px-6 py-10 text-sm text-red-400">{error}</div>}
           {!loading && !error && (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-left">
+              <table className="tabela-responsiva w-full min-w-[720px] text-left">
                 <thead>
                   <tr className="text-[11px] uppercase tracking-[0.24em] text-gray-400">
                     <th className="px-4 py-3 font-semibold">Alimento</th>
@@ -263,11 +263,11 @@ export default function CadastroAlimentos() {
                         </div>
                       </td>
                       {spotlightFields.map((field) => (
-                        <td key={field.key} className="px-4 py-3 text-sm text-gray-300">
+                        <td key={field.key} data-rot={field.label} className="px-4 py-3 text-sm text-gray-300">
                           {numBR(field.get(food))}
                         </td>
                       ))}
-                      <td className="px-4 py-3"><TipoLiquido food={food} /></td>
+                      <td data-rot="Tipo" className="px-4 py-3"><TipoLiquido food={food} /></td>
                       <td className="px-4 py-3"><div className="flex justify-end gap-1">{food.fonte === "CUSTOM" ? <><button onClick={() => setModal(food)} className="rc-btn-secondary p-2" title="Editar"><Pencil className="w-4 h-4" /></button><button onClick={() => remove(food)} className="rc-btn-secondary p-2 text-red-400" title="Excluir"><Trash2 className="w-4 h-4" /></button></> : <span className="text-[10px] uppercase text-gray-600">Base protegida</span>}</div></td>
                     </tr>
                     {medidasAbertas[food.id] && (

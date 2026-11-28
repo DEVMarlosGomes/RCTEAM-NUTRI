@@ -177,15 +177,15 @@ function DataTable({ kind, rows, loading, onNew, onEdit, onDelete }) {
       </div>
       {loading ? <div className="p-8 text-sm text-gray-400">Carregando...</div> : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[840px] text-left">
+          <table className="tabela-responsiva w-full min-w-[840px] text-left">
             <thead><tr className="text-[11px] uppercase tracking-[0.22em] text-gray-400"><th className="px-4 py-3">Nome</th><th className="px-4 py-3">Categoria</th><th className="px-4 py-3">Detalhe</th><th className="px-4 py-3 text-right">Acoes</th></tr></thead>
             <tbody>
               {rows.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-500">Nenhum item cadastrado.</td></tr>}
               {rows.map((row) => (
                 <tr key={row.id} className="border-t border-white/[0.05] odd:bg-white/[0.015]">
                   <td className="px-4 py-3"><div className="font-semibold text-white">{row.nome}</div><div className="text-xs text-gray-500">{row.marca || row.fonte || "CUSTOM"}</div></td>
-                  <td className="px-4 py-3 text-sm text-gray-300">{row.categoria || "-"}</td>
-                  <td className="px-4 py-3 text-sm text-gray-300">{kind === "suplementos" ? `${row.dose_padrao || "-"} ${row.unidade || ""}` : `${row.rendimento || "-"} ${row.unidade_rendimento || ""}`}</td>
+                  <td data-rot="Categoria" className="px-4 py-3 text-sm text-gray-300">{row.categoria || "-"}</td>
+                  <td data-rot="Detalhe" className="px-4 py-3 text-sm text-gray-300">{kind === "suplementos" ? `${row.dose_padrao || "-"} ${row.unidade || ""}` : `${row.rendimento || "-"} ${row.unidade_rendimento || ""}`}</td>
                   <td className="px-4 py-3"><div className="flex justify-end gap-2"><button onClick={() => onEdit(row)} className="rc-btn-secondary">Editar</button><button onClick={() => onDelete(row)} className="rc-btn-secondary text-red-400"><Trash2 className="w-4 h-4" /></button></div></td>
                 </tr>
               ))}

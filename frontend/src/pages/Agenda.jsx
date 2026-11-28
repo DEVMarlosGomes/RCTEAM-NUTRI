@@ -65,7 +65,20 @@ export default function Agenda() {
     <div className="space-y-4">
       {Object.keys(groups).length === 0 && <div className="evo-card p-12 text-center text-gray-500"><Sparkles className="w-6 h-6 mx-auto mb-3 text-gray-600" />Nenhuma consulta cadastrada.</div>}
       {Object.entries(groups).map(([date, list]) => <div key={date} className="evo-card p-5"><div className="flex items-center gap-2 mb-3"><CalendarDays className="w-4 h-4 text-evo-purple" /><span className="font-semibold">{new Date(`${date}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</span></div><div className="space-y-2">
-        {list.map((item) => <div key={item.id} className="flex items-center gap-4 p-3 rounded-lg bg-evo-bg border border-white/[0.04]"><div className="font-display text-lg font-semibold w-16 text-evo-teal">{item.data_hora?.split("T")[1]?.slice(0, 5)}</div><div className="flex-1"><Link to={`/pacientes/${item.paciente_id}`} className="font-semibold hover:text-evo-purple">{item.paciente_nome}</Link><div className="text-xs text-gray-400">{item.tipo}{item.observacoes ? ` · ${item.observacoes}` : ""}</div></div><div className="text-xs px-2 py-1 rounded-full bg-evo-amber/15 text-evo-amber font-semibold uppercase">{item.status}</div><button onClick={() => setModal(item)} className="evo-btn-ghost p-2" title="Editar"><Pencil className="w-4 h-4" /></button><button onClick={() => remove(item)} className="evo-btn-ghost p-2 text-evo-coral" title="Excluir"><Trash2 className="w-4 h-4" /></button></div>)}
+        {list.map((item) => (
+          <div key={item.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border border-[#1A1F26] bg-black p-3">
+            <div className="rc-num text-[17px] text-white tabular">{item.data_hora?.split("T")[1]?.slice(0, 5)}</div>
+            <div className="min-w-0">
+              <Link to={`/pacientes/${item.paciente_id}`} className="block truncate font-semibold text-white hover:text-rc-blueLight">{item.paciente_nome}</Link>
+              <div className="truncate text-xs text-gray-400">{item.tipo}{item.observacoes ? ` · ${item.observacoes}` : ""}</div>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <button onClick={() => setModal(item)} className="evo-btn-ghost p-2" title="Editar" aria-label={`Editar consulta de ${item.paciente_nome}`}><Pencil className="w-4 h-4" /></button>
+              <button onClick={() => remove(item)} className="evo-btn-ghost p-2 text-evo-coral" title="Excluir" aria-label={`Excluir consulta de ${item.paciente_nome}`}><Trash2 className="w-4 h-4" /></button>
+            </div>
+            <div className="col-start-2 justify-self-start bg-evo-amber/15 px-2 py-0.5 text-[11px] font-semibold uppercase text-evo-amber">{item.status}</div>
+          </div>
+        ))}
       </div></div>)}
     </div>
   </NutriLayout>;

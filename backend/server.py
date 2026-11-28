@@ -2494,9 +2494,12 @@ def categoria_app(doc: dict) -> str:
     if re.search(r"fruta|fruto", g) and not re.search(r"cereais", g):
         return "Frutas"
     if re.search(r"cereais, raizes|cereais, ra", g):
-        if re.search(r"^(banana|maca|mamao|manga|abacaxi|laranja|uva|pera|melancia|melao|morango|kiwi|goiaba|caqui|ameixa|abacate|acai|acerola|caju|coco|figo|jabuticaba|limao|maracuja|pessego|pitanga|tangerina|mexerica)", nome):
+        # o grupo da planilha mistura cereais, tubérculos, hortaliças e frutas: separa pelo nome
+        if re.search(r"^(banana|maca|mamao|manga|abacaxi|laranja|uva|pera|melancia|melao|morango|kiwi|goiaba|caqui|ameixa|abacate|acai|acerola|caju|coco|figo|jabuticaba|limao|maracuja|pessego|pitanga|tangerina|mexerica|amora|framboesa|mirtilo|cereja|carambola|graviola|lichia|nectarina|roma|tamara)", nome):
             return "Frutas"
-        return "Cereais, pães e tubérculos"
+        if re.search(r"^(arroz|aveia|batata|mandioca|aipim|macaxeira|inhame|cara|milho|trigo|farinha|farelo|pao|paes|macarr|massa|tapioca|cuscuz|quinoa|cevada|centeio|biscoito|bolacha|bolo|granola|polenta|fuba|amido|torrada|cereal|pipoca|nhoque|lasanha|panqueca|tortilha|wrap|beiju|polvilho|sagu|mingau)", nome):
+            return "Cereais, pães e tubérculos"
+        return "Hortaliças e vegetais"
     if re.search(r"vegeta|hortali|livre", g):
         return "Hortaliças e vegetais"
     if re.search(r"cereai|paes|pao|massa|tuberc|raiz", g):

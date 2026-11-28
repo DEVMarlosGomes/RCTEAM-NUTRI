@@ -58,17 +58,17 @@ export function corDelta(chave, delta, objetivo, tipo = "perimetro") {
 
 function Delta({ valor, anterior, chave, objetivo, tipo, unidade = "", casas = 1, testId }) {
   const v = num(valor); const a = num(anterior);
-  if (v == null || a == null) return <span className="w-16 text-right text-[11.5px] text-gray-600 tabular">{a == null ? "" : "—"}</span>;
+  if (v == null || a == null) return <span className="w-full max-w-16 text-right text-[11.5px] text-gray-600 tabular">{a == null ? "" : "—"}</span>;
   const d = v - a;
   const f = casas === 2 ? nf2 : nf1;
   return (
-    <span className="w-16 text-right text-[12px] font-semibold tabular" style={{ color: corDelta(chave, d, objetivo, tipo) }} data-testid={testId} title={`Anterior: ${f.format(a)}${unidade}`}>
+    <span className="w-full max-w-16 text-right text-[11px] font-semibold tabular sm:text-[12px]" style={{ color: corDelta(chave, d, objetivo, tipo) }} data-testid={testId} title={`Anterior: ${f.format(a)}${unidade}`}>
       {Math.abs(d) < 0.05 ? "=" : `${d > 0 ? "+" : "−"}${f.format(Math.abs(d))}`}
     </span>
   );
 }
 
-function Entrada({ valor, onChange, rotulo, testId, largura = "w-[74px]" }) {
+function Entrada({ valor, onChange, rotulo, testId, largura = "w-full max-w-[74px]" }) {
   return (
     <input inputMode="decimal" aria-label={rotulo} data-testid={testId} value={txt(valor)} onChange={(e) => onChange(e.target.value)}
       className={`${largura} h-9 rounded-md bg-rc-surfaceAlt px-2 text-center tabular text-gray-50 outline-none shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)] focus:shadow-[inset_0_0_0_1px_#0081FD,0_0_0_3px_rgba(0,129,253,0.22)]`} />
@@ -274,7 +274,7 @@ export default function NovaAvaliacao({ d, form, setForm, editingId, anterior, a
             <button type="button" onClick={salvarPadrao} className="rc-btn-ghost h-8 text-[12.5px]" title="As medidas com valor e as padrão passam a aparecer sempre">Salvar como padrão</button>
           </>
         )}>
-          <div className="grid grid-cols-[minmax(0,1fr)_74px_64px_74px_64px] items-center gap-x-2 gap-y-1.5 text-[13px]">
+          <div className="grid grid-cols-[minmax(0,1fr)_58px_40px_58px_40px] items-center gap-x-1.5 gap-y-1.5 text-[13px] sm:grid-cols-[minmax(0,1fr)_74px_64px_74px_64px] sm:gap-x-2">
             <span /><span className="text-center text-[10.5px] uppercase tracking-[0.12em] text-gray-500">Direito</span><span /><span className="text-center text-[10.5px] uppercase tracking-[0.12em] text-gray-500">Esquerdo</span><span />
             {paresVisiveis.map(([base, rotulo, bi]) => {
               const noProt = protoPerim.includes(base);

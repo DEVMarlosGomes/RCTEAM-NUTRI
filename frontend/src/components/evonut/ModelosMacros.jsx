@@ -110,10 +110,10 @@ export default function ModelosMacros({ peso, meta, get, objetivoPaciente, fase,
     <section className="rc-card p-5" data-testid="modelos-macros">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h3 className="rc-h3">Modelos de macros</h3>
-        <div role="radiogroup" aria-label="Objetivo" className="ml-auto inline-flex bg-white/[0.04] p-0.5 ring-1 ring-white/[0.06]">
+        <div role="radiogroup" aria-label="Objetivo" className="grid w-full grid-cols-2 bg-white/[0.04] p-0.5 ring-1 ring-white/[0.06] sm:ml-auto sm:inline-flex sm:w-auto">
           {OBJETIVOS.map(([k, l]) => (
             <button key={k} type="button" role="radio" aria-checked={objetivo === k} onClick={() => { setObjetivo(k); setSelId(null); setValores({}); }}
-              className={`h-8 px-3 text-[12.5px] font-semibold ${objetivo === k ? "bg-rc-blue text-black" : "text-gray-400 hover:text-white"}`}>{l}</button>
+              className={`min-h-9 px-3 py-1.5 text-[12.5px] font-semibold leading-tight ${objetivo === k ? "bg-rc-blue text-black" : "text-gray-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
       </div>

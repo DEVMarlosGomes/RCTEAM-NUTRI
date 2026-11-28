@@ -21,7 +21,7 @@ function Kpi({ label, value, hint, tone = "text-white" }) {
   return (
     <div className="p-5 sm:p-6">
       <div className="text-[12px] text-gray-400">{label}</div>
-      <div className={`rc-num text-[34px] sm:text-[40px] leading-none mt-2 ${tone}`}>{value ?? "–"}</div>
+      <div className={`rc-num text-[17px] sm:text-[24px] xl:text-[32px] leading-tight mt-2 whitespace-nowrap ${tone}`}>{value ?? "–"}</div>
       <div className="text-[12px] text-gray-500 mt-2 h-4">{hint}</div>
     </div>
   );
@@ -177,7 +177,7 @@ export default function Pagamentos() {
         {pagamentos?.length === 0 && <p className="px-6 pb-6 text-[13px] text-gray-500">Nenhum pagamento registrado ainda.</p>}
         {pagamentos?.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-[13px]">
+            <table className="tabela-responsiva w-full min-w-[640px] text-[13px]">
               <thead className="text-[11px] uppercase tracking-[0.12em] text-gray-500">
                 <tr className="border-t border-white/[0.05]">
                   <th className="text-left font-medium px-6 py-2.5">Data</th>
@@ -192,12 +192,12 @@ export default function Pagamentos() {
               <tbody className="divide-y divide-white/[0.05]">
                 {pagamentos.map((pg) => (
                   <tr key={pg.id}>
-                    <td className="px-6 py-3 tabular text-gray-300">{dataBR(pg.data_pagamento)}</td>
-                    <td className="px-3 py-3 text-gray-100">{pg.paciente_nome}</td>
-                    <td className="px-3 py-3 text-gray-400">{pg.plano || "–"}</td>
-                    <td className="px-3 py-3 text-gray-400">{FORMA_LABEL[pg.forma] || pg.forma}</td>
-                    <td className="px-3 py-3 tabular text-gray-400">{dataBR(pg.novo_vencimento)}</td>
-                    <td className="px-3 py-3 text-right rc-num text-[16px] text-rc-lime">{moeda(pg.valor)}</td>
+                    <td data-rot="Data" className="px-6 py-3 tabular text-gray-300">{dataBR(pg.data_pagamento)}</td>
+                    <td data-rot="Aluno" className="px-3 py-3 text-gray-100">{pg.paciente_nome}</td>
+                    <td data-rot="Plano" className="px-3 py-3 text-gray-400">{pg.plano || "–"}</td>
+                    <td data-rot="Forma" className="px-3 py-3 text-gray-400">{FORMA_LABEL[pg.forma] || pg.forma}</td>
+                    <td data-rot="Renovou até" className="px-3 py-3 tabular text-gray-400">{dataBR(pg.novo_vencimento)}</td>
+                    <td data-rot="Valor" className="px-3 py-3 text-right rc-num text-[16px] text-rc-lime">{moeda(pg.valor)}</td>
                     <td className="px-6 py-3 text-right">
                       <button type="button" aria-label="Excluir pagamento" onClick={() => excluirPagamento(pg)} className="rc-btn-ghost p-2 text-rc-coral"><Trash2 className="w-3.5 h-3.5" /></button>
                     </td>
